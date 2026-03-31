@@ -1,105 +1,179 @@
-# 🤖 AGENTS.md - AI Developer Guide for YT-Short-Clipper
+# AGENTS.md
 
-## 📌 Project Overview
-**YT-Short-Clipper** is a desktop application that automates the creation of short-form content (TikTok, Reels, Shorts) from long-form YouTube videos. It leverages AI (GPT-4, Whisper) for highlight detection and captioning, and Computer Vision (OpenCV) for smart cropping.
+## Scope and repo root
+- Real project root is `yt-short-clipper/`.
+- The outer workspace folder is only a wrapper and is not the app repo.
+- This repository is a Python desktop app with two shells:
+  - `app.py` = CustomTkinter desktop shell
+  - `webview_app.py` = pywebview shell with embedded `web/` UI
+- Both shells share `clipper_core.py`, `config/`, `utils/`, and the same runtime state.
 
-## 🏗️ Architecture & Tech Stack
+## High-level architecture
+- `app.py` owns page registration, navigation, startup flow, worker-thread orchestration, and cross-page state.
+- `clipper_core.py` is the main processing pipeline and de facto backend monolith.
+- `config/config_manager.py` owns config defaults, persistence, and backward-compatible migration.
+- `pages/`, `dialogs/`, and `components/` are UI layers around that core.
+- `utils/` owns path resolution, logging, dependency bootstrap, and GPU helpers.
+- `web/` is a vanilla-JS frontend used only by `webview_app.py`.
 
-### core Technology
-- **Language**: Python 3.10+
-- **GUI Framework**: CustomTkinter
-- **Video Processing**: FFmpeg (via subprocess), OpenCV (for face detection)
-- **Downloading**: yt-dlp
-- **AI/ML**: 
-  - **LLM**: OpenAI API (GPT-4) or compatible providers (Groq, Gemini via `ai_provider_card.py`)
-  - **Transcription**: OpenAI Whisper API
-  - **TTS**: OpenAI TTS (for hooks)
+## Important local AGENTS files
+- `pages/AGENTS.md` for page-level workflow and navigation contracts.
+- `pages/settings/AGENTS.md` for settings subsystem conventions.
+- `config/AGENTS.md` for config schema and migration rules.
+- `utils/AGENTS.md` for runtime path, bundled binary, and logging rules.
+- When editing inside one of those directories, read the local AGENTS file first.
 
-### High-Level Structure
-1. **Frontend (GUI)**:
-   - Entry point: `app.py` (Main `YTShortClipperApp` class).
-   - Pages: Located in `pages/` (e.g., `browse_page.py`, `settings_page.py`).
-   - Navigation: Managed by `YTShortClipperApp.show_page`.
-   - Threading: Heavy tasks (downloads, processing) run in background threads to keep UI responsive.
-
-2. **Backend (Logic)**:
-   - `clipper_core.py`: **The Brain**. Contains the `AutoClipperCore` class which orchestrates the entire pipeline:
-     1. Download (`download_video`)
-     2. Parse Subtitles (`parse_srt`)
-     3. AI Highlight Detection (`find_highlights`)
-     4. Video Processing (`process_clip`: cut -> portrait -> hook -> captions)
-
-3. **Data & Config**:
-   - `config.json`: Stores user settings (API keys, preferences). Managed by `ConfigManager`.
-   - `cookies.txt`: Required for YouTube authentication (handled by `COOKIES.md` guide).
-   - `output/`: Generated clips and metadata (`data.json`).
-
-## 📂 Key Directories & Files
-
-| Path | Description |
-|------|-------------|
-| **`app.py`** | Main application entry point. Handles window management, global state, and navigation. |
-| **`clipper_core.py`** | Core business logic. Contains all video processing and AI interaction code. |
-| **`pages/`** | GUI Page classes. Each file corresponds to a screen in the app. |
-| **`components/`** | Reusable UI widgets (e.g., `ai_provider_card.py` for API settings). |
-| **`utils/`** | Helper utilities (`gpu_detector.py`, `dependency_manager.py`, `logger.py`). |
-| **`assets/`** | Images and icons. |
-| **`SYSTEM_PROMPT.md`** | Default prompt used for AI highlight detection. |
-| **`build.spec`** | PyInstaller configuration for building the executable. |
-
-## 🔄 Core Workflows
-
-### 1. Highlight Detection Flow
-`clipper_core.py` -> `find_highlights`:
-1.  Reads `.srt` file from download.
-2.  Constructs a prompt using `SYSTEM_PROMPT.md` + Transcript.
-3.  Sends to LLM (GPT-4/Gemini/etc.).
-4.  Parses JSON response containing start/end timestamps and hook text.
-
-### 2. Portrait Conversion Flow
-`clipper_core.py` -> `convert_to_portrait`:
-1.  **Face Detection**: Uses OpenCV/MediaPipe to find faces in frames.
-2.  **Active Speaker**: Analyzes lip movement (if MediaPipe) or simplistic face tracking (OpenCV).
-3.  **Cropping**: detailed logic to calculate the 9:16 crop window, ensuring smooth transitions (simulated camera cuts).
-
-### 3. Captioning Flow
-`clipper_core.py` -> `process_clip`:
-1.  Extracts audio from cut clip.
-2.  Sends to Whisper API -> gets word-level timestamps.
-3.  Generates `.ass` subtitle file with specific styling (Yellow highlight, specific font).
-4.  Burns into video using FFmpeg.
-
-## 🛠️ Development Setup
-
-### specific Requirements
-- **FFmpeg** and **yt-dlp** must be in PATH or configured.
-- `requirements.txt` contains Python libs.
-
-### Running Locally
+## Environment setup
 ```bash
 pip install -r requirements.txt
+```
+
+## Run commands
+
+### Run desktop app
+```bash
 python app.py
 ```
 
-### Packaging
+### Run webview shell
 ```bash
-pyinstaller build.spec
+pip install -r requirements_web.txt
+python webview_app.py
 ```
 
-## 📝 Coding Standards & Conventions
-- **Type Hinting**: Encouraged for core logic methods (e.g., `def process(self, url: str) -> dict`).
-- **Error Handling**: 
-  - GUI should never crash. Catch exceptions and show `messagebox.showerror`.
-  - Log errors to `error.log` using `utils.logger`.
-- **Async/Threading**: strictly use `threading.Thread` for blocking I/O (network/disk) to prevent freezing the `tkinter` main loop.
-- **Config**: Always access/save settings via `self.config` in `app.py` or pass config dicts to `clipper_core.py`.
+## Build / lint / typecheck / test status
 
-## 🤖 AI Agent Tips
-- When modifying `clipper_core.py`, be mindful of the huge method size. Consider breaking down `process_clip` if adding complexity.
-- **Prompt Engineering**: Changes to logic often require changes to `SYSTEM_PROMPT.md`. Check that file if highlight quality degrades.
-- **Dependencies**: `utils/dependency_manager.py` handles auto-downloading binaries (ffmpeg/yt-dlp) for end-users. Do not break this flow.
+### Build
+- README and older docs reference `build.spec` / `BUILD.md`, but those files are missing in this checkout.
+- `pyinstaller build.spec` is **not runnable from current repo state**.
+- Do not document or rely on a verified build flow unless those files are restored.
 
-## 🔗 Related Documentation
-- `README.md`: General user info.
-- `GUIDE.md`: Detailed usage guide.
-- `BUILD.md`: Detailed build instructions (PyInstaller).
+### Lint / typecheck / tests
+- No `pyproject.toml`, `setup.cfg`, `tox.ini`, `pytest.ini`, `ruff.toml`, `.flake8`, or `mypy.ini` were found.
+- No CI workflow or authoritative lint/typecheck command was found in this checkout.
+- No automated test files were found.
+- Therefore:
+  - **Lint command:** none established
+  - **Typecheck command:** none established
+  - **Test suite command:** none established
+  - **Single-test command:** not available in current repo state
+
+## Practical validation commands
+- For desktop UI changes: run `python app.py`.
+- For webview changes: run `python webview_app.py`.
+- For pipeline changes: verify an end-to-end clip run manually.
+- For config changes: verify existing `config.json` still loads and missing keys are auto-filled.
+- For output/session changes: verify `output/`, `session_data.json`, and clip `data.json` consumers still work.
+- For yt-dlp / subtitle / clip flow changes: manually test the full phase-1 -> highlight selection -> phase-2 path.
+
+## Source-of-truth files by task
+| Task | Primary files |
+|---|---|
+| App shell / navigation | `app.py`, `pages/` |
+| Pipeline logic | `clipper_core.py` |
+| Config schema/defaults | `config/config_manager.py` |
+| Runtime paths / bundled tools | `utils/helpers.py`, `utils/dependency_manager.py` |
+| Error logging | `utils/logger.py` |
+| Webview shell | `webview_app.py`, `web/` |
+| Session/output contracts | `clipper_core.py`, `pages/session_browser_page.py`, `pages/results_page.py`, `pages/browse_page.py` |
+
+## Import conventions
+- Follow the observed order: standard library, third-party packages, then local project imports.
+- Prefer absolute imports like `from utils.helpers import ...` over relative imports.
+- Do not use wildcard imports.
+
+## Formatting conventions
+- Use 4-space indentation.
+- Keep module docstrings where the file already uses them.
+- Keep two blank lines between top-level definitions.
+- Match surrounding style instead of reformatting unrelated code.
+- This repo is convention-driven, not formatter-enforced.
+
+## Type conventions
+- Type hints are selective, not exhaustive.
+- Add concrete parameter hints when they clarify stable interfaces (`Path`, `str`, `float`, `dict`, etc.).
+- Return types are often omitted; follow nearby code rather than forcing full annotation coverage.
+- Do not introduce heavy typing refactors into unrelated changes.
+
+## Naming conventions
+- `snake_case` for variables, functions, and methods.
+- `PascalCase` for classes.
+- `UPPER_CASE` for module-level constants.
+- Callback names often use `on_*` / `*_callback`; preserve that style.
+
+## Error handling conventions
+- Use explicit custom exceptions for domain errors when extra context is needed.
+- `SubtitleNotFoundError` in `clipper_core.py` is the clearest example.
+- Log operational failures through `utils.logger` when they should be visible in `error.log`.
+- Broad `try/except` exists in UI-safe or optional-dependency paths; do not expand that casually.
+- Do not change user-facing error text casually when pages or workflows depend on it.
+
+## Threading and responsiveness rules
+- Do not block the Tk main thread with network, disk, FFmpeg, yt-dlp, thumbnail extraction, or AI calls.
+- Long-running work belongs on `threading.Thread`.
+- UI updates should return via callbacks or `.after(...)` scheduling.
+- Keep page classes mostly passive and callback-driven.
+
+## Config and persistence rules
+- `config.json` is user-local runtime state and may contain secrets.
+- `ConfigManager` is the owner of defaults, persistence, and migration.
+- Preserve backward compatibility when adding config keys.
+- Do not bypass `ConfigManager` for schema changes.
+- `ai_providers` is task-scoped (`highlight_finder`, `caption_maker`, `hook_maker`, `youtube_title_maker`), not a single shared model block.
+- `highlight_finder.system_message` and root `system_prompt` behavior are compatibility-sensitive.
+- Settings pages often mutate the backing config dict directly, but persistence still flows through the shared save callback.
+
+## Runtime path and binary rules
+- Use helper functions from `utils.helpers` for app dir, bundle dir, FFmpeg, yt-dlp, and Deno paths.
+- Do not hardcode executable paths.
+- Bundled directories like `ffmpeg/` and `bin/` are intentional runtime contracts.
+- `utils/logger.py` is the canonical sink for operational failures and stderr redirection.
+
+## UI structure rules
+- `pages/` are screen components, not the source of truth for cross-page state.
+- `app.py` owns `self.pages`, page registration, navigation, and cross-page coordination.
+- `pages/settings/` behaves like a mini-framework; inspect its local AGENTS before editing.
+- Preserve callback-driven page APIs instead of moving orchestration into page classes.
+
+## Webview-specific rules
+- `web/` uses vanilla JS with global `window.Components.*` patterns.
+- There is no Node, bundler, or frontend package manager in this repo.
+- Do not introduce framework assumptions into the webview UI.
+
+## Contract-sensitive outputs
+- `clipper_core.py` status strings are effectively UI API.
+- `session_data.json` shape is a page contract.
+- Clip folder layout and clip `data.json` fields are downstream contracts.
+- Results and browse pages expect `master.mp4` plus metadata files in the existing output layout.
+- If you change session/output metadata, audit all consumers before merging.
+
+## Files and paths to treat as sensitive or generated
+- Do not commit or rely on local state in:
+  - `config.json`
+  - `cookies.txt`
+  - `error.log`
+  - `output/`
+  - `_temp/`
+  - `__pycache__/`
+  - user-provided watermark assets
+  - bundled binaries downloaded into runtime folders
+
+## Documentation and rule files audit
+- Existing agent guidance files were found and should be treated as authoritative context.
+- No `.cursorrules` file was found.
+- No `.cursor/rules/` directory was found.
+- No `.github/copilot-instructions.md` file was found.
+- README contains some stale references to missing docs/files; verify repo state before trusting docs literally.
+
+## Change strategy for agents
+- Prefer small, evidence-based changes.
+- Fix bugs minimally; do not refactor unrelated code while fixing.
+- Match surrounding style rather than imposing a new architecture.
+- When editing config, page contracts, status strings, or output metadata, check all dependent surfaces.
+- Reuse existing session/output contracts when adding new workflows.
+
+## What to avoid
+- Do not invent lint, typecheck, test, or build commands that are not backed by repo evidence.
+- Do not rename status text, session keys, clip metadata keys, or runtime directories casually.
+- Do not bypass helper path resolution or config migration code.
+- Do not move blocking work onto the main UI thread.
