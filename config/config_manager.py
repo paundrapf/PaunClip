@@ -6,6 +6,8 @@ import json
 import uuid
 from pathlib import Path
 
+from utils.storage import get_campaign_manifest_path, get_session_manifest_path
+
 
 class ConfigManager:
     """Manages application configuration"""
@@ -75,6 +77,12 @@ class ConfigManager:
                 if "gpu_acceleration" not in config:
                     config["gpu_acceleration"] = {"enabled": False}
 
+                # Add campaign catalog defaults if not exists
+                if "campaigns" not in config or not isinstance(
+                    config["campaigns"], list
+                ):
+                    config["campaigns"] = []
+
                 return config
 
         # Default config with system prompt
@@ -107,6 +115,7 @@ class ConfigManager:
             },
             "repliz": {"access_key": "", "secret_key": ""},
             "gpu_acceleration": {"enabled": False},
+            "campaigns": [],
         }
         self.save_config(config)
         return config
@@ -305,3 +314,15 @@ class ConfigManager:
         """Set configuration value and save"""
         self.config[key] = value
         self.save()
+
+    def get_campaign_manifest_path(self, campaign_id: str) -> Path:
+        """Get canonical campaign manifest path under output/campaigns."""
+        output_dir = Path(self.config.get("output_dir", self.output_dir))
+        return get_campaign_manifest_path(output_dir, campaign_id)
+
+    def get_session_manifest_path(
+        self, session_id: str, campaign_id: str | None = None
+    ) -> Path:
+        """Get canonical session manifest path for campaign or legacy sessions."""
+        output_dir = Path(self.config.get("output_dir", self.output_dir))
+        return get_session_manifest_path(output_dir, session_id, campaign_id)

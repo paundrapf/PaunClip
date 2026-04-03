@@ -9,6 +9,7 @@ import re
 import threading
 import queue
 import json
+import copy
 import cv2
 import numpy as np
 import tempfile
@@ -19,6 +20,11 @@ from datetime import datetime
 from openai import OpenAI
 from utils.logger import debug_log
 from utils.helpers import get_deno_path, get_ffmpeg_path, is_ytdlp_module_available
+from utils.storage import (
+    infer_campaign_id_from_session_dir,
+    normalize_session_manifest,
+    write_session_manifest,
+)
 
 # Setup Deno and FFmpeg in PATH before importing yt-dlp
 _deno_path = get_deno_path()
@@ -261,6 +267,78 @@ class AutoClipperCore:
             "speed": speed,
             "is_groq_tts": is_groq_tts,
         }
+
+    def _build_session_manifest(
+        self,
+        session_dir: Path,
+        *,
+        video_path: str,
+        srt_path: str | None,
+        highlights: list,
+        video_info: dict,
+        status: str,
+        stage: str | None = None,
+        transcription_method: str | None = None,
+        source=None,
+        created_at: str | None = None,
+        updated_at: str | None = None,
+        campaign_id: str | None = None,
+        clip_jobs: list | None = None,
+        last_error=None,
+        extra_fields: dict | None = None,
+    ) -> dict:
+        """Build an additive session manifest compatible with legacy readers."""
+        session_path = Path(session_dir)
+        timestamp = datetime.now().isoformat()
+        manifest = {
+            "session_id": session_path.name,
+            "session_dir": str(session_path),
+            "video_path": video_path,
+            "srt_path": srt_path,
+            "highlights": highlights,
+            "video_info": video_info,
+            "created_at": created_at or timestamp,
+            "updated_at": updated_at or timestamp,
+            "stage": stage or status,
+            "status": status,
+            "transcription_method": transcription_method,
+            "campaign_id": campaign_id,
+            "provider_snapshot": copy.deepcopy(self.ai_providers)
+            if isinstance(self.ai_providers, dict)
+            else {},
+            "clip_jobs": clip_jobs if isinstance(clip_jobs, list) else [],
+            "last_error": last_error,
+        }
+
+        if source is not None:
+            manifest["source"] = source
+
+        if extra_fields:
+            manifest.update(extra_fields)
+
+        return normalize_session_manifest(manifest, session_path)
+
+    def _create_session_dir(
+        self, session_dir: str | Path | None = None, campaign_id: str | None = None
+    ) -> Path:
+        """Create or resolve a session directory, supporting campaign-aware paths."""
+        if session_dir:
+            session_path = Path(session_dir)
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            if campaign_id:
+                session_path = (
+                    self.output_dir / "campaigns" / campaign_id / "sessions" / timestamp
+                )
+            else:
+                session_path = self.output_dir / "sessions" / timestamp
+
+        session_path.mkdir(parents=True, exist_ok=True)
+        return session_path
+
+    def _save_session_manifest(self, session_dir: Path, session_data: dict) -> Path:
+        """Persist normalized session manifest to disk."""
+        return write_session_manifest(session_dir, session_data)
 
     def _synthesize_hook_tts_audio(self, hook_text: str) -> str:
         """Generate hook TTS audio using provider-specific settings."""
@@ -2000,7 +2078,12 @@ Transcript:
         return f"{h:02d}:{m:02d}:{int(s):02d},{ms:03d}"
 
     def find_highlights_with_transcription(
-        self, video_path: str, video_info: dict, num_clips: int, session_dir: str = None
+        self,
+        video_path: str,
+        video_info: dict,
+        num_clips: int,
+        session_dir: str = None,
+        campaign_id: str | None = None,
     ) -> dict:
         """Find highlights by first transcribing the video with Whisper API.
 
@@ -2013,13 +2096,8 @@ Transcript:
         """
         from datetime import datetime
 
-        # Use existing session_dir or create new one
-        if session_dir:
-            session_path = Path(session_dir)
-        else:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            session_path = self.output_dir / "sessions" / timestamp
-            session_path.mkdir(parents=True, exist_ok=True)
+        session_path = self._create_session_dir(session_dir, campaign_id)
+        campaign_id = campaign_id or infer_campaign_id_from_session_dir(session_path)
 
         # Update temp_dir to session-specific temp
         self.temp_dir = session_path / "_temp"
@@ -2055,21 +2133,19 @@ Transcript:
         self.set_progress("Highlights found!", 1.0)
         self.log(f"\n✅ Found {len(highlights)} highlights (via AI transcription)")
 
-        # Save session data
-        session_data_file = session_path / "session_data.json"
-        session_data = {
-            "session_dir": str(session_path),
-            "video_path": video_path,
-            "srt_path": None,
-            "highlights": highlights,
-            "video_info": video_info,
-            "created_at": datetime.now().isoformat(),
-            "status": "highlights_found",
-            "transcription_method": "whisper_api",
-        }
+        session_data = self._build_session_manifest(
+            session_path,
+            video_path=video_path,
+            srt_path=None,
+            highlights=highlights,
+            video_info=video_info,
+            status="highlights_found",
+            stage="highlights_found",
+            transcription_method="whisper_api",
+            campaign_id=campaign_id,
+        )
 
-        with open(session_data_file, "w", encoding="utf-8") as f:
-            json.dump(session_data, f, indent=2, ensure_ascii=False)
+        session_data_file = self._save_session_manifest(session_path, session_data)
 
         self.log(f"Session data saved to: {session_data_file}")
 
@@ -2082,6 +2158,7 @@ Transcript:
         srt_path: str | None = None,
         video_info: dict | None = None,
         session_dir: str | None = None,
+        campaign_id: str | None = None,
     ) -> dict | None:
         """Find highlights from a local video file with optional SRT subtitle.
 
@@ -2105,13 +2182,8 @@ Transcript:
         self.log("[Local Video] Finding highlights from local video...")
         self.set_progress("Preparing local video...", 0.1)
 
-        # Create session directory
-        if session_dir:
-            session_path = Path(session_dir)
-        else:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            session_path = self.output_dir / "sessions" / timestamp
-            session_path.mkdir(parents=True, exist_ok=True)
+        session_path = self._create_session_dir(session_dir, campaign_id)
+        campaign_id = campaign_id or infer_campaign_id_from_session_dir(session_path)
 
         # Update temp_dir to session-specific temp
         self.temp_dir = session_path / "_temp"
@@ -2193,22 +2265,20 @@ Transcript:
         self.set_progress("Highlights found!", 1.0)
         self.log(f"\n✅ Found {len(highlights)} highlights from local video")
 
-        # Save session data (preserve same contract as YouTube flow)
-        session_data_file = session_path / "session_data.json"
-        session_data = {
-            "session_dir": str(session_path),
-            "video_path": video_path_str,
-            "srt_path": srt_path_final,
-            "highlights": highlights,
-            "video_info": video_info,
-            "created_at": datetime.now().isoformat(),
-            "status": "highlights_found",
-            "transcription_method": transcription_method,
-            "source": "local_video",
-        }
+        session_data = self._build_session_manifest(
+            session_path,
+            video_path=video_path_str,
+            srt_path=srt_path_final,
+            highlights=highlights,
+            video_info=video_info,
+            status="highlights_found",
+            stage="highlights_found",
+            transcription_method=transcription_method,
+            source="local_video",
+            campaign_id=campaign_id,
+        )
 
-        with open(session_data_file, "w", encoding="utf-8") as f:
-            json.dump(session_data, f, indent=2, ensure_ascii=False)
+        session_data_file = self._save_session_manifest(session_path, session_data)
 
         self.log(f"Session data saved to: {session_data_file}")
 
@@ -5705,7 +5775,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if not Path(output_path).exists():
             raise Exception("Failed to apply credit watermark")
 
-    def find_highlights_only(self, url: str, num_clips: int = 5) -> dict:
+    def find_highlights_only(
+        self, url: str, num_clips: int = 5, campaign_id: str | None = None
+    ) -> dict:
         """Phase 1: Download video and find highlights (without processing)
 
         Returns:
@@ -5719,9 +5791,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         # Create session directory with timestamp
         from datetime import datetime
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        session_dir = self.output_dir / "sessions" / timestamp
-        session_dir.mkdir(parents=True, exist_ok=True)
+        session_dir = self._create_session_dir(campaign_id=campaign_id)
 
         # Update temp_dir to session-specific temp
         self.temp_dir = session_dir / "_temp"
@@ -5771,20 +5841,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         self.set_progress("Highlights found!", 1.0)
         self.log(f"\n✅ Found {len(highlights)} highlights")
 
-        # Save session data to JSON for resume capability
-        session_data_file = session_dir / "session_data.json"
-        session_data = {
-            "session_dir": str(session_dir),
-            "video_path": video_path,
-            "srt_path": srt_path,
-            "highlights": highlights,
-            "video_info": video_info,
-            "created_at": datetime.now().isoformat(),
-            "status": "highlights_found",
-        }
+        session_data = self._build_session_manifest(
+            session_dir,
+            video_path=video_path,
+            srt_path=srt_path,
+            highlights=highlights,
+            video_info=video_info,
+            status="highlights_found",
+            stage="highlights_found",
+            campaign_id=campaign_id,
+        )
 
-        with open(session_data_file, "w", encoding="utf-8") as f:
-            json.dump(session_data, f, indent=2, ensure_ascii=False)
+        session_data_file = self._save_session_manifest(session_dir, session_data)
 
         self.log(f"Session data saved to: {session_data_file}")
 
@@ -5854,15 +5922,27 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         # Update session status to completed
         session_data_file = session_dir / "session_data.json"
         if session_data_file.exists():
-            with open(session_data_file, "r", encoding="utf-8") as f:
-                session_data = json.load(f)
-
+            session_data = normalize_session_manifest(
+                json.loads(session_data_file.read_text(encoding="utf-8")), session_dir
+            )
             session_data["status"] = "completed"
+            session_data["stage"] = "completed"
             session_data["completed_at"] = datetime.now().isoformat()
+            session_data["updated_at"] = datetime.now().isoformat()
             session_data["clips_processed"] = total_clips
+            existing_clip_jobs = session_data.get("clip_jobs")
+            if not isinstance(existing_clip_jobs, list) or not existing_clip_jobs:
+                session_data["clip_jobs"] = [
+                    {
+                        "clip_id": f"clip_{index:03d}",
+                        "highlight_id": highlight.get("highlight_id"),
+                        "status": "completed",
+                        "last_error": None,
+                    }
+                    for index, highlight in enumerate(selected_highlights, 1)
+                ]
 
-            with open(session_data_file, "w", encoding="utf-8") as f:
-                json.dump(session_data, f, indent=2, ensure_ascii=False)
+            self._save_session_manifest(session_dir, session_data)
 
         self.set_progress("Complete!", 1.0)
         self.log(f"\n✅ Created {total_clips} clips in: {clips_dir}")
