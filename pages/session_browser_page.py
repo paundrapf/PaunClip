@@ -8,7 +8,7 @@ from pathlib import Path
 from tkinter import messagebox
 from datetime import datetime
 
-from utils.storage import discover_session_manifests, load_session_manifest
+from utils.storage import discover_sessions
 
 
 class SessionBrowserPage(ctk.CTkFrame):
@@ -16,7 +16,7 @@ class SessionBrowserPage(ctk.CTkFrame):
 
     def __init__(self, parent, config, on_back_callback, on_resume_callback, app=None):
         super().__init__(parent)
-        self.config = config
+        self.app_config = config
         self.on_back = on_back_callback
         self.on_resume = on_resume_callback
         self.app = app  # Store reference to main app
@@ -89,17 +89,10 @@ class SessionBrowserPage(ctk.CTkFrame):
         for widget in self.list_frame.winfo_children():
             widget.destroy()
 
-        output_dir = Path(self.config.get("output_dir", "output"))
+        output_dir = Path(self.app_config.get("output_dir", "output"))
 
-        # Find all session folders with session_data.json in legacy and campaign paths
-        sessions = []
-        for session_file in discover_session_manifests(output_dir):
-            session_folder = session_file.parent
-            try:
-                data = load_session_manifest(session_file)
-                sessions.append((session_folder, data))
-            except Exception:
-                pass
+        # Find all session folders with unified legacy/campaign discovery
+        sessions = discover_sessions(output_dir)
 
         if not sessions:
             ctk.CTkLabel(
@@ -111,7 +104,9 @@ class SessionBrowserPage(ctk.CTkFrame):
             return
 
         # Create list items
-        for session_folder, data in sessions[:50]:  # Limit to 50
+        for session_record in sessions[:50]:  # Limit to 50
+            session_folder = session_record["session_dir"]
+            data = session_record["data"]
             # Card frame
             card = ctk.CTkFrame(
                 self.list_frame, fg_color=("gray85", "gray20"), corner_radius=10
@@ -178,11 +173,13 @@ class SessionBrowserPage(ctk.CTkFrame):
                     anchor="w",
                 ).pack(side="left", padx=(0, 15))
 
-            campaign_id = data.get("campaign_id")
-            if campaign_id:
+            campaign_label = session_record.get("campaign_label") or data.get(
+                "campaign_label"
+            )
+            if campaign_label:
                 ctk.CTkLabel(
                     info_row,
-                    text=f"🗂️ {campaign_id}",
+                    text=f"🗂️ {campaign_label}",
                     font=ctk.CTkFont(size=10),
                     text_color="gray",
                     anchor="w",
@@ -223,8 +220,8 @@ class SessionBrowserPage(ctk.CTkFrame):
             action_row.pack(fill="x")
 
             # Check if clips exist
-            clips_dir = session_folder / "clips"
-            has_clips = clips_dir.exists() and any(clips_dir.iterdir())
+            clips_dir = session_record["clips_dir"]
+            has_clips = session_record["has_clips"] and any(clips_dir.iterdir())
 
             # View Session button (always show if highlights exist)
             if highlights_count > 0:

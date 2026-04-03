@@ -14,7 +14,7 @@ from PIL import Image
 import cv2
 
 from dialogs.youtube_upload import YouTubeUploadDialog
-from utils.storage import discover_clip_folders, get_clip_storage_context
+from utils.storage import discover_clips
 
 
 class ResultsPage(ctk.CTkFrame):
@@ -31,7 +31,7 @@ class ResultsPage(ctk.CTkFrame):
         get_youtube_client=None,
     ):
         super().__init__(parent)
-        self.config = config
+        self.app_config = config
         self.client = client
         self.get_youtube_client = get_youtube_client or (lambda: client)
         self.on_back = on_back_callback
@@ -80,25 +80,25 @@ class ResultsPage(ctk.CTkFrame):
             command=self.on_home,
         ).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
-    def load_clips(self, clips_dir: Path = None):
+    def load_clips(self, clips_dir: Path | None = None):
         """Load info about created clips from output directory or specific clips folder"""
         if clips_dir is None:
             # Default behavior: load from output directory
-            output_dir = Path(self.config.get("output_dir", "output"))
+            output_dir = Path(self.app_config.get("output_dir", "output"))
             self.created_clips = []
 
             # Find all clip folders across legacy and session-based storage
-            clip_folders = discover_clip_folders(output_dir)
+            clip_records = discover_clips(output_dir)
 
-            for folder in clip_folders[:20]:  # Limit to 20 most recent
-                data_file = folder / "data.json"
-                master_file = folder / "master.mp4"
+            for clip_record in clip_records[:20]:  # Limit to 20 most recent
+                folder = clip_record["folder"]
+                data_file = clip_record["data_file"]
+                master_file = clip_record["video"]
 
                 if data_file.exists() and master_file.exists():
                     try:
                         with open(data_file, "r", encoding="utf-8") as f:
                             data = json.load(f)
-                        clip_context = get_clip_storage_context(folder)
                         self.created_clips.append(
                             {
                                 "folder": folder,
@@ -106,7 +106,7 @@ class ResultsPage(ctk.CTkFrame):
                                 "title": data.get("title", "Untitled"),
                                 "hook_text": data.get("hook_text", ""),
                                 "duration": data.get("duration_seconds", 0),
-                                **clip_context,
+                                **clip_record,
                             }
                         )
                     except:
@@ -119,19 +119,19 @@ class ResultsPage(ctk.CTkFrame):
                 return
 
             # Find all clip folders in the clips directory
-            clip_folders = sorted(
-                [d for d in clips_dir.iterdir() if d.is_dir()], reverse=True
+            clip_records = discover_clips(
+                self.app_config.get("output_dir", "output"), clips_dir
             )
 
-            for folder in clip_folders:
-                data_file = folder / "data.json"
-                master_file = folder / "master.mp4"
+            for clip_record in clip_records:
+                folder = clip_record["folder"]
+                data_file = clip_record["data_file"]
+                master_file = clip_record["video"]
 
                 if data_file.exists() and master_file.exists():
                     try:
                         with open(data_file, "r", encoding="utf-8") as f:
                             data = json.load(f)
-                        clip_context = get_clip_storage_context(folder)
                         self.created_clips.append(
                             {
                                 "folder": folder,
@@ -139,7 +139,7 @@ class ResultsPage(ctk.CTkFrame):
                                 "title": data.get("title", "Untitled"),
                                 "hook_text": data.get("hook_text", ""),
                                 "duration": data.get("duration_seconds", 0),
-                                **clip_context,
+                                **clip_record,
                             }
                         )
                     except:
@@ -206,8 +206,8 @@ class ResultsPage(ctk.CTkFrame):
         ).pack(fill="x")
         if clip.get("session_id"):
             session_label = f"Session: {clip['session_id']}"
-            if clip.get("campaign_id"):
-                session_label += f" • Campaign: {clip['campaign_id']}"
+            if clip.get("campaign_label"):
+                session_label += f" • Campaign: {clip['campaign_label']}"
             ctk.CTkLabel(
                 info_frame,
                 text=session_label,
@@ -283,13 +283,13 @@ class ResultsPage(ctk.CTkFrame):
 
             # Get YouTube-specific client and config
             yt_client = self.get_youtube_client()
-            ai_providers = self.config.get("ai_providers", {})
+            ai_providers = self.app_config.get("ai_providers", {})
             yt_config = ai_providers.get("youtube_title_maker", {})
-            model = yt_config.get("model", self.config.get("model", "gpt-4.1"))
+            model = yt_config.get("model", self.app_config.get("model", "gpt-4.1"))
 
             # Open upload dialog
             YouTubeUploadDialog(
-                self, clip, yt_client, model, self.config.get("temperature", 1.0)
+                self, clip, yt_client, model, self.app_config.get("temperature", 1.0)
             )
 
         except ImportError:
@@ -304,7 +304,7 @@ class ResultsPage(ctk.CTkFrame):
         """Open Repliz upload dialog for a clip"""
         try:
             # Check if Repliz is configured
-            repliz_config = self.config.get("repliz", {})
+            repliz_config = self.app_config.get("repliz", {})
             access_key = repliz_config.get("access_key", "")
             secret_key = repliz_config.get("secret_key", "")
 
@@ -317,9 +317,9 @@ class ResultsPage(ctk.CTkFrame):
 
             # Get OpenAI client and config for metadata generation
             yt_client = self.get_youtube_client()
-            ai_providers = self.config.get("ai_providers", {})
+            ai_providers = self.app_config.get("ai_providers", {})
             yt_config = ai_providers.get("youtube_title_maker", {})
-            model = yt_config.get("model", self.config.get("model", "gpt-4.1"))
+            model = yt_config.get("model", self.app_config.get("model", "gpt-4.1"))
 
             # Open Repliz account selection dialog
             from dialogs.repliz_upload import ReplizUploadDialog
@@ -331,7 +331,7 @@ class ResultsPage(ctk.CTkFrame):
                 secret_key,
                 yt_client,
                 model,
-                self.config.get("temperature", 1.0),
+                self.app_config.get("temperature", 1.0),
             )
 
         except ImportError:

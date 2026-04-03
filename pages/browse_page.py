@@ -14,7 +14,7 @@ from PIL import Image
 import cv2
 
 from dialogs.youtube_upload import YouTubeUploadDialog
-from utils.storage import discover_clip_folders, get_clip_storage_context
+from utils.storage import discover_clips
 
 
 class BrowsePage(ctk.CTkFrame):
@@ -30,7 +30,7 @@ class BrowsePage(ctk.CTkFrame):
         get_youtube_client=None,
     ):
         super().__init__(parent)
-        self.config = config
+        self.app_config = config
         self.client = client
         self.get_youtube_client = get_youtube_client or (lambda: client)
         self.on_back = on_back_callback
@@ -152,7 +152,7 @@ class BrowsePage(ctk.CTkFrame):
             widget.destroy()
         self.browse_thumbnails = []
 
-        output_dir = Path(self.config.get("output_dir", "output"))
+        output_dir = Path(self.app_config.get("output_dir", "output"))
 
         if not output_dir.exists():
             ctk.CTkLabel(
@@ -164,9 +164,9 @@ class BrowsePage(ctk.CTkFrame):
             return
 
         # Find all clip folders across legacy and session-based storage
-        clip_folders = discover_clip_folders(output_dir)
+        clip_records = discover_clips(output_dir)
 
-        if not clip_folders:
+        if not clip_records:
             ctk.CTkLabel(
                 self.list_frame,
                 text="📹 No videos found\n\nProcess a video to see it here",
@@ -177,9 +177,10 @@ class BrowsePage(ctk.CTkFrame):
             return
 
         # Create list items with thumbnails
-        for folder in clip_folders[:50]:  # Limit to 50
-            data_file = folder / "data.json"
-            master_file = folder / "master.mp4"
+        for clip_record in clip_records[:50]:  # Limit to 50
+            folder = clip_record["folder"]
+            data_file = clip_record["data_file"]
+            master_file = clip_record["video"]
 
             if data_file.exists() and master_file.exists():
                 try:
@@ -256,15 +257,14 @@ class BrowsePage(ctk.CTkFrame):
                     )
                     subtitle_label.pack(fill="x", pady=(3, 0))
 
-                    clip_context = get_clip_storage_context(folder)
-                    session_id = clip_context.get("session_id")
-                    campaign_id = clip_context.get("campaign_id")
+                    session_id = clip_record.get("session_id")
+                    campaign_label = clip_record.get("campaign_label")
 
                     relationship_bits = []
                     if session_id:
                         relationship_bits.append(f"🧩 {session_id}")
-                    if campaign_id:
-                        relationship_bits.append(f"🗂️ {campaign_id}")
+                    if campaign_label:
+                        relationship_bits.append(f"🗂️ {campaign_label}")
                     if relationship_bits:
                         ctk.CTkLabel(
                             info,
@@ -402,19 +402,19 @@ class BrowsePage(ctk.CTkFrame):
 
         # Get YouTube-specific client and config
         yt_client = self.get_youtube_client()
-        ai_providers = self.config.get("ai_providers", {})
+        ai_providers = self.app_config.get("ai_providers", {})
         yt_config = ai_providers.get("youtube_title_maker", {})
-        model = yt_config.get("model", self.config.get("model", "gpt-4.1"))
+        model = yt_config.get("model", self.app_config.get("model", "gpt-4.1"))
 
         # Open YouTube upload dialog
         YouTubeUploadDialog(
-            self, clip_data, yt_client, model, self.config.get("temperature", 1.0)
+            self, clip_data, yt_client, model, self.app_config.get("temperature", 1.0)
         )
 
     def upload_via_repliz(self, folder: Path, video_path: Path, data: dict):
         """Upload video via Repliz - show account selection dialog"""
         # Check if Repliz is configured
-        repliz_config = self.config.get("repliz", {})
+        repliz_config = self.app_config.get("repliz", {})
         access_key = repliz_config.get("access_key", "")
         secret_key = repliz_config.get("secret_key", "")
 
@@ -436,9 +436,9 @@ class BrowsePage(ctk.CTkFrame):
 
         # Get OpenAI client and config for metadata generation
         yt_client = self.get_youtube_client()
-        ai_providers = self.config.get("ai_providers", {})
+        ai_providers = self.app_config.get("ai_providers", {})
         yt_config = ai_providers.get("youtube_title_maker", {})
-        model = yt_config.get("model", self.config.get("model", "gpt-4.1"))
+        model = yt_config.get("model", self.app_config.get("model", "gpt-4.1"))
 
         # Open Repliz account selection dialog
         from dialogs.repliz_upload import ReplizUploadDialog
@@ -450,7 +450,7 @@ class BrowsePage(ctk.CTkFrame):
             secret_key,
             yt_client,
             model,
-            self.config.get("temperature", 1.0),
+            self.app_config.get("temperature", 1.0),
         )
 
     def open_youtube_url(self, url: str):
@@ -461,7 +461,7 @@ class BrowsePage(ctk.CTkFrame):
 
     def open_output_folder(self):
         """Open the output folder"""
-        output_dir = Path(self.config.get("output_dir", "output"))
+        output_dir = Path(self.app_config.get("output_dir", "output"))
         if output_dir.exists():
             if sys.platform == "win32":
                 os.startfile(str(output_dir))
