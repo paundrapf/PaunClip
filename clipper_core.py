@@ -7,6 +7,7 @@ import subprocess
 import os
 import re
 import threading
+import queue
 import json
 import cv2
 import numpy as np
@@ -77,6 +78,18 @@ class SubtitleNotFoundError(Exception):
         self.session_dir = session_dir
 
 
+class HighlightRequestTooLargeError(Exception):
+    """Raised when a highlight request payload is too large for the provider."""
+
+
+class HighlightRateLimitError(Exception):
+    """Raised when highlight generation is rate-limited after bounded retries."""
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 class AutoClipperCore:
     """Core processing logic for Auto Clipper"""
 
@@ -130,6 +143,7 @@ class AutoClipperCore:
                 base_url=hm_config.get("base_url", "https://api.openai.com/v1"),
             )
             self.tts_model = hm_config.get("model", tts_model)
+            self.hook_maker_config = hm_config.copy()
         else:
             # Fallback to single client (backward compatibility)
             self.highlight_client = client
@@ -138,6 +152,7 @@ class AutoClipperCore:
             self.model = model
             self.tts_model = tts_model
             self.whisper_model = "whisper-1"
+            self.hook_maker_config = {}
 
         # Keep original client for backward compatibility
         self.client = client
@@ -203,6 +218,347 @@ class AutoClipperCore:
         else:
             # Default CPU encoding
             return ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
+
+    def get_cpu_encoder_args(self) -> list:
+        """Get safe CPU encoder arguments."""
+        return ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
+
+    def _get_hook_tts_settings(self) -> dict:
+        """Resolve provider-aware Hook Maker TTS settings."""
+        hm_config = self.hook_maker_config.copy() if self.hook_maker_config else {}
+
+        base_url = str(
+            hm_config.get(
+                "base_url",
+                getattr(self.tts_client, "base_url", "https://api.openai.com/v1"),
+            )
+        )
+        model = (
+            str(hm_config.get("model", self.tts_model or "tts-1")).strip() or "tts-1"
+        )
+        is_groq_tts = "groq" in base_url.lower() or "orpheus" in model.lower()
+
+        voice = str(hm_config.get("tts_voice", "")).strip()
+        if not voice:
+            voice = "autumn" if is_groq_tts else "nova"
+
+        response_format = str(hm_config.get("tts_response_format", "")).strip().lower()
+        if not response_format:
+            response_format = "wav" if is_groq_tts else "mp3"
+
+        try:
+            speed = float(hm_config.get("tts_speed", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            speed = 1.0
+
+        speed = max(0.25, min(4.0, speed))
+
+        return {
+            "base_url": base_url,
+            "model": model,
+            "voice": voice,
+            "response_format": response_format,
+            "speed": speed,
+            "is_groq_tts": is_groq_tts,
+        }
+
+    def _synthesize_hook_tts_audio(self, hook_text: str) -> str:
+        """Generate hook TTS audio using provider-specific settings."""
+        settings = self._get_hook_tts_settings()
+        speech_input = hook_text.strip()
+
+        if settings["is_groq_tts"] and len(speech_input) > 200:
+            self.log(
+                "  ⚠ Groq TTS input exceeds 200 chars, truncating hook text for synthesis"
+            )
+            shortened = speech_input[:200].rsplit(" ", 1)[0].strip()
+            speech_input = shortened or speech_input[:200]
+
+        request_kwargs = {
+            "model": settings["model"],
+            "voice": settings["voice"],
+            "input": speech_input,
+            "speed": settings["speed"],
+            "response_format": settings["response_format"],
+        }
+
+        self.log(f"  🎙 TTS model: {settings['model']}")
+        self.log(f"  🎙 TTS voice: {settings['voice']}")
+
+        tts_response = self.tts_client.audio.speech.create(**request_kwargs)
+
+        file_suffix = f".{settings['response_format']}"
+        if file_suffix not in {
+            ".wav",
+            ".mp3",
+            ".aac",
+            ".flac",
+            ".opus",
+            ".pcm",
+            ".m4a",
+        }:
+            file_suffix = ".wav" if settings["is_groq_tts"] else ".mp3"
+
+        tts_file = tempfile.NamedTemporaryFile(suffix=file_suffix, delete=False).name
+
+        audio_content = getattr(tts_response, "content", None)
+        if audio_content is None and hasattr(tts_response, "read"):
+            audio_content = tts_response.read()
+        if audio_content is None and hasattr(tts_response, "iter_bytes"):
+            audio_content = b"".join(tts_response.iter_bytes())
+        if audio_content is None:
+            raise Exception("TTS provider returned no audio content")
+
+        with open(tts_file, "wb") as f:
+            f.write(audio_content)
+
+        return tts_file
+
+    def _is_gpu_encoder_sequence(self, encoder_args: list | None) -> bool:
+        """Check whether encoder args represent an active GPU encoder selection."""
+        if not encoder_args or not self.gpu_enabled or not self.gpu_encoder_args:
+            return False
+
+        return encoder_args == self.gpu_encoder_args and any(
+            encoder in encoder_args
+            for encoder in ["h264_qsv", "h264_nvenc", "h264_amf"]
+        )
+
+    def _replace_encoder_args(
+        self, cmd: list, encoder_args: list | None, replacement_args: list
+    ) -> list:
+        """Replace contiguous encoder args in an FFmpeg command."""
+        if not encoder_args:
+            return cmd[:]
+
+        for index in range(len(cmd) - len(encoder_args) + 1):
+            if cmd[index : index + len(encoder_args)] == encoder_args:
+                return cmd[:index] + replacement_args + cmd[index + len(encoder_args) :]
+
+        return cmd[:]
+
+    def _should_retry_with_cpu(
+        self, error_text: str, encoder_args: list | None
+    ) -> bool:
+        """Detect whether FFmpeg failed because GPU encoder options are invalid/unsupported."""
+        if not self._is_gpu_encoder_sequence(encoder_args):
+            return False
+
+        lower_error = error_text.lower()
+        gpu_markers = ["h264_qsv", "h264_nvenc", "h264_amf", "qsv", "nvenc", "amf"]
+        encoder_failure_markers = [
+            'unable to parse "preset"',
+            "error setting option",
+            "error applying encoder options",
+            "invalid argument",
+            "unsupported",
+            "no device",
+            "device failed",
+            "cannot load mfx",
+            "no capable devices found",
+            "initialize encoder",
+        ]
+
+        return any(marker in lower_error for marker in gpu_markers) and any(
+            marker in lower_error for marker in encoder_failure_markers
+        )
+
+    def _run_ffmpeg_command(
+        self,
+        cmd: list,
+        encoder_args: list | None = None,
+        description: str = "FFmpeg",
+    ):
+        """Run an FFmpeg command, with one-shot CPU fallback for GPU encoder failures."""
+        safe_cmd = self._ensure_ffmpeg_noninteractive(cmd)
+        self.log_ffmpeg_command(safe_cmd, description)
+        result = subprocess.run(
+            safe_cmd, capture_output=True, text=True, creationflags=SUBPROCESS_FLAGS
+        )
+
+        if result.returncode == 0:
+            return result
+
+        error_text = result.stderr or "Unknown FFmpeg error"
+        if self._should_retry_with_cpu(error_text, encoder_args):
+            self.log("  ⚠ GPU encoder failed, retrying with CPU encoder...")
+            self.gpu_enabled = False
+            self.gpu_encoder_args = []
+
+            cpu_args = self.get_cpu_encoder_args()
+            fallback_cmd = self._replace_encoder_args(safe_cmd, encoder_args, cpu_args)
+            self.log_ffmpeg_command(fallback_cmd, f"{description} (CPU fallback)")
+            result = subprocess.run(
+                fallback_cmd,
+                capture_output=True,
+                text=True,
+                creationflags=SUBPROCESS_FLAGS,
+            )
+
+        return result
+
+    def _ensure_ffmpeg_noninteractive(self, cmd: list) -> list:
+        """Ensure FFmpeg does not try to read stdin in GUI/background flows."""
+        if not cmd:
+            return cmd
+
+        if "-nostdin" in cmd:
+            return cmd[:]
+
+        return [cmd[0], "-nostdin", *cmd[1:]]
+
+    def _run_ffmpeg_live(
+        self,
+        cmd: list,
+        duration: float,
+        progress_callback,
+        description: str,
+        encoder_args: list | None = None,
+        allow_cpu_fallback: bool = True,
+    ):
+        """Run FFmpeg with live progress parsing and a no-progress watchdog."""
+        safe_cmd = self._ensure_ffmpeg_noninteractive(cmd)
+        self.log_ffmpeg_command(safe_cmd, description)
+
+        process = subprocess.Popen(
+            safe_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            creationflags=SUBPROCESS_FLAGS,
+        )
+
+        output_queue: queue.Queue[str | None] = queue.Queue()
+        output_lines = []
+        last_activity = time.time()
+        last_progress = 0.0
+        saw_progress = False
+        stall_timeout = max(20.0, min(max(duration * 0.75, 20.0), 45.0))
+
+        def reader_thread():
+            try:
+                if process.stdout is None:
+                    return
+                for line in process.stdout:
+                    output_queue.put(line)
+            finally:
+                output_queue.put(None)
+
+        reader = threading.Thread(target=reader_thread, daemon=True)
+        reader.start()
+
+        while True:
+            if self.is_cancelled():
+                process.kill()
+                process.wait()
+                raise Exception("Cancelled by user")
+
+            try:
+                line = output_queue.get(timeout=0.5)
+            except queue.Empty:
+                if process.poll() is not None:
+                    break
+
+                if time.time() - last_activity > stall_timeout:
+                    process.kill()
+                    process.wait()
+                    stall_message = f"FFmpeg produced no progress for {stall_timeout:.0f}s during {description}."
+
+                    if allow_cpu_fallback and self._is_gpu_encoder_sequence(
+                        encoder_args
+                    ):
+                        self.log(
+                            "  ⚠ GPU encoder stalled, retrying with CPU encoder..."
+                        )
+                        self.gpu_enabled = False
+                        self.gpu_encoder_args = []
+                        cpu_args = self.get_cpu_encoder_args()
+                        fallback_cmd = self._replace_encoder_args(
+                            safe_cmd, encoder_args, cpu_args
+                        )
+                        return self._run_ffmpeg_live(
+                            fallback_cmd,
+                            duration,
+                            progress_callback,
+                            f"{description} (CPU fallback)",
+                            encoder_args=cpu_args,
+                            allow_cpu_fallback=False,
+                        )
+
+                    raise Exception(stall_message)
+
+                continue
+
+            if line is None:
+                break
+
+            output_lines.append(line.rstrip())
+            last_activity = time.time()
+            stripped = line.strip()
+
+            if not stripped:
+                continue
+
+            if stripped.startswith("out_time="):
+                out_time = stripped.split("=", 1)[1].strip()
+                if out_time and duration > 0:
+                    try:
+                        progress_seconds = self.parse_timestamp(out_time)
+                        last_progress = min(max(progress_seconds / duration, 0.0), 0.99)
+                        progress_callback(last_progress)
+                        saw_progress = True
+                    except Exception:
+                        pass
+                continue
+
+            if stripped.startswith("out_time_ms=") or stripped.startswith(
+                "out_time_us="
+            ):
+                raw_value = stripped.split("=", 1)[1].strip()
+                if raw_value and duration > 0:
+                    try:
+                        progress_seconds = int(raw_value) / 1_000_000.0
+                        last_progress = min(max(progress_seconds / duration, 0.0), 0.99)
+                        progress_callback(last_progress)
+                        saw_progress = True
+                    except Exception:
+                        pass
+                continue
+
+            if stripped == "progress=end" or stripped.endswith("progress=end"):
+                progress_callback(1.0)
+                saw_progress = True
+                continue
+
+        process.wait()
+
+        if process.returncode == 0:
+            if not saw_progress:
+                progress_callback(1.0)
+            return {
+                "returncode": process.returncode,
+                "output": "\n".join(output_lines),
+            }
+
+        error_text = "\n".join(output_lines) if output_lines else "Unknown FFmpeg error"
+
+        if allow_cpu_fallback and self._should_retry_with_cpu(error_text, encoder_args):
+            self.log("  ⚠ GPU encoder failed, retrying with CPU encoder...")
+            self.gpu_enabled = False
+            self.gpu_encoder_args = []
+            cpu_args = self.get_cpu_encoder_args()
+            fallback_cmd = self._replace_encoder_args(safe_cmd, encoder_args, cpu_args)
+            return self._run_ffmpeg_live(
+                fallback_cmd,
+                duration,
+                progress_callback,
+                f"{description} (CPU fallback)",
+                encoder_args=cpu_args,
+                allow_cpu_fallback=False,
+            )
+
+        return {"returncode": process.returncode, "output": error_text}
 
     def log_ffmpeg_command(self, cmd: list, description: str = "FFmpeg"):
         """Log FFmpeg command for debugging"""
@@ -1659,14 +2015,14 @@ Transcript:
 
         # Use existing session_dir or create new one
         if session_dir:
-            session_dir = Path(session_dir)
+            session_path = Path(session_dir)
         else:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            session_dir = self.output_dir / "sessions" / timestamp
-            session_dir.mkdir(parents=True, exist_ok=True)
+            session_path = self.output_dir / "sessions" / timestamp
+            session_path.mkdir(parents=True, exist_ok=True)
 
         # Update temp_dir to session-specific temp
-        self.temp_dir = session_dir / "_temp"
+        self.temp_dir = session_path / "_temp"
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
         # Step 1: Transcribe with Whisper
@@ -1700,9 +2056,9 @@ Transcript:
         self.log(f"\n✅ Found {len(highlights)} highlights (via AI transcription)")
 
         # Save session data
-        session_data_file = session_dir / "session_data.json"
+        session_data_file = session_path / "session_data.json"
         session_data = {
-            "session_dir": str(session_dir),
+            "session_dir": str(session_path),
             "video_path": video_path,
             "srt_path": None,
             "highlights": highlights,
@@ -1719,40 +2075,201 @@ Transcript:
 
         return session_data
 
-    def _call_gemini_api(self, prompt: str) -> str:
-        """Call Google Gemini API directly (not via OpenAI SDK)"""
-        try:
-            # Get API key from highlight_client config
-            # The API key should be set in base_url as part of the request
-            hf_config = self.ai_providers.get("highlight_finder", {})
-            api_key = hf_config.get("api_key", "")
+    def find_highlights_from_local_video(
+        self,
+        video_path: str,
+        num_clips: int,
+        srt_path: str | None = None,
+        video_info: dict | None = None,
+        session_dir: str | None = None,
+    ) -> dict | None:
+        """Find highlights from a local video file with optional SRT subtitle.
 
-            if not api_key:
-                raise Exception("No API key configured for Google Gemini")
+        This is the local-video phase-1 entrypoint that mirrors the YouTube flow
+        but accepts a local video file. If SRT is provided, uses it directly;
+        otherwise falls back to Whisper transcription.
 
-            # Configure genai with API key
-            genai.configure(api_key=api_key)
+        Args:
+            video_path: Path to local video file
+            num_clips: Number of clips to find
+            srt_path: Optional path to SRT subtitle file
+            video_info: Optional dict with title, description, channel (defaults created if None)
+            session_dir: Optional session directory (created if None)
 
-            # Create model and call API
-            model = genai.GenerativeModel(self.model)
-            response = model.generate_content(prompt)
+        Returns:
+            dict: Same session_data format as other phase-1 methods
+        """
+        from datetime import datetime
+        import shutil
 
-            if not response.text:
-                raise Exception(f"Empty response from Gemini: {response}")
+        self.log("[Local Video] Finding highlights from local video...")
+        self.set_progress("Preparing local video...", 0.1)
 
-            return response.text
-        except Exception as e:
-            self.log(f"  ❌ Google Gemini API Error: {e}")
-            raise
+        # Create session directory
+        if session_dir:
+            session_path = Path(session_dir)
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            session_path = self.output_dir / "sessions" / timestamp
+            session_path.mkdir(parents=True, exist_ok=True)
 
-    def find_highlights(
-        self, transcript: str, video_info: dict, num_clips: int
+        # Update temp_dir to session-specific temp
+        self.temp_dir = session_path / "_temp"
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
+
+        # Validate video file exists
+        video_file = Path(video_path)
+        if not video_file.exists():
+            raise Exception(f"Video file not found: {video_path}")
+
+        # Create default video_info if not provided
+        if not video_info:
+            video_info = {
+                "title": video_file.stem,
+                "description": "",
+                "channel": "",
+            }
+
+        # Store channel name for credit watermark
+        self.channel_name = video_info.get("channel", "")
+
+        # Copy the local video into the session so resume/phase-2 stays self-contained
+        session_video = session_path / "_temp" / f"source_local{video_file.suffix}"
+        if video_file.resolve() != session_video.resolve():
+            self.log(f"  Copying local video into session: {video_file.name}")
+            shutil.copy2(str(video_file), str(session_video))
+        video_path_str = str(session_video.resolve())
+
+        # Handle subtitle: use provided SRT or fall back to Whisper
+        transcript = None
+        transcription_method = None
+        srt_path_final = None
+
+        if srt_path:
+            srt_file = Path(srt_path)
+            if not srt_file.exists():
+                self.log(
+                    f"  ⚠ Provided SRT file not found: {srt_path}, falling back to Whisper"
+                )
+            else:
+                self.log(f"  Using provided SRT file: {srt_path}")
+                transcript = self.parse_srt(str(srt_file))
+                transcription_method = "srt_provided"
+                # Copy SRT to session for reference
+                session_srt = session_path / "_temp" / "subtitle.srt"
+                shutil.copy(str(srt_file), str(session_srt))
+                srt_path_final = str(session_srt)
+
+        if not transcript:
+            # No SRT provided or SRT invalid, use Whisper
+            self.log("  No subtitle provided, transcribing with Whisper API...")
+            self.set_progress("Transcribing video with AI...", 0.3)
+            transcript = self.transcribe_full_video(video_path_str)
+            transcription_method = "whisper_api"
+
+        if self.is_cancelled():
+            return None
+
+        # Find highlights using the transcript
+        self.set_progress("Finding highlights with AI...", 0.6)
+        highlights = self.find_highlights(transcript, video_info, num_clips)
+
+        if self.is_cancelled():
+            return None
+
+        if not highlights:
+            raise Exception(
+                "No valid highlights found!\n\n"
+                "Possible causes:\n"
+                "1. AI model failed to generate highlights\n"
+                "2. Video transcript too short or not suitable\n"
+                "3. AI model configuration issue\n\n"
+                "Try:\n"
+                "- Using a different AI model\n"
+                "- Checking AI API settings\n"
+                "- Using a longer video with more content"
+            )
+
+        self.set_progress("Highlights found!", 1.0)
+        self.log(f"\n✅ Found {len(highlights)} highlights from local video")
+
+        # Save session data (preserve same contract as YouTube flow)
+        session_data_file = session_path / "session_data.json"
+        session_data = {
+            "session_dir": str(session_path),
+            "video_path": video_path_str,
+            "srt_path": srt_path_final,
+            "highlights": highlights,
+            "video_info": video_info,
+            "created_at": datetime.now().isoformat(),
+            "status": "highlights_found",
+            "transcription_method": transcription_method,
+            "source": "local_video",
+        }
+
+        with open(session_data_file, "w", encoding="utf-8") as f:
+            json.dump(session_data, f, indent=2, ensure_ascii=False)
+
+        self.log(f"Session data saved to: {session_data_file}")
+
+        return session_data
+
+    def _find_highlights_groq_fallback(
+        self,
+        prompt: str,
+        transcript: str,
+        video_info: dict,
+        num_clips: int,
+        request_clips: int,
     ) -> list:
-        """Find highlights using GPT or Gemini"""
-        self.log(f"[2/4] Finding highlights (using {self.model})...")
+        """Fallback handler for Groq oversize/rate-limit conditions."""
+        compound_model = "groq/compound"
+        direct_prompt_tokens = self._estimate_text_tokens(prompt)
 
-        request_clips = num_clips + 3
+        if direct_prompt_tokens <= 3200:
+            self.log(f"  Attempting fallback with model: {compound_model}")
+            try:
+                result = self._call_highlight_completion(
+                    prompt=prompt,
+                    model=compound_model,
+                    max_tokens=min(1200, 350 + request_clips * 180),
+                    status_prefix="Finding highlights with AI...",
+                )
+                self.log(f"  ✓ Fallback successful with {compound_model}")
+                return self._parse_and_filter_highlights(result, num_clips)
+            except Exception as e2:
+                self.log(f"  ⚠ Compound model also failed: {e2}")
+        else:
+            self.log(
+                f"  Skipping full-prompt compound retry (~{direct_prompt_tokens} tokens estimated)"
+            )
 
+        self.log("  Compacting transcript and retrying with paced map-reduce...")
+
+        try:
+            return self._find_highlights_from_chunked_transcript(
+                transcript=transcript,
+                video_info=video_info,
+                num_clips=num_clips,
+                request_clips=request_clips,
+                model=compound_model,
+            )
+        except Exception as e3:
+            self.log(f"  ❌ All Groq fallback strategies failed: {e3}")
+            raise Exception(
+                "Groq highlight extraction exhausted all recovery strategies.\n\n"
+                "The transcript was compacted and split into smaller highlight batches, "
+                "but Groq still rejected or rate-limited the requests.\n\n"
+                "Please try:\n"
+                "1. Using a shorter video\n"
+                "2. Switching Highlight Finder to another provider (OpenAI / Anthropic)\n"
+                "3. Trying again later if Groq TPM is saturated"
+            )
+
+    def _build_highlight_prompt(
+        self, transcript: str, video_info: dict, request_clips: int
+    ) -> str:
+        """Build the final highlight-finding prompt."""
         video_context = ""
         if video_info:
             video_context = f"""INFO VIDEO:
@@ -1760,64 +2277,150 @@ Transcript:
 - Channel: {video_info.get("channel", "Unknown")}
 - Deskripsi: {video_info.get("description", "")[:500]}"""
 
-        # Replace placeholders safely (avoid .format() which breaks on user's curly braces)
         prompt = self.system_prompt.replace("{num_clips}", str(request_clips))
         prompt = prompt.replace("{video_context}", video_context)
         prompt = prompt.replace("{transcript}", transcript)
+        return prompt
 
-        # Warn if required placeholders are missing
-        if "{transcript}" in self.system_prompt and "{transcript}" in prompt:
-            self.log(
-                "  ⚠ Warning: {transcript} placeholder not replaced - check your system prompt"
-            )
-        if "{num_clips}" in self.system_prompt and "{num_clips}" in prompt:
-            self.log(
-                "  ⚠ Warning: {num_clips} placeholder not replaced - check your system prompt"
+    def _estimate_text_tokens(self, text: str) -> int:
+        """Estimate token count conservatively without external tokenizers."""
+        if not text:
+            return 0
+
+        compact_text = re.sub(r"\s+", " ", text).strip()
+        return max(1, int(len(compact_text) / 3.2))
+
+    def _is_groq_highlight_provider(self) -> bool:
+        """Check whether Highlight Finder currently points at Groq."""
+        base_url = str(getattr(self.highlight_client, "base_url", "")).lower()
+        if "groq" in base_url:
+            return True
+
+        hf_config = (
+            self.ai_providers.get("highlight_finder", {}) if self.ai_providers else {}
+        )
+        model_name = str(hf_config.get("model", self.model)).lower()
+        provider_base_url = str(hf_config.get("base_url", "")).lower()
+
+        return (
+            model_name.startswith("groq/")
+            or model_name.startswith("llama-")
+            or model_name.startswith("meta-llama/")
+            or "groq" in provider_base_url
+        )
+
+    def _extract_retry_delay_seconds(self, error_text: str) -> float | None:
+        """Extract retry delay from Groq/OpenAI-compatible error text."""
+        lower_text = error_text.lower()
+
+        seconds_match = re.search(r"try again in\s+([0-9.]+)\s*s", lower_text)
+        if seconds_match:
+            return float(seconds_match.group(1))
+
+        ms_match = re.search(r"try again in\s+([0-9.]+)\s*ms", lower_text)
+        if ms_match:
+            return float(ms_match.group(1)) / 1000.0
+
+        retry_after_match = re.search(r"retry-after[^0-9]*([0-9.]+)", lower_text)
+        if retry_after_match:
+            return float(retry_after_match.group(1))
+
+        return None
+
+    def _classify_highlight_exception(
+        self, error: Exception
+    ) -> tuple[str, float | None, str]:
+        """Classify highlight request failures into actionable categories."""
+        error_text = str(error)
+        lower_text = error_text.lower()
+
+        if any(
+            marker in lower_text
+            for marker in [
+                "request entity too large",
+                "request_too_large",
+                "413",
+                "payload too large",
+            ]
+        ):
+            return "oversize", None, error_text
+
+        if any(
+            marker in lower_text
+            for marker in [
+                "rate limit",
+                "rate_limit_exceeded",
+                "429",
+                "tokens per minute",
+                "tpm",
+                "requests per minute",
+            ]
+        ):
+            return (
+                "rate_limit",
+                self._extract_retry_delay_seconds(error_text),
+                error_text,
             )
 
-        # Check if using Google Gemini
-        if "gemini" in self.model.lower() and GOOGLE_GENAI_AVAILABLE:
-            result = self._call_gemini_api(prompt)
-        else:
-            # Use OpenAI SDK for OpenAI, Groq, Anthropic, etc.
+        return "other", None, error_text
+
+    def _sleep_for_retry(self, seconds: float, status_prefix: str) -> bool:
+        """Sleep in small increments so cancellation stays responsive."""
+        wait_seconds = max(seconds, 0.25)
+        self.log(f"  ⏳ Waiting {wait_seconds:.1f}s before retrying...")
+        self.set_progress(
+            f"{status_prefix} waiting {wait_seconds:.1f}s for rate limit...", 0.6
+        )
+
+        deadline = time.time() + wait_seconds
+        while time.time() < deadline:
+            if self.is_cancelled():
+                return False
+            time.sleep(min(0.25, deadline - time.time()))
+        return True
+
+    def _call_highlight_completion(
+        self,
+        prompt: str,
+        model: str,
+        max_tokens: int = 900,
+        max_attempts: int = 4,
+        status_prefix: str = "Finding highlights with AI...",
+    ) -> str:
+        """Call highlight model with bounded retry and Groq-aware error handling."""
+        request_kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": self.temperature,
+            "max_tokens": max_tokens,
+        }
+
+        for attempt in range(1, max_attempts + 1):
+            if self.is_cancelled():
+                raise Exception("Cancelled by user")
+
             try:
                 response = self.highlight_client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=self.temperature,
+                    **request_kwargs
                 )
 
-                # Validate response structure
                 if not response:
                     raise Exception("API returned empty response")
 
                 if not hasattr(response, "choices") or not response.choices:
-                    # Log response structure for debugging
                     self.log(f"  ⚠ Unexpected API response structure: {type(response)}")
                     self.log(f"  Response attributes: {dir(response)}")
                     raise Exception(
                         "API response missing 'choices' field.\n\n"
-                        "This usually happens with custom API providers that don't follow OpenAI format.\n\n"
-                        "Please check:\n"
-                        "1. API key is valid and has credits\n"
-                        "2. Base URL is correct for your provider\n"
-                        "3. Model name is supported by your provider\n"
-                        "4. Provider follows OpenAI-compatible API format"
+                        "This usually happens with custom API providers that don't follow OpenAI format."
                     )
 
                 if (
                     not response.choices[0].message
                     or not response.choices[0].message.content
                 ):
-                    raise Exception(
-                        "API returned empty content.\n\n"
-                        "Possible causes:\n"
-                        "1. Model refused to generate content (content filter)\n"
-                        "2. API quota exceeded\n"
-                        "3. Model doesn't support this type of request"
-                    )
+                    raise Exception("API returned empty content")
 
-                # Report token usage (input and output separately)
                 if hasattr(response, "usage") and response.usage:
                     self.report_tokens(
                         response.usage.prompt_tokens,
@@ -1826,25 +2429,419 @@ Transcript:
                         0,
                     )
 
-                result = response.choices[0].message.content.strip()
-
-            except Exception as e:
-                # Check if it's our custom exception
-                if "API response missing" in str(e) or "API returned empty" in str(e):
-                    raise
-
-                # Otherwise, wrap with more context
-                self.log(f"  ❌ API Error: {e}")
-                raise Exception(
-                    f"Failed to get highlights from AI model.\n\n"
-                    f"Error: {str(e)}\n\n"
-                    f"Please check:\n"
-                    f"1. API key is valid: {self.highlight_client.api_key[:20]}...\n"
-                    f"2. Base URL is correct: {self.highlight_client.base_url}\n"
-                    f"3. Model exists: {self.model}\n"
-                    f"4. You have sufficient credits/quota"
+                return response.choices[0].message.content.strip()
+            except Exception as error:
+                error_type, retry_after, error_text = (
+                    self._classify_highlight_exception(error)
                 )
 
+                if error_type == "oversize":
+                    raise HighlightRequestTooLargeError(error_text) from error
+
+                if error_type == "rate_limit":
+                    if attempt >= max_attempts:
+                        raise HighlightRateLimitError(
+                            error_text, retry_after
+                        ) from error
+
+                    wait_seconds = (
+                        retry_after if retry_after is not None else min(2**attempt, 8)
+                    )
+                    self.log(
+                        f"  ⚠ Rate limited on attempt {attempt}/{max_attempts}: {error_text}"
+                    )
+                    if not self._sleep_for_retry(
+                        wait_seconds + min(attempt * 0.25, 1.0), status_prefix
+                    ):
+                        raise Exception("Cancelled by user")
+                    continue
+
+                raise
+
+        raise Exception("Highlight completion attempts exhausted unexpectedly")
+
+    def _truncate_text_middle(self, text: str, max_chars: int = 650) -> str:
+        """Shrink long text while preserving beginning and ending context."""
+        if len(text) <= max_chars:
+            return text
+
+        head = max_chars // 2
+        tail = max_chars - head - 15
+        return f"{text[:head].strip()} ... {text[-tail:].strip()}"
+
+    def _parse_transcript_segments(self, transcript: str) -> list[dict]:
+        """Parse transcript lines into structured timestamped segments."""
+        segments = []
+        for raw_line in transcript.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            match = re.match(
+                r"^\[(\d{2}:\d{2}:\d{2},\d{3})\s*-\s*(\d{2}:\d{2}:\d{2},\d{3})\]\s*(.+)$",
+                line,
+            )
+            if not match:
+                continue
+
+            start_time, end_time, text = match.groups()
+            text = text.strip()
+            if not text:
+                continue
+
+            segments.append(
+                {
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "start_seconds": self.parse_timestamp(start_time),
+                    "end_seconds": self.parse_timestamp(end_time),
+                    "text": text,
+                }
+            )
+
+        return segments
+
+    def _segments_to_window(self, segments: list[dict]) -> dict:
+        """Convert contiguous transcript segments into one compact window."""
+        unique_text = []
+        last_text = ""
+        for segment in segments:
+            text = re.sub(r"\s+", " ", segment["text"]).strip()
+            if not text or text == last_text:
+                continue
+            unique_text.append(text)
+            last_text = text
+
+        combined_text = " ".join(unique_text).strip()
+        return {
+            "start_time": segments[0]["start_time"],
+            "end_time": segments[-1]["end_time"],
+            "start_seconds": segments[0]["start_seconds"],
+            "end_seconds": segments[-1]["end_seconds"],
+            "duration_seconds": round(
+                segments[-1]["end_seconds"] - segments[0]["start_seconds"], 1
+            ),
+            "text": combined_text,
+        }
+
+    def _build_compact_windows(self, transcript: str) -> list[dict]:
+        """Compact raw transcript into fewer, duration-aware windows for Groq fallback."""
+        segments = self._parse_transcript_segments(transcript)
+        if not segments:
+            return []
+
+        windows = []
+        current_segments = []
+        current_chars = 0
+        target_duration = 80.0
+        min_duration = 58.0
+        max_duration = 110.0
+        max_chars = 900
+
+        for segment in segments:
+            current_segments.append(segment)
+            current_chars += len(segment["text"]) + 1
+            current_duration = (
+                current_segments[-1]["end_seconds"]
+                - current_segments[0]["start_seconds"]
+            )
+
+            if (
+                current_duration >= target_duration
+                or current_chars >= max_chars
+                or current_duration >= max_duration
+            ):
+                windows.append(self._segments_to_window(current_segments))
+                current_segments = []
+                current_chars = 0
+
+        if current_segments:
+            trailing_window = self._segments_to_window(current_segments)
+            if windows and trailing_window["duration_seconds"] < min_duration:
+                merged_segments = [
+                    {
+                        "start_time": windows[-1]["start_time"],
+                        "end_time": windows[-1]["end_time"],
+                        "start_seconds": windows[-1]["start_seconds"],
+                        "end_seconds": windows[-1]["end_seconds"],
+                        "text": windows[-1]["text"],
+                    }
+                ] + current_segments
+                windows[-1] = self._segments_to_window(merged_segments)
+            else:
+                windows.append(trailing_window)
+
+        for window in windows:
+            window["text"] = self._truncate_text_middle(window["text"], 700)
+
+        return windows
+
+    def _format_windows_for_prompt(self, windows: list[dict]) -> str:
+        """Format compact windows back into transcript-like lines for prompts."""
+        return "\n".join(
+            f"[{window['start_time']} - {window['end_time']}] {window['text']}"
+            for window in windows
+        )
+
+    def _build_chunk_candidate_prompt(
+        self, formatted_windows: str, per_batch_target: int
+    ) -> str:
+        """Build a lightweight candidate-extraction prompt for Groq fallback."""
+        return f"""Pilih maksimal {per_batch_target} candidate clip viral dari transcript windows di bawah.
+
+Return ONLY JSON array.
+Jika tidak ada candidate yang layak, return [].
+
+Setiap object HARUS punya field berikut:
+- start_time
+- end_time
+- title
+- description
+- virality_score
+- hook_text
+
+Rules:
+- Gunakan timestamp persis dari transcript windows.
+- Boleh gabungkan beberapa window yang berurutan jika masih satu topik.
+- Durasi target 58-120 detik.
+- title <= 60 karakter.
+- description <= 150 karakter.
+- hook_text <= 15 kata.
+- virality_score harus integer 1-10.
+
+Transcript windows:
+{formatted_windows}
+"""
+
+    def _build_candidate_reduce_prompt(
+        self, candidates: list[dict], num_clips: int
+    ) -> str:
+        """Build a small reduce prompt over shortlisted candidates."""
+        candidate_json = json.dumps(candidates, ensure_ascii=False, indent=2)
+        return f"""Pilih {num_clips} clip terbaik dari kandidat JSON berikut.
+
+Return ONLY JSON array dengan field yang sama:
+- start_time
+- end_time
+- title
+- description
+- virality_score
+- hook_text
+
+Prioritaskan kandidat yang:
+- paling viral / emosional
+- paling utuh sebagai mini-story
+- tidak repetitif satu sama lain
+
+Candidates:
+{candidate_json}
+"""
+
+    def _split_transcript_into_chunks(
+        self, transcript: str, target_chars: int = 6000, overlap_lines: int = 8
+    ) -> list[str]:
+        """Split transcript into overlapping line-preserving chunks."""
+        lines = [line for line in transcript.split("\n") if line.strip()]
+        if not lines:
+            return []
+
+        chunks = []
+        start = 0
+
+        while start < len(lines):
+            current_lines = []
+            current_size = 0
+            index = start
+
+            while index < len(lines):
+                line = lines[index]
+                next_size = current_size + len(line) + 1
+                if current_lines and next_size > target_chars:
+                    break
+                current_lines.append(line)
+                current_size = next_size
+                index += 1
+
+            if not current_lines:
+                current_lines.append(lines[start])
+                index = start + 1
+
+            chunks.append("\n".join(current_lines))
+
+            if index >= len(lines):
+                break
+
+            start = max(index - overlap_lines, start + 1)
+
+        return chunks
+
+    def _find_highlights_from_chunked_transcript(
+        self,
+        transcript: str,
+        video_info: dict,
+        num_clips: int,
+        request_clips: int,
+        model: str,
+    ) -> list:
+        """Fallback map-reduce strategy with compact windows and paced retries."""
+        windows = self._build_compact_windows(transcript)
+        if not windows:
+            raise Exception("Transcript could not be compacted into highlight windows")
+
+        self.log(f"  Compacted transcript into {len(windows)} windows")
+        self.set_progress("Finding highlights with AI... compacting transcript", 0.6)
+
+        # Build small batches to stay safely below Groq body and TPM limits.
+        batches = []
+        current_batch = []
+        current_tokens = 0
+        target_batch_tokens = 900
+
+        for window in windows:
+            line = f"[{window['start_time']} - {window['end_time']}] {window['text']}"
+            line_tokens = self._estimate_text_tokens(line)
+            if current_batch and current_tokens + line_tokens > target_batch_tokens:
+                batches.append(current_batch)
+                current_batch = []
+                current_tokens = 0
+
+            current_batch.append(window)
+            current_tokens += line_tokens
+
+        if current_batch:
+            batches.append(current_batch)
+
+        self.log(f"  Prepared {len(batches)} compact batches for highlight extraction")
+
+        candidate_highlights = []
+        per_batch_target = min(2, max(1, num_clips))
+        rolling_token_budget = 0
+
+        for index, batch in enumerate(batches, start=1):
+            if self.is_cancelled():
+                return []
+
+            formatted_windows = self._format_windows_for_prompt(batch)
+            batch_prompt = self._build_chunk_candidate_prompt(
+                formatted_windows, per_batch_target
+            )
+            estimated_request_tokens = self._estimate_text_tokens(batch_prompt) + 500
+
+            if (
+                self._is_groq_highlight_provider()
+                and rolling_token_budget + estimated_request_tokens > 18000
+            ):
+                self.log("  ⚠ Approaching Groq TPM budget; pacing before next batch...")
+                if not self._sleep_for_retry(6.5, "Finding highlights with AI..."):
+                    return []
+                rolling_token_budget = 0
+
+            self.log(f"  Processing compact batch {index}/{len(batches)}...")
+            self.set_progress(
+                f"Finding highlights with AI... batch {index}/{len(batches)}",
+                0.6,
+            )
+
+            try:
+                parsed = self._extract_candidates_from_window_batch(
+                    batch,
+                    model=model,
+                    per_batch_target=per_batch_target,
+                )
+                candidate_highlights.extend(parsed)
+                rolling_token_budget += estimated_request_tokens
+            except Exception as chunk_error:
+                self.log(f"  ⚠ Batch {index} failed: {chunk_error}")
+                continue
+
+        if not candidate_highlights:
+            raise Exception("Chunked fallback did not produce any candidate highlights")
+
+        deduped_candidates = []
+        seen_windows = set()
+        for item in candidate_highlights:
+            key = (item.get("start_time"), item.get("end_time"))
+            if key in seen_windows:
+                continue
+            seen_windows.add(key)
+            deduped_candidates.append(item)
+
+        deduped_candidates.sort(
+            key=lambda item: (
+                item.get("virality_score", 5),
+                item.get("duration_seconds", 0),
+            ),
+            reverse=True,
+        )
+
+        if len(deduped_candidates) <= num_clips:
+            self.log(
+                "  ✓ Compact fallback produced enough highlights without reduce step"
+            )
+            return deduped_candidates[:num_clips]
+
+        shortlist = deduped_candidates[: max(num_clips * 2, 6)]
+        reduce_prompt = self._build_candidate_reduce_prompt(shortlist, num_clips)
+
+        try:
+            result = self._call_highlight_completion(
+                prompt=reduce_prompt,
+                model=model,
+                max_tokens=min(900, 300 + num_clips * 150),
+                status_prefix="Finding highlights with AI...",
+            )
+            self.log("  ✓ Compact fallback reduce step successful")
+            return self._parse_and_filter_highlights(result, num_clips)
+        except Exception as reduce_error:
+            self.log(
+                f"  ⚠ Reduce step failed, using deterministic shortlist fallback: {reduce_error}"
+            )
+            return shortlist[:num_clips]
+
+    def _extract_candidates_from_window_batch(
+        self,
+        windows: list[dict],
+        model: str,
+        per_batch_target: int,
+        depth: int = 0,
+    ) -> list:
+        """Extract candidates from one compact transcript batch, shrinking on 413."""
+        formatted_windows = self._format_windows_for_prompt(windows)
+        prompt = self._build_chunk_candidate_prompt(formatted_windows, per_batch_target)
+
+        try:
+            result = self._call_highlight_completion(
+                prompt=prompt,
+                model=model,
+                max_tokens=450,
+                status_prefix="Finding highlights with AI...",
+            )
+            return self._parse_and_filter_highlights(result, per_batch_target)
+        except HighlightRequestTooLargeError:
+            if len(windows) > 1:
+                middle = max(1, len(windows) // 2)
+                return self._extract_candidates_from_window_batch(
+                    windows[:middle], model, per_batch_target, depth + 1
+                ) + self._extract_candidates_from_window_batch(
+                    windows[middle:], model, per_batch_target, depth + 1
+                )
+
+            if depth >= 2:
+                raise
+
+            shrunken_window = windows[0].copy()
+            shrunken_window["text"] = self._truncate_text_middle(
+                shrunken_window["text"], 420
+            )
+            if shrunken_window["text"] == windows[0]["text"]:
+                raise
+
+            return self._extract_candidates_from_window_batch(
+                [shrunken_window], model, per_batch_target, depth + 1
+            )
+
+    def _parse_and_filter_highlights(self, result: str, num_clips: int) -> list:
+        """Parse AI response and filter highlights by duration (extracted from find_highlights)."""
         # Log raw response for debugging
         self.log(f"  Raw AI response (first 500 chars):\n{result[:500]}")
 
@@ -1878,12 +2875,18 @@ Transcript:
             )
             h["duration_seconds"] = round(duration, 1)
 
-            # Ensure virality_score exists (default to 5 if missing)
-            if "virality_score" not in h:
-                h["virality_score"] = 5
+            # Normalize virality_score (default to 5 if missing/invalid)
+            raw_score = h.get("virality_score", 5)
+            try:
+                normalized_score = int(raw_score)
+            except (TypeError, ValueError):
+                normalized_score = 5
                 self.log(
-                    f"  ⚠ Missing virality_score for '{h.get('title', 'Unknown')}', defaulting to 5"
+                    f"  ⚠ Invalid virality_score for '{h.get('title', 'Unknown')}', defaulting to 5"
                 )
+
+            normalized_score = max(1, min(10, normalized_score))
+            h["virality_score"] = normalized_score
 
             # Ensure description exists
             if "description" not in h:
@@ -1891,6 +2894,9 @@ Transcript:
                 self.log(
                     f"  ⚠ Missing description for '{h.get('title', 'Unknown')}', using title"
                 )
+
+            if "hook_text" not in h or not str(h.get("hook_text", "")).strip():
+                h["hook_text"] = h.get("title", "")[:80]
 
             if 58 <= duration <= 120:
                 valid.append(h)
@@ -1913,6 +2919,105 @@ Transcript:
             self.log(f"   Consider using a better AI model or adjusting the prompt.")
 
         return valid[:num_clips]
+
+    def _call_gemini_api(self, prompt: str) -> str:
+        """Call Google Gemini API directly (not via OpenAI SDK)"""
+        try:
+            # Get API key from highlight_client config
+            # The API key should be set in base_url as part of the request
+            hf_config = self.ai_providers.get("highlight_finder", {})
+            api_key = hf_config.get("api_key", "")
+
+            if not api_key:
+                raise Exception("No API key configured for Google Gemini")
+
+            # Configure genai with API key
+            genai.configure(api_key=api_key)
+
+            # Create model and call API
+            model = genai.GenerativeModel(self.model)
+            response = model.generate_content(prompt)
+
+            if not response.text:
+                raise Exception(f"Empty response from Gemini: {response}")
+
+            return response.text
+        except Exception as e:
+            self.log(f"  ❌ Google Gemini API Error: {e}")
+            raise
+
+    def find_highlights(
+        self, transcript: str, video_info: dict, num_clips: int
+    ) -> list:
+        """Find highlights using GPT or Gemini"""
+        self.log(f"[2/4] Finding highlights (using {self.model})...")
+
+        request_clips = num_clips + (1 if self._is_groq_highlight_provider() else 3)
+
+        prompt = self._build_highlight_prompt(transcript, video_info, request_clips)
+        estimated_prompt_tokens = self._estimate_text_tokens(prompt)
+
+        if self._is_groq_highlight_provider() and estimated_prompt_tokens > 3200:
+            self.log(
+                f"  ⚠ Prompt estimated at ~{estimated_prompt_tokens} tokens; using compact Groq strategy"
+            )
+            return self._find_highlights_groq_fallback(
+                prompt, transcript, video_info, num_clips, request_clips
+            )
+
+        # Warn if required placeholders are missing
+        if "{transcript}" in self.system_prompt and "{transcript}" in prompt:
+            self.log(
+                "  ⚠ Warning: {transcript} placeholder not replaced - check your system prompt"
+            )
+        if "{num_clips}" in self.system_prompt and "{num_clips}" in prompt:
+            self.log(
+                "  ⚠ Warning: {num_clips} placeholder not replaced - check your system prompt"
+            )
+
+        # Check if using Google Gemini
+        if "gemini" in self.model.lower() and GOOGLE_GENAI_AVAILABLE:
+            result = self._call_gemini_api(prompt)
+        else:
+            try:
+                result = self._call_highlight_completion(
+                    prompt=prompt,
+                    model=self.model,
+                    max_tokens=min(1200, 350 + request_clips * 180),
+                    status_prefix="Finding highlights with AI...",
+                )
+            except (HighlightRequestTooLargeError, HighlightRateLimitError) as e:
+                if self._is_groq_highlight_provider():
+                    self.log(
+                        "  ⚠ Groq direct request could not complete cleanly, switching to compact fallback..."
+                    )
+                    return self._find_highlights_groq_fallback(
+                        prompt, transcript, video_info, num_clips, request_clips
+                    )
+                self.log(f"  ❌ API Error: {e}")
+                raise Exception(
+                    f"Failed to get highlights from AI model.\n\n"
+                    f"Error: {str(e)}\n\n"
+                    f"Please check:\n"
+                    f"1. API key is valid: {self.highlight_client.api_key[:20]}...\n"
+                    f"2. Base URL is correct: {self.highlight_client.base_url}\n"
+                    f"3. Model exists: {self.model}\n"
+                    f"4. You have sufficient credits/quota"
+                )
+            except Exception as e:
+                self.log(f"  ❌ API Error: {e}")
+                raise Exception(
+                    f"Failed to get highlights from AI model.\n\n"
+                    f"Error: {str(e)}\n\n"
+                    f"Please check:\n"
+                    f"1. API key is valid: {self.highlight_client.api_key[:20]}...\n"
+                    f"2. Base URL is correct: {self.highlight_client.base_url}\n"
+                    f"3. Model exists: {self.model}\n"
+                    f"4. You have sufficient credits/quota"
+                )
+
+        # Parse and filter highlights using extracted method
+        return self._parse_and_filter_highlights(result, num_clips)
 
     def process_clip(
         self,
@@ -1983,12 +3088,12 @@ Transcript:
         cmd = [
             self.ffmpeg_path,
             "-y",
-            "-i",
-            video_path,
             "-ss",
             start,
-            "-to",
-            end,
+            "-i",
+            video_path,
+            "-t",
+            f"{duration:.3f}",
             *encoder_args,  # Use GPU or CPU encoder
             "-c:a",
             "aac",
@@ -2328,8 +3433,15 @@ Transcript:
             "-shortest",
             output_path,
         ]
-        self.log_ffmpeg_command(cmd, "Portrait Merge Audio (OpenCV)")
-        subprocess.run(cmd, capture_output=True, creationflags=SUBPROCESS_FLAGS)
+        result = self._run_ffmpeg_command(
+            cmd,
+            encoder_args=encoder_args,
+            description="Portrait Merge Audio (OpenCV)",
+        )
+        if result.returncode != 0:
+            raise Exception(
+                f"Audio merge failed:\n{result.stderr or 'Unknown FFmpeg error'}"
+            )
         os.unlink(temp_video)
 
     def stabilize_positions(self, positions: list) -> list:
@@ -2589,8 +3701,15 @@ Transcript:
             "-shortest",
             output_path,
         ]
-        self.log_ffmpeg_command(cmd, "Portrait Merge Audio (MediaPipe)")
-        subprocess.run(cmd, capture_output=True, creationflags=SUBPROCESS_FLAGS)
+        result = self._run_ffmpeg_command(
+            cmd,
+            encoder_args=encoder_args,
+            description="Portrait Merge Audio (MediaPipe)",
+        )
+        if result.returncode != 0:
+            raise Exception(
+                f"Audio merge failed:\n{result.stderr or 'Unknown FFmpeg error'}"
+            )
 
         # Cleanup
         try:
@@ -2694,13 +3813,7 @@ Transcript:
         self.report_tokens(0, 0, 0, len(hook_text))
 
         # Generate TTS audio
-        tts_response = self.tts_client.audio.speech.create(
-            model=self.tts_model, voice="nova", input=hook_text, speed=1.0
-        )
-
-        tts_file = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False).name
-        with open(tts_file, "wb") as f:
-            f.write(tts_response.content)
+        tts_file = self._synthesize_hook_tts_audio(hook_text)
 
         # Get TTS duration using ffprobe
         probe_cmd = [self.ffmpeg_path, "-i", tts_file, "-f", "null", "-"]
@@ -3096,9 +4209,10 @@ Transcript:
             output_path,
         ]
 
-        self.log_ffmpeg_command(cmd, "Burn Captions")
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, creationflags=SUBPROCESS_FLAGS
+        result = self._run_ffmpeg_command(
+            cmd,
+            encoder_args=encoder_args,
+            description="Burn Captions",
         )
         os.unlink(ass_file)
 
@@ -3221,18 +4335,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         print(f"[DEBUG] Running ffmpeg command: {' '.join(cmd[:5])}...")
         print(f"[DEBUG] Expected duration: {duration}s")
 
-        # Just run ffmpeg normally without progress parsing for now
-        # Progress parsing from ffmpeg is complex due to carriage returns
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, creationflags=SUBPROCESS_FLAGS
+        encoder_args = (
+            self.gpu_encoder_args
+            if self.gpu_encoder_args
+            and self._replace_encoder_args(
+                cmd, self.gpu_encoder_args, self.get_cpu_encoder_args()
+            )
+            != cmd
+            else None
         )
 
-        # Set to 100% when done
-        progress_callback(1.0)
-        print(f"[DEBUG] FFmpeg completed with return code: {result.returncode}")
+        result = self._run_ffmpeg_live(
+            cmd,
+            duration,
+            progress_callback,
+            description="FFmpeg Progress Command",
+            encoder_args=encoder_args,
+        )
 
-        if result.returncode != 0:
-            error_msg = result.stderr if result.stderr else "Unknown FFmpeg error"
+        print(f"[DEBUG] FFmpeg completed with return code: {result['returncode']}")
+
+        if result["returncode"] != 0:
+            error_msg = result["output"] if result["output"] else "Unknown FFmpeg error"
 
             # Extract the actual error (usually at the end)
             error_lines = error_msg.split("\n")
@@ -3513,9 +4637,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         print(f"[DEBUG] Running audio merge command...")
         sys.stdout.flush()
 
-        self.log_ffmpeg_command(cmd, "Portrait Merge Audio (with progress)")
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, creationflags=SUBPROCESS_FLAGS
+        result = self._run_ffmpeg_command(
+            cmd,
+            encoder_args=encoder_args,
+            description="Portrait Merge Audio (with progress)",
         )
 
         if result.returncode != 0:
@@ -3793,9 +4918,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             output_path,
         ]
 
-        self.log_ffmpeg_command(cmd, "MediaPipe Portrait Merge Audio")
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, creationflags=SUBPROCESS_FLAGS
+        result = self._run_ffmpeg_command(
+            cmd,
+            encoder_args=encoder_args,
+            description="MediaPipe Portrait Merge Audio",
         )
 
         if result.returncode != 0:
@@ -3829,13 +4955,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         # Generate TTS audio (10% progress)
         progress_callback(0.1)
-        tts_response = self.tts_client.audio.speech.create(
-            model=self.tts_model, voice="nova", input=hook_text, speed=1.0
-        )
-
-        tts_file = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False).name
-        with open(tts_file, "wb") as f:
-            f.write(tts_response.content)
+        tts_file = self._synthesize_hook_tts_audio(hook_text)
 
         progress_callback(0.2)
 
@@ -3921,9 +5041,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             bg_video,
         ]
 
-        self.log_ffmpeg_command(bg_cmd, "Create Hook Background")
-        result = subprocess.run(
-            bg_cmd, capture_output=True, text=True, creationflags=SUBPROCESS_FLAGS
+        result = self._run_ffmpeg_command(
+            bg_cmd,
+            encoder_args=encoder_args,
+            description="Create Hook Background",
         )
         if result.returncode != 0:
             self.log(f"Failed to create background video: {result.stderr}")
@@ -4066,9 +5187,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             "-an",  # No audio yet
             reencoded_video,
         ]
-        self.log_ffmpeg_command(reencode_cmd, "Re-encode Hook Text Overlay")
-        result = subprocess.run(
-            reencode_cmd, capture_output=True, text=True, creationflags=SUBPROCESS_FLAGS
+        result = self._run_ffmpeg_command(
+            reencode_cmd,
+            encoder_args=encoder_args,
+            description="Re-encode Hook Text Overlay",
         )
         if result.returncode != 0:
             self.log(f"Failed to re-encode OpenCV output: {result.stderr}")

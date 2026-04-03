@@ -372,7 +372,8 @@ class BaseProviderSettingsPage(BaseSettingsSubPage):
         if "ai_providers" not in config_dict:
             config_dict["ai_providers"] = {}
 
-        provider_config = {"base_url": url, "api_key": api_key, "model": model}
+        provider_config = config_dict["ai_providers"].get(self.provider_key, {}).copy()
+        provider_config.update({"base_url": url, "api_key": api_key, "model": model})
 
         # Save system message if textbox exists
         if self.system_message_textbox:
