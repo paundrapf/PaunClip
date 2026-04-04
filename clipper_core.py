@@ -3209,6 +3209,8 @@ Candidates:
         clip_dir: Path | None = None,
         clip_id: str | None = None,
         revision: int | None = None,
+        dirty_stages: list[str] | None = None,
+        stable_clip_dir: Path | None = None,
     ):
         """Process a single clip: cut, portrait, hook (optional), captions (optional)"""
 
@@ -3223,6 +3225,12 @@ Candidates:
             clip_dir = Path(clip_dir)
         clip_dir.mkdir(parents=True, exist_ok=True)
         clip_id = clip_id or clip_dir.name
+        stable_clip_dir = Path(stable_clip_dir) if stable_clip_dir else None
+        artifact_dir = clip_dir / "artifacts"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        dirty_stage_set = {
+            str(stage or "").strip().lower() for stage in dirty_stages or []
+        }
 
         self.log(f"  Output folder: {clip_dir}")
 
@@ -3258,58 +3266,89 @@ Candidates:
 
         current_step = 0
 
+        artifact_paths = {
+            "cut": Path("artifacts") / "cut.mp4",
+            "portrait": Path("artifacts") / "portrait.mp4",
+            "final_composition": Path("master.mp4"),
+            "master": Path("master.mp4"),
+            "thumb": Path("thumb.jpg"),
+        }
+
+        def prime_stage_artifact(stage_name: str, destination: Path):
+            if (
+                stage_name in dirty_stage_set
+                or destination.exists()
+                or stable_clip_dir is None
+            ):
+                return
+
+            source_path = stable_clip_dir / artifact_paths[stage_name]
+            if source_path.exists():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, destination)
+
+        cut_file = artifact_dir / "cut.mp4"
+        portrait_file = artifact_dir / "portrait.mp4"
+        prime_stage_artifact("cut", cut_file)
+        prime_stage_artifact("portrait", portrait_file)
+
         # Step 1: Cut video with progress tracking
         if self.is_cancelled():
             return
         clip_progress("Cutting video...", current_step, 0)
-        landscape_file = clip_dir / "temp_landscape.mp4"
 
         # Get video duration for progress calculation
         duration = self.parse_timestamp(end) - self.parse_timestamp(start)
 
-        # Get encoder args (GPU or CPU)
-        encoder_args = self.get_video_encoder_args()
+        if cut_file.exists() and "cut" not in dirty_stage_set:
+            self.log("  ↺ Reused cut artifact")
+            clip_progress("Cutting video...", current_step, 1.0)
+        else:
+            # Get encoder args (GPU or CPU)
+            encoder_args = self.get_video_encoder_args()
 
-        cmd = [
-            self.ffmpeg_path,
-            "-y",
-            "-ss",
-            start,
-            "-i",
-            video_path,
-            "-t",
-            f"{duration:.3f}",
-            *encoder_args,  # Use GPU or CPU encoder
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-progress",
-            "pipe:1",  # Enable progress output
-            str(landscape_file),
-        ]
+            cmd = [
+                self.ffmpeg_path,
+                "-y",
+                "-ss",
+                start,
+                "-i",
+                video_path,
+                "-t",
+                f"{duration:.3f}",
+                *encoder_args,
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-progress",
+                "pipe:1",
+                str(cut_file),
+            ]
 
-        # Log command for debugging
-        self.log_ffmpeg_command(cmd, "Cut Video")
-
-        self.run_ffmpeg_with_progress(
-            cmd, duration, lambda p: clip_progress("Cutting video...", current_step, p)
-        )
-
-        self.log("  ✓ Cut video")
+            self.log_ffmpeg_command(cmd, "Cut Video")
+            self.run_ffmpeg_with_progress(
+                cmd,
+                duration,
+                lambda p: clip_progress("Cutting video...", current_step, p),
+            )
+            self.log("  ✓ Cut video")
         current_step += 1
 
         # Step 2: Convert to portrait with progress
         if self.is_cancelled():
             return
         clip_progress("Converting to portrait...", current_step, 0)
-        portrait_file = clip_dir / "temp_portrait.mp4"
-        self.convert_to_portrait_with_progress(
-            str(landscape_file),
-            str(portrait_file),
-            lambda p: clip_progress("Converting to portrait...", current_step, p),
-        )
-        self.log("  ✓ Portrait conversion")
+        if portrait_file.exists() and "portrait" not in dirty_stage_set:
+            self.log("  ↺ Reused portrait artifact")
+            clip_progress("Converting to portrait...", current_step, 1.0)
+        else:
+            self.convert_to_portrait_with_progress(
+                str(cut_file),
+                str(portrait_file),
+                lambda p: clip_progress("Converting to portrait...", current_step, p),
+            )
+            self.log("  ✓ Portrait conversion")
         current_step += 1
 
         # Track which file is the current output
@@ -3423,8 +3462,6 @@ Candidates:
                     self.log(f"  Warning: Could not delete temp_captioned.mp4: {e}")
         elif not add_captions:
             # No captions and no watermark, just copy current output to final
-            import shutil
-
             shutil.copy(str(current_output), str(final_file))
             current_output = final_file
 
@@ -3439,8 +3476,6 @@ Candidates:
             # If current_output is already final_file, we need a temp file
             if str(current_output) == str(final_file):
                 temp_credit_input = clip_dir / "temp_before_credit.mp4"
-                import shutil
-
                 shutil.copy(str(final_file), str(temp_credit_input))
                 current_output = temp_credit_input
 
@@ -3470,18 +3505,6 @@ Candidates:
         clip_progress("Done", total_steps, 0)
 
         # Cleanup temp files
-        try:
-            if landscape_file.exists():
-                landscape_file.unlink()
-        except Exception as e:
-            self.log(f"  Warning: Could not delete {landscape_file.name}: {e}")
-
-        try:
-            if portrait_file.exists():
-                portrait_file.unlink()
-        except Exception as e:
-            self.log(f"  Warning: Could not delete {portrait_file.name}: {e}")
-
         if add_hook:
             try:
                 hooked_file = clip_dir / "temp_hooked.mp4"
@@ -3525,8 +3548,8 @@ Candidates:
                 },
             },
             "artifact_paths": {
-                "master": "master.mp4",
-                "thumb": "thumb.jpg",
+                key: str(path).replace("\\", "/")
+                for key, path in artifact_paths.items()
             },
             "created_at": rendered_at,
             "last_rendered_at": rendered_at,
@@ -4321,7 +4344,7 @@ Candidates:
         self,
         input_path: str,
         output_path: str,
-        audio_source: str = None,
+        audio_source: str | None = None,
         time_offset: float = 0,
     ):
         """Add CapCut-style captions using OpenAI Whisper API
@@ -5566,7 +5589,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         self,
         input_path: str,
         output_path: str,
-        audio_source: str = None,
+        audio_source: str | None = None,
         time_offset: float = 0,
         progress_callback=None,
     ):
@@ -6104,6 +6127,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             clip_root_dir = clips_dir / clip_id
             working_dir = clip_root_dir / "_work"
             revision_number = int(clip_job.get("current_revision") or 0) + 1
+            dirty_stages = list(clip_job.get("dirty_stages") or [])
 
             if working_dir.exists():
                 shutil.rmtree(working_dir, ignore_errors=True)
@@ -6134,12 +6158,23 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     clip_dir=working_dir,
                     clip_id=clip_id,
                     revision=revision_number,
+                    dirty_stages=dirty_stages,
+                    stable_clip_dir=clip_root_dir,
                 )
+                if not render_result:
+                    raise Exception("Clip rendering cancelled")
 
                 clip_root_dir.mkdir(parents=True, exist_ok=True)
+                stable_artifacts_dir = clip_root_dir / "artifacts"
                 stable_master_path = clip_root_dir / "master.mp4"
                 stable_data_path = clip_root_dir / "data.json"
                 stable_thumb_path = clip_root_dir / "thumb.jpg"
+
+                working_artifacts_dir = working_dir / "artifacts"
+                if working_artifacts_dir.exists():
+                    if stable_artifacts_dir.exists():
+                        shutil.rmtree(stable_artifacts_dir, ignore_errors=True)
+                    shutil.copytree(working_artifacts_dir, stable_artifacts_dir)
 
                 shutil.copy2(render_result["master_path"], stable_master_path)
 
