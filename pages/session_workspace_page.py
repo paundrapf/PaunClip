@@ -18,6 +18,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
         "render_queued": "#3498db",
         "rendering": "#e67e22",
         "completed": "#27ae60",
+        "dirty_needs_rerender": "#f1c40f",
         "partial": "#e67e22",
         "failed": "#e74c3c",
         "cancelled": "#7f8c8d",
@@ -34,6 +35,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
         on_open_output_callback,
         on_open_results_callback,
         on_save_draft_callback,
+        on_workspace_state_changed_callback,
         on_render_selected_callback,
         on_render_current_callback,
         on_retry_failed_callback,
@@ -47,6 +49,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
         self.on_open_output = on_open_output_callback
         self.on_open_results = on_open_results_callback
         self.on_save_draft = on_save_draft_callback
+        self.on_workspace_state_changed = on_workspace_state_changed_callback
         self.on_render_selected = on_render_selected_callback
         self.on_render_current = on_render_current_callback
         self.on_retry_failed = on_retry_failed_callback
@@ -327,6 +330,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
             text="Add Hook",
             variable=self.add_hook_var,
             width=120,
+            command=self.on_render_options_changed,
         )
         self.add_hook_switch.pack(side="left", padx=(0, 8))
 
@@ -335,6 +339,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
             text="Add Captions",
             variable=self.add_captions_var,
             width=132,
+            command=self.on_render_options_changed,
         )
         self.add_captions_switch.pack(side="left")
 
@@ -470,6 +475,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
 
         self.state = self.get_state() or {}
         session = self.state.get("session") or {}
+        workspace_state = self.state.get("workspace_state") or {}
         session_id = session.get("session_id")
 
         self.highlights = list(self.state.get("highlights") or [])
@@ -488,9 +494,12 @@ class SessionWorkspacePage(ctk.CTkFrame):
 
         if session_id != self.current_session_id:
             self.current_session_id = session_id
-            self.active_highlight_id = None
+            self.active_highlight_id = workspace_state.get("active_highlight_id")
             self.local_drafts = {}
             self.selected_highlight_ids = set(default_selected)
+
+        self.add_hook_var.set(bool(workspace_state.get("add_hook", True)))
+        self.add_captions_var.set(bool(workspace_state.get("add_captions", True)))
 
         self.selected_highlight_ids = {
             highlight_id
@@ -501,7 +510,9 @@ class SessionWorkspacePage(ctk.CTkFrame):
             self.selected_highlight_ids = set(default_selected)
 
         if self.active_highlight_id not in available_ids:
-            self.active_highlight_id = None
+            self.active_highlight_id = workspace_state.get("active_highlight_id")
+            if self.active_highlight_id not in available_ids:
+                self.active_highlight_id = None
 
         self.render_header(session)
         self.render_source_summary(self.state.get("source_rows") or [])
@@ -728,6 +739,8 @@ class SessionWorkspacePage(ctk.CTkFrame):
             if clip.get("duration") is not None:
                 detail_bits.append(f"{float(clip['duration']):.0f}s")
             detail_bits.append(clip.get("revision_label") or "Revision 1")
+            if clip.get("status"):
+                detail_bits.append(str(clip.get("status")).replace("_", " ").title())
 
             ctk.CTkLabel(
                 card,
@@ -763,13 +776,14 @@ class SessionWorkspacePage(ctk.CTkFrame):
         rendering = int(queue_summary.get("rendering") or 0)
         completed = int(queue_summary.get("completed") or 0)
         failed = int(queue_summary.get("failed") or 0)
+        dirty = int(queue_summary.get("dirty") or 0)
         selected = len(self.selected_highlight_ids)
         self.queue_summary_label.configure(
             text=(
                 f"Selected highlights: {selected}\n"
                 f"Tracked clip jobs: {total}\n"
                 f"Queued {queued} • Rendering {rendering}\n"
-                f"Completed {completed} • Failed {failed}"
+                f"Completed {completed} • Dirty {dirty} • Failed {failed}"
             )
         )
 
@@ -777,6 +791,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
         """Move editor focus to a highlight row."""
         self.capture_active_draft()
         self.active_highlight_id = highlight_id
+        self.persist_workspace_state(active_highlight_id=highlight_id)
         self.render_highlight_list()
         self.load_active_highlight()
         self.update_action_states()
@@ -787,6 +802,9 @@ class SessionWorkspacePage(ctk.CTkFrame):
             self.selected_highlight_ids.add(highlight_id)
         else:
             self.selected_highlight_ids.discard(highlight_id)
+        self.persist_workspace_state(
+            selected_highlight_ids=sorted(self.selected_highlight_ids)
+        )
         self.update_queue_summary(self.state.get("queue_summary") or {})
         self.update_action_states()
 
@@ -867,6 +885,14 @@ class SessionWorkspacePage(ctk.CTkFrame):
         if self._loading_editor:
             return
         self.capture_active_draft()
+        self.persist_workspace_state(highlight_updates=self.get_editor_payload())
+        self.refresh_editor_dirty_state()
+
+    def on_render_options_changed(self):
+        """Persist render option toggles so restart restores the shell state."""
+        if self._loading_editor:
+            return
+        self.persist_workspace_state()
         self.refresh_editor_dirty_state()
 
     def refresh_editor_dirty_state(self):
@@ -900,8 +926,36 @@ class SessionWorkspacePage(ctk.CTkFrame):
         if not self.active_highlight_id:
             return
         self.local_drafts.pop(self.active_highlight_id, None)
+        self.persist_workspace_state(
+            highlight_updates=self.get_highlight_editor_payload(
+                self.highlight_lookup.get(self.active_highlight_id) or {}
+            )
+        )
         self.load_active_highlight()
         self.update_action_states()
+
+    def persist_workspace_state(
+        self,
+        *,
+        highlight_updates: dict | None = None,
+        selected_highlight_ids: list[str] | None = None,
+        active_highlight_id: str | None = None,
+    ):
+        """Push incremental workspace changes back to app-owned persistence."""
+        if not callable(self.on_workspace_state_changed):
+            return False
+        return self.on_workspace_state_changed(
+            highlight_id=self.active_highlight_id,
+            updates=highlight_updates,
+            selected_highlight_ids=selected_highlight_ids,
+            active_highlight_id=(
+                self.active_highlight_id
+                if active_highlight_id is None
+                else active_highlight_id
+            ),
+            add_hook=self.add_hook_var.get(),
+            add_captions=self.add_captions_var.get(),
+        )
 
     def handle_save_draft(self):
         """Push current draft values back through the app callback."""

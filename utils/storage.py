@@ -4,6 +4,7 @@ Storage helpers for campaign/session manifests and clip discovery.
 
 import copy
 import json
+from datetime import datetime
 from pathlib import Path
 
 
@@ -17,6 +18,15 @@ PROVIDER_SNAPSHOT_KEYS = (
     "hook_maker",
     "youtube_title_maker",
 )
+VALID_CLIP_JOB_STATUSES = {
+    "pending",
+    "rendering",
+    "completed",
+    "failed",
+    "cancelled",
+    "dirty_needs_rerender",
+}
+VALID_DIRTY_STAGES = {"cut", "portrait", "hook", "captions", "compose"}
 SESSION_STATUS_ALIASES = {
     "created": "queued",
     "download_complete": "downloaded",
@@ -45,6 +55,368 @@ KNOWN_SESSION_STAGES = {
     "processing",
     "unknown",
 }
+
+
+def utc_now_iso() -> str:
+    """Return a local ISO timestamp for manifest updates."""
+    return datetime.now().isoformat()
+
+
+def build_default_highlight_id(index: int) -> str:
+    """Return the stable default highlight id for one manifest row."""
+    return f"highlight_{index:03d}"
+
+
+def build_default_clip_id(index: int) -> str:
+    """Return the stable default clip id for one highlight row."""
+    return f"clip_{index:03d}"
+
+
+def normalize_dirty_stages(dirty_stages) -> list[str]:
+    """Normalize stored dirty stage values into the allowed additive set."""
+    normalized = []
+    for stage in dirty_stages if isinstance(dirty_stages, list) else []:
+        stage_name = str(stage or "").strip().lower()
+        if stage_name in VALID_DIRTY_STAGES and stage_name not in normalized:
+            normalized.append(stage_name)
+    return normalized
+
+
+def build_default_workspace_state(workspace_state: dict | None = None) -> dict:
+    """Return normalized workspace-shell state persisted on the session manifest."""
+    raw = workspace_state if isinstance(workspace_state, dict) else {}
+    active_highlight_id = raw.get("active_highlight_id")
+    if active_highlight_id is not None:
+        active_highlight_id = str(active_highlight_id).strip() or None
+
+    return {
+        "active_highlight_id": active_highlight_id,
+        "add_hook": bool(raw.get("add_hook", True)),
+        "add_captions": bool(raw.get("add_captions", True)),
+    }
+
+
+def build_default_highlight_editor(editor_state: dict | None = None) -> dict:
+    """Return normalized editor defaults for a highlight row."""
+    raw = editor_state if isinstance(editor_state, dict) else {}
+    return {
+        "hook_enabled": bool(raw.get("hook_enabled", True)),
+        "captions_enabled": bool(raw.get("captions_enabled", True)),
+        "caption_mode": str(raw.get("caption_mode") or "auto"),
+        "caption_override": str(raw.get("caption_override") or ""),
+        "tracking_mode": str(raw.get("tracking_mode") or "smooth_follow"),
+        "trim_start_offset_ms": int(raw.get("trim_start_offset_ms") or 0),
+        "trim_end_offset_ms": int(raw.get("trim_end_offset_ms") or 0),
+        "tts_voice": str(raw.get("tts_voice") or "autumn"),
+        "source_credit_enabled": bool(raw.get("source_credit_enabled", True)),
+        "watermark_preset": str(raw.get("watermark_preset") or "default"),
+    }
+
+
+def ensure_session_highlights(session_data: dict | None) -> list[dict]:
+    """Normalize highlight rows in-place and return them."""
+    if not isinstance(session_data, dict):
+        return []
+
+    highlights_raw = session_data.get("highlights")
+    highlights = []
+    for index, highlight in enumerate(
+        highlights_raw if isinstance(highlights_raw, list) else [], 1
+    ):
+        if not isinstance(highlight, dict):
+            continue
+        normalized = copy.deepcopy(highlight)
+        normalized.setdefault("highlight_id", build_default_highlight_id(index))
+        normalized["selected"] = bool(normalized.get("selected", False))
+        normalized["editor"] = build_default_highlight_editor(normalized.get("editor"))
+        highlights.append(normalized)
+
+    session_data["highlights"] = highlights
+    return highlights
+
+
+def sync_selected_highlight_ids(session_data: dict | None) -> list[str]:
+    """Keep manifest selected ids and per-highlight selected flags in sync."""
+    if not isinstance(session_data, dict):
+        return []
+
+    highlights = ensure_session_highlights(session_data)
+    available_ids = {
+        highlight.get("highlight_id")
+        for highlight in highlights
+        if isinstance(highlight, dict) and highlight.get("highlight_id")
+    }
+
+    explicit_selected_ids: list[str] = []
+    selected_ids_raw = session_data.get("selected_highlight_ids")
+    selected_ids_iterable = (
+        selected_ids_raw if isinstance(selected_ids_raw, list) else []
+    )
+    for highlight_id in selected_ids_iterable:
+        normalized_id = str(highlight_id or "").strip()
+        if (
+            normalized_id
+            and normalized_id in available_ids
+            and normalized_id not in explicit_selected_ids
+        ):
+            explicit_selected_ids.append(normalized_id)
+
+    if not explicit_selected_ids:
+        explicit_selected_ids = [
+            str(highlight.get("highlight_id"))
+            for highlight in highlights
+            if highlight.get("selected")
+            and highlight.get("highlight_id") in available_ids
+        ]
+
+    selected_lookup = set(explicit_selected_ids)
+    for highlight in highlights:
+        highlight_id = highlight.get("highlight_id")
+        highlight["selected"] = bool(highlight_id and highlight_id in selected_lookup)
+
+    session_data["selected_highlight_ids"] = explicit_selected_ids
+    return explicit_selected_ids
+
+
+def build_clip_render_inputs(
+    highlight: dict | None,
+    *,
+    add_hook: bool | None = None,
+    add_captions: bool | None = None,
+) -> dict:
+    """Build a lightweight render input snapshot for invalidation checks."""
+    payload = highlight if isinstance(highlight, dict) else {}
+    editor = build_default_highlight_editor(payload.get("editor"))
+    return {
+        "title": str(payload.get("title") or ""),
+        "description": str(payload.get("description") or ""),
+        "hook_text": str(payload.get("hook_text") or ""),
+        "start_time": str(payload.get("start_time") or ""),
+        "end_time": str(payload.get("end_time") or ""),
+        "duration_seconds": payload.get("duration_seconds"),
+        "editor": editor,
+        "render_options": {
+            "add_hook": editor.get("hook_enabled")
+            if add_hook is None
+            else bool(add_hook),
+            "add_captions": editor.get("captions_enabled")
+            if add_captions is None
+            else bool(add_captions),
+        },
+    }
+
+
+def compute_dirty_stages(
+    previous_inputs: dict | None,
+    highlight: dict | None,
+    *,
+    add_hook: bool | None = None,
+    add_captions: bool | None = None,
+) -> list[str]:
+    """Compute additive dirty-stage metadata for one clip job."""
+    previous = previous_inputs if isinstance(previous_inputs, dict) else {}
+    current = build_clip_render_inputs(
+        highlight,
+        add_hook=add_hook,
+        add_captions=add_captions,
+    )
+
+    if not previous:
+        return []
+
+    dirty_stages = []
+    previous_editor = build_default_highlight_editor(previous.get("editor"))
+    current_editor = current["editor"]
+    previous_render = previous.get("render_options") or {}
+    current_render = current["render_options"]
+
+    def add_stage(*stage_names: str):
+        for stage_name in stage_names:
+            if stage_name in VALID_DIRTY_STAGES and stage_name not in dirty_stages:
+                dirty_stages.append(stage_name)
+
+    if (
+        previous.get("start_time") != current.get("start_time")
+        or previous.get("end_time") != current.get("end_time")
+        or previous_editor.get("trim_start_offset_ms")
+        != current_editor.get("trim_start_offset_ms")
+        or previous_editor.get("trim_end_offset_ms")
+        != current_editor.get("trim_end_offset_ms")
+    ):
+        add_stage("cut", "portrait", "hook", "captions", "compose")
+
+    if previous_editor.get("tracking_mode") != current_editor.get("tracking_mode"):
+        add_stage("portrait", "hook", "captions", "compose")
+
+    if (
+        previous.get("hook_text") != current.get("hook_text")
+        or previous_render.get("add_hook") != current_render.get("add_hook")
+        or previous_editor.get("tts_voice") != current_editor.get("tts_voice")
+    ):
+        add_stage("hook", "compose")
+
+    if (
+        previous_editor.get("caption_override")
+        != current_editor.get("caption_override")
+        or previous_editor.get("caption_mode") != current_editor.get("caption_mode")
+        or previous_render.get("add_captions") != current_render.get("add_captions")
+    ):
+        add_stage("captions", "compose")
+
+    if previous_editor.get("source_credit_enabled") != current_editor.get(
+        "source_credit_enabled"
+    ) or previous_editor.get("watermark_preset") != current_editor.get(
+        "watermark_preset"
+    ):
+        add_stage("compose")
+
+    return dirty_stages
+
+
+def build_default_clip_job(
+    highlight_id: str,
+    clip_id: str,
+    existing_job: dict | None = None,
+) -> dict:
+    """Return one normalized clip job record."""
+    raw = copy.deepcopy(existing_job) if isinstance(existing_job, dict) else {}
+    revisions_raw = raw.get("revisions")
+    revisions_iterable = revisions_raw if isinstance(revisions_raw, list) else []
+    revisions = []
+    for revision_index, revision in enumerate(revisions_iterable, 1):
+        if not isinstance(revision, dict):
+            continue
+        normalized_revision = copy.deepcopy(revision)
+        normalized_revision["revision"] = max(
+            int(normalized_revision.get("revision") or revision_index), 1
+        )
+        normalized_revision["status"] = (
+            str(normalized_revision.get("status") or "completed").strip() or "completed"
+        )
+        normalized_revision["data_path"] = str(
+            normalized_revision.get("data_path") or ""
+        )
+        normalized_revision["master_path"] = str(
+            normalized_revision.get("master_path") or ""
+        )
+        normalized_revision.setdefault("rendered_at", None)
+        revisions.append(normalized_revision)
+
+    current_revision = max(int(raw.get("current_revision") or 0), 0)
+    if revisions:
+        current_revision = max(
+            current_revision, max(item["revision"] for item in revisions)
+        )
+
+    status = str(raw.get("status") or "pending").strip().lower() or "pending"
+    if status not in VALID_CLIP_JOB_STATUSES:
+        status = "completed" if revisions else "pending"
+
+    dirty_stages = normalize_dirty_stages(raw.get("dirty_stages"))
+    dirty = bool(raw.get("dirty", False) or dirty_stages)
+    if dirty and status == "completed":
+        status = "dirty_needs_rerender"
+
+    return {
+        "clip_id": str(raw.get("clip_id") or clip_id),
+        "highlight_id": str(raw.get("highlight_id") or highlight_id),
+        "status": status,
+        "dirty": dirty,
+        "dirty_stages": dirty_stages,
+        "last_error": raw.get("last_error"),
+        "current_revision": current_revision,
+        "revisions": revisions,
+        "last_render_inputs": copy.deepcopy(raw.get("last_render_inputs"))
+        if isinstance(raw.get("last_render_inputs"), dict)
+        else {},
+        "stage_invalidation": {
+            "dirty_stages": dirty_stages,
+            "updated_at": (raw.get("stage_invalidation") or {}).get("updated_at")
+            if isinstance(raw.get("stage_invalidation"), dict)
+            else None,
+            "reason": (raw.get("stage_invalidation") or {}).get("reason")
+            if isinstance(raw.get("stage_invalidation"), dict)
+            else None,
+        },
+    }
+
+
+def ensure_clip_jobs(session_data: dict | None) -> list[dict]:
+    """Normalize clip jobs and create stable clip ids for selected highlights."""
+    if not isinstance(session_data, dict):
+        return []
+
+    highlights = ensure_session_highlights(session_data)
+    selected_highlight_ids = sync_selected_highlight_ids(session_data)
+    highlight_index_lookup = {}
+    highlight_lookup = {}
+    for index, highlight in enumerate(highlights, 1):
+        highlight_id = highlight.get("highlight_id")
+        if not highlight_id:
+            continue
+        highlight_index_lookup[highlight_id] = index
+        highlight_lookup[highlight_id] = highlight
+
+    raw_jobs = session_data.get("clip_jobs")
+    raw_job_iterable = raw_jobs if isinstance(raw_jobs, list) else []
+    existing_by_highlight = {}
+    for index, clip_job in enumerate(raw_job_iterable, 1):
+        if not isinstance(clip_job, dict):
+            continue
+        highlight_id = str(clip_job.get("highlight_id") or "").strip()
+        if not highlight_id:
+            continue
+        clip_index = highlight_index_lookup.get(highlight_id, index)
+        existing_by_highlight[highlight_id] = build_default_clip_job(
+            highlight_id,
+            build_default_clip_id(clip_index),
+            clip_job,
+        )
+
+    for highlight_id in selected_highlight_ids:
+        if highlight_id in existing_by_highlight:
+            continue
+        clip_index = highlight_index_lookup.get(
+            highlight_id, len(existing_by_highlight) + 1
+        )
+        existing_by_highlight[highlight_id] = build_default_clip_job(
+            highlight_id,
+            build_default_clip_id(clip_index),
+        )
+
+    ordered_jobs = []
+    consumed = set()
+    for highlight in highlights:
+        highlight_id = highlight.get("highlight_id")
+        if not highlight_id or highlight_id not in existing_by_highlight:
+            continue
+        clip_job = existing_by_highlight[highlight_id]
+        if clip_job.get("last_render_inputs"):
+            dirty_stages = compute_dirty_stages(
+                clip_job.get("last_render_inputs"),
+                highlight_lookup.get(highlight_id),
+            )
+            clip_job["dirty_stages"] = dirty_stages
+            clip_job["dirty"] = bool(dirty_stages)
+            if dirty_stages and clip_job.get("status") == "completed":
+                clip_job["status"] = "dirty_needs_rerender"
+            if not dirty_stages and clip_job.get("status") == "dirty_needs_rerender":
+                clip_job["status"] = "completed"
+            clip_job["stage_invalidation"] = {
+                "dirty_stages": dirty_stages,
+                "updated_at": utc_now_iso() if dirty_stages else None,
+                "reason": "workspace_draft_changed" if dirty_stages else None,
+            }
+        ordered_jobs.append(clip_job)
+        consumed.add(highlight_id)
+
+    for highlight_id, clip_job in existing_by_highlight.items():
+        if highlight_id in consumed:
+            continue
+        ordered_jobs.append(clip_job)
+
+    session_data["clip_jobs"] = ordered_jobs
+    return ordered_jobs
 
 
 def build_provider_snapshot(ai_providers: dict | None) -> dict:
@@ -225,14 +597,13 @@ def normalize_session_manifest(
     normalized["provider_snapshot"] = build_provider_snapshot(
         normalized.get("provider_snapshot")
     )
-
-    clip_jobs = normalized.get("clip_jobs")
-    normalized["clip_jobs"] = clip_jobs if isinstance(clip_jobs, list) else []
-    normalized["selected_highlight_ids"] = (
-        normalized.get("selected_highlight_ids")
-        if isinstance(normalized.get("selected_highlight_ids"), list)
-        else []
+    normalized["workspace_state"] = build_default_workspace_state(
+        normalized.get("workspace_state")
     )
+
+    ensure_session_highlights(normalized)
+    sync_selected_highlight_ids(normalized)
+    ensure_clip_jobs(normalized)
 
     status, stage = normalize_session_status(normalized)
     normalized["status"] = status
@@ -242,6 +613,7 @@ def normalize_session_manifest(
     normalized.setdefault("srt_path", "")
     normalized["is_legacy_session"] = bool(is_legacy_session)
     normalized["campaign_label"] = get_campaign_label(normalized)
+    normalized.setdefault("completed_at", None)
 
     return normalized
 

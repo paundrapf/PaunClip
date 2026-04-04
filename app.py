@@ -44,9 +44,14 @@ from utils.campaign_queue import (
 )
 from utils.logger import debug_log, setup_error_logging, log_error, get_error_log_path
 from utils.storage import (
+    build_clip_render_inputs,
     discover_clips,
+    ensure_clip_jobs,
+    ensure_session_highlights,
     load_session_manifest,
     normalize_session_manifest,
+    sync_selected_highlight_ids,
+    utc_now_iso,
     write_session_manifest,
 )
 from config.config_manager import ConfigManager
@@ -933,6 +938,7 @@ class YTShortClipperApp(ctk.CTk):
             self.open_current_session_output,
             self.open_current_session_results,
             self.save_workspace_draft,
+            self.persist_workspace_shell_state,
             self.render_workspace_selected,
             self.render_workspace_current,
             self.retry_workspace_failed,
@@ -1264,18 +1270,102 @@ class YTShortClipperApp(ctk.CTk):
         """Ensure each highlight has a stable UI id for workspace interactions."""
         if not isinstance(session_data, dict):
             return []
+        return ensure_session_highlights(session_data)
 
-        highlights = session_data.get("highlights")
-        if not isinstance(highlights, list):
-            session_data["highlights"] = []
-            return []
+    def _persist_current_session_manifest(
+        self, session_data: dict | None
+    ) -> dict | None:
+        """Persist the active session manifest if the current session is on disk."""
+        if not isinstance(session_data, dict):
+            return None
 
-        for index, highlight in enumerate(highlights, 1):
-            if not isinstance(highlight, dict):
-                continue
-            highlight.setdefault("highlight_id", f"highlight_{index:03d}")
+        session_dir = session_data.get("session_dir")
+        if not session_dir:
+            self.session_data = normalize_session_manifest(session_data, session_dir)
+            return self.session_data
 
-        return highlights
+        write_session_manifest(session_dir, session_data)
+        self.session_data = load_session_manifest(
+            Path(session_dir) / "session_data.json"
+        )
+        return self.session_data
+
+    def persist_workspace_shell_state(
+        self,
+        *,
+        highlight_id: str | None,
+        updates: dict | None,
+        selected_highlight_ids: list[str] | None,
+        active_highlight_id: str | None,
+        add_hook: bool,
+        add_captions: bool,
+    ) -> bool:
+        """Persist incremental workspace edits so restart preserves current draft state."""
+        session_data = self._reload_current_session_data()
+        if not session_data:
+            return False
+
+        highlights = self._ensure_workspace_highlight_ids(session_data)
+        highlight_lookup = {
+            highlight.get("highlight_id"): highlight
+            for highlight in highlights
+            if isinstance(highlight, dict) and highlight.get("highlight_id")
+        }
+
+        if updates and highlight_id and highlight_id in highlight_lookup:
+            highlight = highlight_lookup[highlight_id]
+            highlight["title"] = updates.get("title", highlight.get("title", ""))
+            highlight["description"] = updates.get(
+                "description", highlight.get("description", "")
+            )
+            highlight["hook_text"] = updates.get(
+                "hook_text", highlight.get("hook_text", "")
+            )
+
+        if selected_highlight_ids is not None:
+            session_data["selected_highlight_ids"] = [
+                item for item in selected_highlight_ids if isinstance(item, str)
+            ]
+
+        workspace_state = session_data.get("workspace_state") or {}
+        workspace_state["active_highlight_id"] = active_highlight_id
+        workspace_state["add_hook"] = bool(add_hook)
+        workspace_state["add_captions"] = bool(add_captions)
+        session_data["workspace_state"] = workspace_state
+
+        sync_selected_highlight_ids(session_data)
+        clip_jobs = ensure_clip_jobs(session_data)
+
+        if updates and highlight_id and highlight_id in highlight_lookup:
+            for clip_job in clip_jobs:
+                if clip_job.get("highlight_id") != highlight_id:
+                    continue
+                dirty_stages = clip_job.get("dirty_stages") or []
+                if dirty_stages:
+                    clip_job["dirty"] = True
+                    clip_job["stage_invalidation"] = {
+                        "dirty_stages": dirty_stages,
+                        "updated_at": utc_now_iso(),
+                        "reason": "workspace_draft_changed",
+                    }
+                break
+
+        session_data["updated_at"] = utc_now_iso()
+        if session_data.get("highlights"):
+            if any(job.get("dirty") for job in clip_jobs):
+                session_data["status"] = "editing"
+                session_data["stage"] = "editing"
+            elif session_data.get("status") in {
+                "highlights_found",
+                "editing",
+                "partial",
+                "failed",
+            }:
+                session_data["status"] = "editing"
+                session_data["stage"] = "editing"
+
+        self._persist_current_session_manifest(session_data)
+        return True
 
     def _format_workspace_source_value(self, value) -> str:
         """Convert session metadata values into concise UI text."""
@@ -1318,22 +1408,62 @@ class YTShortClipperApp(ctk.CTk):
             return f"Highlight provider: {mode} • {model}"
         return f"Highlight provider: {model}"
 
-    def _build_workspace_output_records(self, session_dir: Path) -> list[dict]:
+    def _build_workspace_output_records(
+        self, session_data: dict, session_dir: Path
+    ) -> list[dict]:
         """Return lightweight clip/output summaries for the workspace."""
         clip_records: list[dict] = []
         clips_dir = session_dir / "clips"
+        clip_jobs = ensure_clip_jobs(session_data)
+
+        for clip_job in clip_jobs:
+            clip_id = clip_job.get("clip_id") or "clip"
+            clip_dir = clips_dir / clip_id
+            data_file = clip_dir / "data.json"
+            master_file = clip_dir / "master.mp4"
+            if not (data_file.exists() and master_file.exists()):
+                continue
+
+            clip_data = {}
+            try:
+                with open(data_file, "r", encoding="utf-8") as f:
+                    clip_data = json.load(f)
+            except Exception:
+                clip_data = {}
+
+            clip_records.append(
+                {
+                    "clip_id": clip_id,
+                    "title": clip_data.get("title") or clip_id,
+                    "hook_text": clip_data.get("hook_text", ""),
+                    "duration": clip_data.get("duration_seconds"),
+                    "folder": str(clip_dir),
+                    "revision_label": f"Revision {int(clip_job.get('current_revision') or 1)}",
+                    "status": clip_job.get("status") or "unknown",
+                }
+            )
+
+        if clip_records:
+            return clip_records
+
         if not clips_dir.exists():
             return clip_records
 
         for clip_record in discover_clips(self.get_output_dir_path(), clips_dir):
-            clip_data = {}
             data_file = clip_record.get("data_file")
-            if data_file and Path(data_file).exists():
-                try:
-                    with open(data_file, "r", encoding="utf-8") as f:
-                        clip_data = json.load(f)
-                except Exception:
-                    clip_data = {}
+            master_file = clip_record.get("video")
+            if not (
+                data_file
+                and Path(data_file).exists()
+                and master_file
+                and Path(master_file).exists()
+            ):
+                continue
+            try:
+                with open(data_file, "r", encoding="utf-8") as f:
+                    clip_data = json.load(f)
+            except Exception:
+                clip_data = {}
 
             clip_records.append(
                 {
@@ -1343,7 +1473,8 @@ class YTShortClipperApp(ctk.CTk):
                     "hook_text": clip_data.get("hook_text", ""),
                     "duration": clip_data.get("duration_seconds"),
                     "folder": str(clip_record.get("folder")),
-                    "revision_label": "Revision 1",
+                    "revision_label": f"Revision {int(clip_data.get('revision') or 1)}",
+                    "status": clip_data.get("status") or "completed",
                 }
             )
 
@@ -1366,11 +1497,7 @@ class YTShortClipperApp(ctk.CTk):
             }
 
         highlights = self._ensure_workspace_highlight_ids(session_data)
-        selected_highlight_ids = [
-            highlight_id
-            for highlight_id in (session_data.get("selected_highlight_ids") or [])
-            if isinstance(highlight_id, str)
-        ]
+        selected_highlight_ids = sync_selected_highlight_ids(session_data)
         if not selected_highlight_ids:
             selected_highlight_ids = [
                 highlight.get("highlight_id")
@@ -1381,16 +1508,19 @@ class YTShortClipperApp(ctk.CTk):
         session_dir_value = session_data.get("session_dir")
         session_dir = Path(session_dir_value) if session_dir_value else None
         output_clips = (
-            self._build_workspace_output_records(session_dir) if session_dir else []
+            self._build_workspace_output_records(session_data, session_dir)
+            if session_dir
+            else []
         )
 
-        clip_jobs_raw = session_data.get("clip_jobs")
-        clip_jobs: list[dict] = clip_jobs_raw if isinstance(clip_jobs_raw, list) else []
+        clip_jobs = ensure_clip_jobs(session_data)
         clip_status_lookup = {}
-        for index, clip_job in enumerate(clip_jobs, 1):
+        for clip_job in clip_jobs:
             if not isinstance(clip_job, dict):
                 continue
-            highlight_id = clip_job.get("highlight_id") or f"highlight_{index:03d}"
+            highlight_id = clip_job.get("highlight_id")
+            if not highlight_id:
+                continue
             clip_status_lookup[highlight_id] = clip_job.get("status") or "unknown"
 
         workspace_highlights = []
@@ -1417,6 +1547,7 @@ class YTShortClipperApp(ctk.CTk):
             "rendering": 0,
             "completed": 0,
             "failed": 0,
+            "dirty": 0,
         }
         for clip_job in clip_jobs:
             status = str((clip_job or {}).get("status") or "unknown").lower()
@@ -1426,6 +1557,8 @@ class YTShortClipperApp(ctk.CTk):
                 queue_counts["rendering"] += 1
             elif status == "completed":
                 queue_counts["completed"] += 1
+            elif status == "dirty_needs_rerender":
+                queue_counts["dirty"] += 1
             elif status in {"failed", "partial"}:
                 queue_counts["failed"] += 1
 
@@ -1478,6 +1611,7 @@ class YTShortClipperApp(ctk.CTk):
                 self.session_workspace_origin, "Session Flow"
             ),
             "back_label": back_labels.get(self.session_workspace_origin, "← Back"),
+            "workspace_state": session_data.get("workspace_state") or {},
             "source_rows": source_rows,
             "provider_summary": self._build_workspace_provider_summary(session_data),
             "highlights": workspace_highlights,
@@ -1488,7 +1622,25 @@ class YTShortClipperApp(ctk.CTk):
 
     def refresh_session_workspace(self):
         """Refresh the backing session manifest before the page rerenders."""
-        self._reload_current_session_data()
+        session_data = self._reload_current_session_data()
+        if not session_data:
+            return
+
+        original_snapshot = json.dumps(session_data, sort_keys=True, ensure_ascii=False)
+        highlights = self._ensure_workspace_highlight_ids(session_data)
+        if highlights and not session_data.get("selected_highlight_ids"):
+            session_data["selected_highlight_ids"] = [
+                highlight.get("highlight_id")
+                for highlight in highlights
+                if highlight.get("highlight_id")
+            ]
+        sync_selected_highlight_ids(session_data)
+        ensure_clip_jobs(session_data)
+
+        current_snapshot = json.dumps(session_data, sort_keys=True, ensure_ascii=False)
+        if current_snapshot != original_snapshot:
+            session_data["updated_at"] = utc_now_iso()
+            self._persist_current_session_manifest(session_data)
 
     def go_back_from_session_workspace(self):
         """Return to the screen that opened the current workspace."""
@@ -1507,30 +1659,16 @@ class YTShortClipperApp(ctk.CTk):
         self, highlight_id: str, updates: dict, selected_highlight_ids: list[str]
     ) -> bool:
         """Apply editor-shell changes to the in-memory session state."""
-        session_data = self._reload_current_session_data()
-        if not session_data:
-            return False
-
-        highlights = self._ensure_workspace_highlight_ids(session_data)
-        for highlight in highlights:
-            if highlight.get("highlight_id") != highlight_id:
-                continue
-            highlight["title"] = updates.get("title", highlight.get("title", ""))
-            highlight["description"] = updates.get(
-                "description", highlight.get("description", "")
-            )
-            highlight["hook_text"] = updates.get(
-                "hook_text", highlight.get("hook_text", "")
-            )
-            break
-
-        session_data["selected_highlight_ids"] = [
-            item for item in selected_highlight_ids if isinstance(item, str)
-        ]
-        session_data["status"] = "editing"
-        session_data["stage"] = "editing"
-        self.session_data = session_data
-        return True
+        session_data = self._reload_current_session_data() or {}
+        workspace_state = session_data.get("workspace_state") or {}
+        return self.persist_workspace_shell_state(
+            highlight_id=highlight_id,
+            updates=updates,
+            selected_highlight_ids=selected_highlight_ids,
+            active_highlight_id=highlight_id,
+            add_hook=bool(workspace_state.get("add_hook", True)),
+            add_captions=bool(workspace_state.get("add_captions", True)),
+        )
 
     def _get_workspace_selected_highlights(
         self, highlight_ids: list[str]
@@ -1566,6 +1704,18 @@ class YTShortClipperApp(ctk.CTk):
         self, highlight_ids: list[str], add_captions: bool, add_hook: bool
     ):
         """Send the currently selected workspace highlights into phase 2."""
+        self.persist_workspace_shell_state(
+            highlight_id=None,
+            updates=None,
+            selected_highlight_ids=highlight_ids,
+            active_highlight_id=(
+                (self.session_data or {})
+                .get("workspace_state", {})
+                .get("active_highlight_id")
+            ),
+            add_hook=add_hook,
+            add_captions=add_captions,
+        )
         selected = self._get_workspace_selected_highlights(highlight_ids)
         if not selected:
             messagebox.showinfo(
@@ -3497,7 +3647,10 @@ class YTShortClipperApp(ctk.CTk):
                     self.after(0, lambda m=msg: self.update_clipping_status(m))
 
             # Get config
-            ai_providers = self.config.get("ai_providers", {}).copy()
+            ai_providers_raw = self.config.get("ai_providers") or {}
+            ai_providers = (
+                ai_providers_raw.copy() if isinstance(ai_providers_raw, dict) else {}
+            )
             if hasattr(self.config, "get_ai_provider_config"):
                 for provider_key in [
                     "highlight_finder",

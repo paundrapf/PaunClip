@@ -10,6 +10,7 @@ import threading
 import queue
 import json
 import copy
+import shutil
 import cv2
 import numpy as np
 import tempfile
@@ -21,8 +22,14 @@ from openai import OpenAI
 from utils.logger import debug_log
 from utils.helpers import get_deno_path, get_ffmpeg_path, is_ytdlp_module_available
 from utils.storage import (
+    build_clip_render_inputs,
+    ensure_clip_jobs,
+    ensure_session_highlights,
     infer_campaign_id_from_session_dir,
+    load_session_manifest,
     normalize_session_manifest,
+    sync_selected_highlight_ids,
+    utc_now_iso,
     write_session_manifest,
 )
 
@@ -3199,6 +3206,9 @@ Candidates:
         total_clips: int = 1,
         add_captions: bool = True,
         add_hook: bool = True,
+        clip_dir: Path | None = None,
+        clip_id: str | None = None,
+        revision: int | None = None,
     ):
         """Process a single clip: cut, portrait, hook (optional), captions (optional)"""
 
@@ -3206,10 +3216,13 @@ Candidates:
         if self.is_cancelled():
             return
 
-        # Create output folder with unique timestamp per clip
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{index:02d}"
-        clip_dir = self.output_dir / timestamp
+        if clip_dir is None:
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{index:02d}"
+            clip_dir = self.output_dir / timestamp
+        else:
+            clip_dir = Path(clip_dir)
         clip_dir.mkdir(parents=True, exist_ok=True)
+        clip_id = clip_id or clip_dir.name
 
         self.log(f"  Output folder: {clip_dir}")
 
@@ -3478,21 +3491,56 @@ Candidates:
                 self.log(f"  Warning: Could not delete temp_hooked.mp4: {e}")
 
         # Save metadata
+        rendered_at = utc_now_iso()
         metadata = {
+            "clip_id": clip_id,
+            "revision": int(revision or 1),
+            "highlight_id": highlight.get("highlight_id"),
             "title": highlight["title"],
+            "description": highlight.get("description", ""),
             "hook_text": highlight.get("hook_text", highlight["title"]),
             "start_time": highlight["start_time"],
             "end_time": highlight["end_time"],
             "duration_seconds": highlight["duration_seconds"],
+            "status": "completed",
             "has_hook": add_hook,
             "has_captions": add_captions,
             "has_watermark": self.watermark_settings.get("enabled", False),
             "has_credit": self.credit_watermark_settings.get("enabled", False),
             "channel_name": self.channel_name,
+            "render_inputs": {
+                "hook_enabled": add_hook,
+                "captions_enabled": add_captions,
+                "watermark_enabled": self.watermark_settings.get("enabled", False),
+                "source_credit_enabled": self.credit_watermark_settings.get(
+                    "enabled", False
+                ),
+                "provider_snapshot": {
+                    "hook_maker": copy.deepcopy(
+                        (self.provider_snapshot or {}).get("hook_maker") or {}
+                    ),
+                    "caption_maker": copy.deepcopy(
+                        (self.provider_snapshot or {}).get("caption_maker") or {}
+                    ),
+                },
+            },
+            "artifact_paths": {
+                "master": "master.mp4",
+                "thumb": "thumb.jpg",
+            },
+            "created_at": rendered_at,
+            "last_rendered_at": rendered_at,
         }
 
         with open(clip_dir / "data.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+        return {
+            "clip_dir": clip_dir,
+            "master_path": clip_dir / "master.mp4",
+            "data_path": clip_dir / "data.json",
+            "metadata": metadata,
+        }
 
     def convert_to_portrait(self, input_path: str, output_path: str):
         """Convert landscape to 9:16 portrait with speaker tracking (router method)"""
@@ -5986,65 +6034,249 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if isinstance(session_dir, str):
             session_dir = Path(session_dir)
 
-        # Update output_dir to session clips folder
         clips_dir = session_dir / "clips"
         clips_dir.mkdir(parents=True, exist_ok=True)
 
-        # Process each selected clip
+        manifest_path = session_dir / "session_data.json"
+        if manifest_path.exists():
+            session_data = load_session_manifest(manifest_path)
+        else:
+            session_data = self._build_session_manifest(
+                session_dir,
+                video_path=video_path,
+                srt_path=None,
+                highlights=selected_highlights,
+                video_info={},
+                status="render_queued",
+                stage="render_queued",
+            )
+
+        highlights = ensure_session_highlights(session_data)
+        highlight_lookup = {
+            highlight.get("highlight_id"): highlight
+            for highlight in highlights
+            if isinstance(highlight, dict) and highlight.get("highlight_id")
+        }
+        selected_highlight_ids = []
+        for highlight in selected_highlights:
+            if not isinstance(highlight, dict):
+                continue
+            highlight_id = highlight.get("highlight_id")
+            if not highlight_id:
+                continue
+            selected_highlight_ids.append(highlight_id)
+            if highlight_id in highlight_lookup:
+                highlight_lookup[highlight_id].update(copy.deepcopy(highlight))
+
+        session_data["selected_highlight_ids"] = selected_highlight_ids
+        workspace_state = session_data.get("workspace_state") or {}
+        workspace_state["add_hook"] = bool(add_hook)
+        workspace_state["add_captions"] = bool(add_captions)
+        session_data["workspace_state"] = workspace_state
+        session_data["status"] = "render_queued"
+        session_data["stage"] = "render_queued"
+        session_data["last_error"] = None
+        session_data["updated_at"] = utc_now_iso()
+
+        sync_selected_highlight_ids(session_data)
+        clip_jobs = ensure_clip_jobs(session_data)
+        clip_job_lookup = {
+            clip_job.get("highlight_id"): clip_job
+            for clip_job in clip_jobs
+            if isinstance(clip_job, dict) and clip_job.get("highlight_id")
+        }
+        self._save_session_manifest(session_dir, session_data)
+
         total_clips = len(selected_highlights)
+        completed_ids = []
+        failed_ids = []
+
         for i, highlight in enumerate(selected_highlights, 1):
             if self.is_cancelled():
                 return
 
-            # Create clip-specific folder
-            clip_folder = clips_dir / f"clip_{i:03d}"
-            clip_folder.mkdir(parents=True, exist_ok=True)
+            highlight_id = highlight.get("highlight_id")
+            clip_job = clip_job_lookup.get(highlight_id)
+            if not clip_job:
+                continue
 
-            # Temporarily override output_dir for this clip
-            original_output_dir = self.output_dir
-            self.output_dir = clip_folder.parent
+            clip_id = clip_job.get("clip_id") or f"clip_{i:03d}"
+            clip_root_dir = clips_dir / clip_id
+            working_dir = clip_root_dir / "_work"
+            revision_number = int(clip_job.get("current_revision") or 0) + 1
+
+            if working_dir.exists():
+                shutil.rmtree(working_dir, ignore_errors=True)
+            working_dir.mkdir(parents=True, exist_ok=True)
+
+            clip_job["status"] = "rendering"
+            clip_job["last_error"] = None
+            clip_job["dirty"] = False
+            clip_job["dirty_stages"] = []
+            clip_job["stage_invalidation"] = {
+                "dirty_stages": [],
+                "updated_at": None,
+                "reason": None,
+            }
+            session_data["status"] = "rendering"
+            session_data["stage"] = "rendering"
+            session_data["updated_at"] = utc_now_iso()
+            self._save_session_manifest(session_dir, session_data)
 
             try:
-                self.process_clip(
+                render_result = self.process_clip(
                     video_path,
                     highlight,
                     i,
                     total_clips,
                     add_captions=add_captions,
                     add_hook=add_hook,
+                    clip_dir=working_dir,
+                    clip_id=clip_id,
+                    revision=revision_number,
                 )
+
+                clip_root_dir.mkdir(parents=True, exist_ok=True)
+                stable_master_path = clip_root_dir / "master.mp4"
+                stable_data_path = clip_root_dir / "data.json"
+                stable_thumb_path = clip_root_dir / "thumb.jpg"
+
+                shutil.copy2(render_result["master_path"], stable_master_path)
+
+                metadata = copy.deepcopy(render_result["metadata"])
+                if stable_data_path.exists():
+                    try:
+                        with open(
+                            stable_data_path, "r", encoding="utf-8"
+                        ) as existing_file:
+                            existing_metadata = json.load(existing_file)
+                        metadata["created_at"] = existing_metadata.get(
+                            "created_at", metadata.get("created_at")
+                        )
+                    except Exception:
+                        pass
+
+                with open(stable_data_path, "w", encoding="utf-8") as stable_file:
+                    json.dump(metadata, stable_file, ensure_ascii=False, indent=2)
+
+                thumb_source = working_dir / "thumb.jpg"
+                if thumb_source.exists():
+                    shutil.copy2(thumb_source, stable_thumb_path)
+
+                revision_dir = (
+                    clip_root_dir / "revisions" / f"rev_{revision_number:03d}"
+                )
+                revision_dir.mkdir(parents=True, exist_ok=True)
+                revision_master_path = revision_dir / "master.mp4"
+                revision_data_path = revision_dir / "data.json"
+                shutil.copy2(stable_master_path, revision_master_path)
+                shutil.copy2(stable_data_path, revision_data_path)
+                if stable_thumb_path.exists():
+                    shutil.copy2(stable_thumb_path, revision_dir / "thumb.jpg")
+
+                revision_record = {
+                    "revision": revision_number,
+                    "status": "completed",
+                    "data_path": str(
+                        Path("clips")
+                        / clip_id
+                        / "revisions"
+                        / f"rev_{revision_number:03d}"
+                        / "data.json"
+                    ),
+                    "master_path": str(
+                        Path("clips")
+                        / clip_id
+                        / "revisions"
+                        / f"rev_{revision_number:03d}"
+                        / "master.mp4"
+                    ),
+                    "rendered_at": metadata.get("last_rendered_at") or utc_now_iso(),
+                }
+                revisions = [
+                    revision
+                    for revision in clip_job.get("revisions", [])
+                    if int(revision.get("revision") or 0) != revision_number
+                ]
+                revisions.append(revision_record)
+                revisions.sort(key=lambda revision: int(revision.get("revision") or 0))
+
+                clip_job["current_revision"] = revision_number
+                clip_job["revisions"] = revisions
+                clip_job["status"] = "completed"
+                clip_job["dirty"] = False
+                clip_job["dirty_stages"] = []
+                clip_job["last_error"] = None
+                clip_job["last_render_inputs"] = build_clip_render_inputs(
+                    highlight,
+                    add_hook=add_hook,
+                    add_captions=add_captions,
+                )
+                clip_job["stage_invalidation"] = {
+                    "dirty_stages": [],
+                    "updated_at": None,
+                    "reason": None,
+                }
+                completed_ids.append(highlight_id)
+            except Exception as error:
+                clip_job["status"] = "failed"
+                clip_job["last_error"] = str(error)
+                clip_job["dirty"] = bool(clip_job.get("revisions"))
+                clip_job["dirty_stages"] = clip_job.get("dirty_stages") or [
+                    "hook",
+                    "compose",
+                ]
+                clip_job["stage_invalidation"] = {
+                    "dirty_stages": clip_job["dirty_stages"],
+                    "updated_at": utc_now_iso(),
+                    "reason": "render_failed",
+                }
+                failed_ids.append(highlight_id)
+                session_data["last_error"] = str(error)
+                self.log(f"  ✗ Clip failed ({clip_id}): {error}")
             finally:
-                # Restore original output_dir
-                self.output_dir = original_output_dir
+                shutil.rmtree(working_dir, ignore_errors=True)
+                session_data["updated_at"] = utc_now_iso()
+                self._save_session_manifest(session_dir, session_data)
 
         # Cleanup temp files
         self.set_progress("Cleaning up...", 0.95)
         self.cleanup()
 
-        # Update session status to completed
-        session_data_file = session_dir / "session_data.json"
-        if session_data_file.exists():
-            session_data = normalize_session_manifest(
-                json.loads(session_data_file.read_text(encoding="utf-8")), session_dir
-            )
+        session_data = load_session_manifest(manifest_path)
+        clip_jobs = ensure_clip_jobs(session_data)
+        completed_jobs = [job for job in clip_jobs if job.get("status") == "completed"]
+        failed_jobs = [job for job in clip_jobs if job.get("status") == "failed"]
+        dirty_jobs = [
+            job for job in clip_jobs if job.get("status") == "dirty_needs_rerender"
+        ]
+        rendering_jobs = [job for job in clip_jobs if job.get("status") == "rendering"]
+
+        if rendering_jobs:
+            session_data["status"] = "rendering"
+            session_data["stage"] = "rendering"
+        elif failed_jobs and completed_jobs:
+            session_data["status"] = "partial"
+            session_data["stage"] = "rendering"
+        elif failed_jobs:
+            session_data["status"] = "failed"
+            session_data["stage"] = "rendering"
+        elif dirty_jobs:
+            session_data["status"] = "editing"
+            session_data["stage"] = "editing"
+        else:
             session_data["status"] = "completed"
             session_data["stage"] = "completed"
-            session_data["completed_at"] = datetime.now().isoformat()
-            session_data["updated_at"] = datetime.now().isoformat()
-            session_data["clips_processed"] = total_clips
-            existing_clip_jobs = session_data.get("clip_jobs")
-            if not isinstance(existing_clip_jobs, list) or not existing_clip_jobs:
-                session_data["clip_jobs"] = [
-                    {
-                        "clip_id": f"clip_{index:03d}",
-                        "highlight_id": highlight.get("highlight_id"),
-                        "status": "completed",
-                        "last_error": None,
-                    }
-                    for index, highlight in enumerate(selected_highlights, 1)
-                ]
+            session_data["completed_at"] = utc_now_iso()
 
-            self._save_session_manifest(session_dir, session_data)
+        session_data["clips_processed"] = len(completed_jobs)
+        session_data["updated_at"] = utc_now_iso()
+        self._save_session_manifest(session_dir, session_data)
 
         self.set_progress("Complete!", 1.0)
-        self.log(f"\n✅ Created {total_clips} clips in: {clips_dir}")
+        if failed_ids:
+            self.log(
+                f"\n⚠ Render batch finished with {len(completed_ids)} completed and {len(failed_ids)} failed clip(s) in: {clips_dir}"
+            )
+        else:
+            self.log(f"\n✅ Created {len(completed_ids)} clips in: {clips_dir}")
