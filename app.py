@@ -43,7 +43,12 @@ from utils.campaign_queue import (
     utc_now_iso,
 )
 from utils.logger import debug_log, setup_error_logging, log_error, get_error_log_path
-from utils.storage import load_session_manifest, write_session_manifest
+from utils.storage import (
+    discover_clips,
+    load_session_manifest,
+    normalize_session_manifest,
+    write_session_manifest,
+)
 from config.config_manager import ConfigManager
 from dialogs.model_selector import SearchableModelDropdown
 from dialogs.youtube_upload import YouTubeUploadDialog
@@ -60,6 +65,7 @@ from pages.clipping_page import ClippingPage
 from pages.contact_page import ContactPage
 from pages.highlight_selection_page import HighlightSelectionPage
 from pages.session_browser_page import SessionBrowserPage
+from pages.session_workspace_page import SessionWorkspacePage
 
 # Fix for PyInstaller windowed mode (console=False)
 # When built with console=False, sys.stdout and sys.stderr are None
@@ -109,6 +115,7 @@ class YTShortClipperApp(ctk.CTk):
 
         # Session data for highlight selection flow
         self.session_data = None  # Will store result from find_highlights_only
+        self.session_workspace_origin = "home"
         self.active_campaign_id = None
         self.active_campaign_name = None
 
@@ -132,6 +139,7 @@ class YTShortClipperApp(ctk.CTk):
         self.create_processing_page()
         self.create_clipping_page()
         self.create_highlight_selection_page()
+        self.create_session_workspace_page()
         self.create_session_browser_page()
         self.create_results_page()
         self.create_browse_page()
@@ -914,6 +922,23 @@ class YTShortClipperApp(ctk.CTk):
             self.process_selected_highlights,  # Process callback
         )
 
+    def create_session_workspace_page(self):
+        """Create the unified session workspace shell page."""
+        self.pages["session_workspace"] = SessionWorkspacePage(
+            self.container,
+            self.get_session_workspace_state,
+            self.go_back_from_session_workspace,
+            self.refresh_session_workspace,
+            self.open_current_session_folder,
+            self.open_current_session_output,
+            self.open_current_session_results,
+            self.save_workspace_draft,
+            self.render_workspace_selected,
+            self.render_workspace_current,
+            self.retry_workspace_failed,
+            self.open_legacy_highlight_selection,
+        )
+
     def create_campaigns_page(self):
         """Create campaigns dashboard as the new root page."""
         self.pages["campaigns"] = CampaignsPage(
@@ -1142,7 +1167,7 @@ class YTShortClipperApp(ctk.CTk):
         from utils.storage import LEGACY_CAMPAIGN_ID, discover_sessions
 
         campaigns = [campaign.copy() for campaign in self.config.list_campaigns()]
-        output_dir = Path(self.config.get("output_dir", OUTPUT_DIR))
+        output_dir = Path(self.config.get("output_dir") or OUTPUT_DIR)
         session_summary = {}
 
         for session_record in discover_sessions(output_dir):
@@ -1207,7 +1232,7 @@ class YTShortClipperApp(ctk.CTk):
 
     def get_output_dir_path(self) -> Path:
         """Return the configured output directory as a Path."""
-        return Path(self.config.get("output_dir", OUTPUT_DIR))
+        return Path(self.config.get("output_dir") or OUTPUT_DIR)
 
     def get_default_clip_count(self) -> int:
         """Return the current manual clip count with a safe default."""
@@ -1219,6 +1244,410 @@ class YTShortClipperApp(ctk.CTk):
             except Exception:
                 pass
         return 5
+
+    def _reload_current_session_data(self):
+        """Refresh the in-memory session record from disk when possible."""
+        if not isinstance(self.session_data, dict):
+            return None
+
+        session_dir = self.session_data.get("session_dir")
+        if session_dir:
+            manifest_path = Path(session_dir) / "session_data.json"
+            if manifest_path.exists():
+                self.session_data = load_session_manifest(manifest_path)
+                return self.session_data
+
+        self.session_data = normalize_session_manifest(self.session_data, session_dir)
+        return self.session_data
+
+    def _ensure_workspace_highlight_ids(self, session_data: dict | None) -> list[dict]:
+        """Ensure each highlight has a stable UI id for workspace interactions."""
+        if not isinstance(session_data, dict):
+            return []
+
+        highlights = session_data.get("highlights")
+        if not isinstance(highlights, list):
+            session_data["highlights"] = []
+            return []
+
+        for index, highlight in enumerate(highlights, 1):
+            if not isinstance(highlight, dict):
+                continue
+            highlight.setdefault("highlight_id", f"highlight_{index:03d}")
+
+        return highlights
+
+    def _format_workspace_source_value(self, value) -> str:
+        """Convert session metadata values into concise UI text."""
+        if isinstance(value, bool):
+            return "Yes" if value else "No"
+        if value is None:
+            return "—"
+        text = str(value).strip()
+        return text or "—"
+
+    def _describe_session_source(self, session_data: dict) -> str:
+        """Return a human-readable label for session source type."""
+        source = session_data.get("source")
+        if isinstance(source, dict):
+            source_type = str(
+                source.get("type") or source.get("source_type") or ""
+            ).strip()
+            if source_type:
+                return source_type.replace("_", " ").title()
+        if isinstance(source, str) and source.strip():
+            return source.replace("_", " ").title()
+        if session_data.get("campaign_id") and not session_data.get(
+            "is_legacy_session"
+        ):
+            return "Campaign Video"
+        if session_data.get("video_path"):
+            return "Manual Session"
+        return "Unknown Source"
+
+    def _build_workspace_provider_summary(self, session_data: dict) -> str:
+        """Summarize the provider snapshot for workspace header text."""
+        snapshot = session_data.get("provider_snapshot")
+        if not isinstance(snapshot, dict):
+            return "Provider snapshot unavailable"
+
+        highlight_runtime = snapshot.get("highlight_finder") or {}
+        mode = str(highlight_runtime.get("mode") or "").replace("_", " ").title()
+        model = highlight_runtime.get("model") or "Unknown model"
+        if mode:
+            return f"Highlight provider: {mode} • {model}"
+        return f"Highlight provider: {model}"
+
+    def _build_workspace_output_records(self, session_dir: Path) -> list[dict]:
+        """Return lightweight clip/output summaries for the workspace."""
+        clip_records: list[dict] = []
+        clips_dir = session_dir / "clips"
+        if not clips_dir.exists():
+            return clip_records
+
+        for clip_record in discover_clips(self.get_output_dir_path(), clips_dir):
+            clip_data = {}
+            data_file = clip_record.get("data_file")
+            if data_file and Path(data_file).exists():
+                try:
+                    with open(data_file, "r", encoding="utf-8") as f:
+                        clip_data = json.load(f)
+                except Exception:
+                    clip_data = {}
+
+            clip_records.append(
+                {
+                    "clip_id": clip_record.get("folder", Path("clip")).name,
+                    "title": clip_data.get("title")
+                    or clip_record.get("folder", Path("clip")).name,
+                    "hook_text": clip_data.get("hook_text", ""),
+                    "duration": clip_data.get("duration_seconds"),
+                    "folder": str(clip_record.get("folder")),
+                    "revision_label": "Revision 1",
+                }
+            )
+
+        return clip_records
+
+    def get_session_workspace_state(self) -> dict:
+        """Build workspace-ready session state from the current manifest."""
+        session_data = self._reload_current_session_data()
+        if not session_data:
+            return {
+                "session": None,
+                "origin_label": None,
+                "back_label": "← Back",
+                "source_rows": [],
+                "provider_summary": None,
+                "highlights": [],
+                "default_selected_ids": [],
+                "queue_summary": {},
+                "output_clips": [],
+            }
+
+        highlights = self._ensure_workspace_highlight_ids(session_data)
+        selected_highlight_ids = [
+            highlight_id
+            for highlight_id in (session_data.get("selected_highlight_ids") or [])
+            if isinstance(highlight_id, str)
+        ]
+        if not selected_highlight_ids:
+            selected_highlight_ids = [
+                highlight.get("highlight_id")
+                for highlight in highlights
+                if isinstance(highlight, dict) and highlight.get("highlight_id")
+            ]
+
+        session_dir_value = session_data.get("session_dir")
+        session_dir = Path(session_dir_value) if session_dir_value else None
+        output_clips = (
+            self._build_workspace_output_records(session_dir) if session_dir else []
+        )
+
+        clip_jobs_raw = session_data.get("clip_jobs")
+        clip_jobs: list[dict] = clip_jobs_raw if isinstance(clip_jobs_raw, list) else []
+        clip_status_lookup = {}
+        for index, clip_job in enumerate(clip_jobs, 1):
+            if not isinstance(clip_job, dict):
+                continue
+            highlight_id = clip_job.get("highlight_id") or f"highlight_{index:03d}"
+            clip_status_lookup[highlight_id] = clip_job.get("status") or "unknown"
+
+        workspace_highlights = []
+        for highlight in highlights:
+            if not isinstance(highlight, dict):
+                continue
+            start_time = str(highlight.get("start_time") or "").split(",")[0]
+            end_time = str(highlight.get("end_time") or "").split(",")[0]
+            workspace_highlights.append(
+                {
+                    **highlight,
+                    "time_range": (
+                        f"{start_time} → {end_time}" if start_time or end_time else ""
+                    ),
+                    "clip_status": clip_status_lookup.get(
+                        highlight.get("highlight_id")
+                    ),
+                }
+            )
+
+        queue_counts = {
+            "total": len(clip_jobs),
+            "queued": 0,
+            "rendering": 0,
+            "completed": 0,
+            "failed": 0,
+        }
+        for clip_job in clip_jobs:
+            status = str((clip_job or {}).get("status") or "unknown").lower()
+            if status in {"queued", "render_queued"}:
+                queue_counts["queued"] += 1
+            elif status in {"rendering", "processing"}:
+                queue_counts["rendering"] += 1
+            elif status == "completed":
+                queue_counts["completed"] += 1
+            elif status in {"failed", "partial"}:
+                queue_counts["failed"] += 1
+
+        if not clip_jobs and output_clips:
+            queue_counts["total"] = len(output_clips)
+            queue_counts["completed"] = len(output_clips)
+
+        source_raw = session_data.get("source")
+        source_info = source_raw if isinstance(source_raw, dict) else {}
+        video_info_raw = session_data.get("video_info")
+        video_info = video_info_raw if isinstance(video_info_raw, dict) else {}
+        source_rows = [
+            ("Source Type", self._describe_session_source(session_data)),
+            (
+                "Transcript",
+                self._format_workspace_source_value(
+                    session_data.get("transcription_method") or "subtitle"
+                ),
+            ),
+            (
+                "Subtitle File",
+                "Present" if session_data.get("srt_path") else "Not saved",
+            ),
+            (
+                "Channel",
+                self._format_workspace_source_value(
+                    video_info.get("channel") or source_info.get("channel_name")
+                ),
+            ),
+            (
+                "Video Path",
+                Path(session_data.get("video_path") or "").name or "Not downloaded",
+            ),
+        ]
+
+        origin_labels = {
+            "campaign_detail": "Campaign Detail",
+            "session_browser": "Session Browser",
+            "home": "Manual Intake",
+        }
+        back_labels = {
+            "campaign_detail": "← Back to Campaign",
+            "session_browser": "← Back to Sessions",
+            "home": "← Back to Manual Intake",
+        }
+
+        return {
+            "session": session_data,
+            "origin_label": origin_labels.get(
+                self.session_workspace_origin, "Session Flow"
+            ),
+            "back_label": back_labels.get(self.session_workspace_origin, "← Back"),
+            "source_rows": source_rows,
+            "provider_summary": self._build_workspace_provider_summary(session_data),
+            "highlights": workspace_highlights,
+            "default_selected_ids": selected_highlight_ids,
+            "queue_summary": queue_counts,
+            "output_clips": output_clips,
+        }
+
+    def refresh_session_workspace(self):
+        """Refresh the backing session manifest before the page rerenders."""
+        self._reload_current_session_data()
+
+    def go_back_from_session_workspace(self):
+        """Return to the screen that opened the current workspace."""
+        if self.processing:
+            return
+
+        if self.session_workspace_origin == "campaign_detail":
+            self.show_page("campaign_detail")
+            return
+        if self.session_workspace_origin == "session_browser":
+            self.show_page("session_browser")
+            return
+        self.show_page("home")
+
+    def save_workspace_draft(
+        self, highlight_id: str, updates: dict, selected_highlight_ids: list[str]
+    ) -> bool:
+        """Apply editor-shell changes to the in-memory session state."""
+        session_data = self._reload_current_session_data()
+        if not session_data:
+            return False
+
+        highlights = self._ensure_workspace_highlight_ids(session_data)
+        for highlight in highlights:
+            if highlight.get("highlight_id") != highlight_id:
+                continue
+            highlight["title"] = updates.get("title", highlight.get("title", ""))
+            highlight["description"] = updates.get(
+                "description", highlight.get("description", "")
+            )
+            highlight["hook_text"] = updates.get(
+                "hook_text", highlight.get("hook_text", "")
+            )
+            break
+
+        session_data["selected_highlight_ids"] = [
+            item for item in selected_highlight_ids if isinstance(item, str)
+        ]
+        session_data["status"] = "editing"
+        session_data["stage"] = "editing"
+        self.session_data = session_data
+        return True
+
+    def _get_workspace_selected_highlights(
+        self, highlight_ids: list[str]
+    ) -> list[dict]:
+        """Resolve workspace highlight ids into the selected highlight payloads."""
+        session_data = self._reload_current_session_data()
+        if not session_data:
+            return []
+
+        highlights = self._ensure_workspace_highlight_ids(session_data)
+        selected_set = {highlight_id for highlight_id in highlight_ids if highlight_id}
+        return [
+            highlight
+            for highlight in highlights
+            if isinstance(highlight, dict)
+            and highlight.get("highlight_id") in selected_set
+        ]
+
+    def open_legacy_highlight_selection(self):
+        """Open the previous highlight selection page as a compatibility bridge."""
+        if not self.session_data:
+            messagebox.showerror("Session Workspace", "No session data is loaded yet.")
+            return
+
+        self.pages["highlight_selection"].set_highlights(
+            self.session_data.get("highlights", []),
+            self.session_data.get("video_path", ""),
+            Path(self.session_data.get("session_dir", "")),
+        )
+        self.show_page("highlight_selection")
+
+    def render_workspace_selected(
+        self, highlight_ids: list[str], add_captions: bool, add_hook: bool
+    ):
+        """Send the currently selected workspace highlights into phase 2."""
+        selected = self._get_workspace_selected_highlights(highlight_ids)
+        if not selected:
+            messagebox.showinfo(
+                "Session Workspace",
+                "Select at least one highlight before starting a render.",
+            )
+            return
+        self.process_selected_highlights(selected, add_captions, add_hook)
+
+    def render_workspace_current(
+        self, highlight_id: str, add_captions: bool, add_hook: bool
+    ):
+        """Render only the focused highlight from the workspace."""
+        self.render_workspace_selected([highlight_id], add_captions, add_hook)
+
+    def retry_workspace_failed(self, add_captions: bool, add_hook: bool):
+        """Retry failed clip jobs by mapping them back to workspace highlights."""
+        session_data = self._reload_current_session_data()
+        if not session_data:
+            return
+
+        self._ensure_workspace_highlight_ids(session_data)
+        failed_highlight_ids = []
+        for clip_job in session_data.get("clip_jobs", []):
+            if not isinstance(clip_job, dict):
+                continue
+            status = str(clip_job.get("status") or "").lower()
+            if status not in {"failed", "partial"}:
+                continue
+            highlight_id = clip_job.get("highlight_id")
+            if highlight_id:
+                failed_highlight_ids.append(highlight_id)
+
+        if not failed_highlight_ids:
+            messagebox.showinfo(
+                "Session Workspace",
+                "There are no failed clip jobs to retry in this shell yet.",
+            )
+            return
+
+        self.render_workspace_selected(failed_highlight_ids, add_captions, add_hook)
+
+    def open_current_session_folder(self):
+        """Open the current session directory."""
+        session_data = self._reload_current_session_data()
+        if not session_data or not session_data.get("session_dir"):
+            messagebox.showerror(
+                "Session Workspace", "Session folder is not available."
+            )
+            return
+        self.open_path(session_data["session_dir"])
+
+    def open_current_session_output(self):
+        """Open the current session clips folder when present."""
+        session_data = self._reload_current_session_data()
+        if not session_data or not session_data.get("session_dir"):
+            messagebox.showerror(
+                "Session Workspace", "Session folder is not available."
+            )
+            return
+
+        session_dir = Path(session_data["session_dir"])
+        clips_dir = session_dir / "clips"
+        self.open_path(clips_dir if clips_dir.exists() else session_dir)
+
+    def open_current_session_results(self):
+        """Open the session-scoped results page from the workspace."""
+        session_data = self._reload_current_session_data()
+        if not session_data or not session_data.get("session_dir"):
+            messagebox.showerror(
+                "Session Workspace", "Session folder is not available."
+            )
+            return
+
+        clips_dir = Path(session_data["session_dir"]) / "clips"
+        if not clips_dir.exists():
+            messagebox.showinfo(
+                "Session Workspace", "No clip outputs exist for this session yet."
+            )
+            return
+
+        self.load_session_clips(clips_dir, back_target="session_workspace")
 
     def load_campaign_queue_snapshot(
         self, campaign: dict, persist: bool = False
@@ -1407,7 +1836,7 @@ class YTShortClipperApp(ctk.CTk):
             self.get_output_dir_path(), campaign.get("id", ""), video
         )
         if existing and existing.get("data"):
-            self.resume_session(existing["data"].copy())
+            self.resume_session(existing["data"].copy(), origin="campaign_detail")
             return
 
         self.process_active_campaign_video(video_id)
@@ -1447,7 +1876,7 @@ class YTShortClipperApp(ctk.CTk):
                 session_dir=str(existing["session_dir"]),
             )
             self.save_campaign_queue_snapshot(campaign, updated)
-            self.resume_session(existing["data"].copy())
+            self.resume_session(existing["data"].copy(), origin="campaign_detail")
             return
 
         if not self.client and not self._hydrate_provider_runtime(update_ui=True):
@@ -2123,6 +2552,7 @@ class YTShortClipperApp(ctk.CTk):
     def _start_processing_validated(self):
         """Start processing after validation passed"""
         self.start_btn.configure(state="normal", text="Find Highlights")
+        self.session_workspace_origin = "home"
         source_mode = self.get_source_mode()
 
         if not self.client and not self._hydrate_provider_runtime(update_ui=True):
@@ -2923,7 +3353,7 @@ class YTShortClipperApp(ctk.CTk):
             session_dir=session_data.get("session_dir"),
             last_error=None,
         )
-        self.show_highlight_selection()
+        self.show_session_workspace(origin="campaign_detail")
 
     def _on_campaign_processing_failed(
         self, campaign: dict, video_id: str, error_msg: str
@@ -2959,39 +3389,38 @@ class YTShortClipperApp(ctk.CTk):
         else:
             self.on_error(error_msg)
 
-    def show_highlight_selection(self):
-        """Show highlight selection page with found highlights"""
+    def show_session_workspace(self, origin: str | None = None):
+        """Show the unified session workspace for the current session."""
         if not self.session_data:
             messagebox.showerror("Error", "No highlight data available")
             self.show_page("home")
             return
 
-        # Set highlights in selection page
-        self.pages["highlight_selection"].set_highlights(
-            self.session_data["highlights"],
-            self.session_data["video_path"],
-            self.session_data["session_dir"],
-        )
+        if origin:
+            self.session_workspace_origin = origin
 
-        # Show the page
-        self.show_page("highlight_selection")
+        self._reload_current_session_data()
+        self.show_page("session_workspace")
 
-        # Reset processing flag
         self.processing = False
 
-    def resume_session(self, session_data: dict):
-        """Resume a previous session"""
+    def show_highlight_selection(self):
+        """Compatibility shim that now routes session opens into the workspace."""
+        self.show_session_workspace()
+
+    def resume_session(self, session_data: dict, origin: str = "session_browser"):
+        """Resume a previous session into the workspace shell."""
         # Store session data
         self.session_data = session_data
+        self.session_workspace_origin = origin
 
-        # Navigate to highlight selection page
-        self.show_highlight_selection()
+        # Navigate to session workspace
+        self.show_session_workspace(origin=origin)
 
-    def load_session_clips(self, clips_dir: Path):
-        """Load clips from a session's clips folder and show results page"""
-        # Change back button to go to session browser instead of processing
+    def load_session_clips(self, clips_dir: Path, back_target: str = "session_browser"):
+        """Load clips from a session's clips folder and show results page."""
         self.pages["results"].set_back_callback(
-            lambda: self.show_page("session_browser")
+            lambda target=back_target: self.show_page(target)
         )
 
         # Load clips from the specific directory
@@ -3016,12 +3445,27 @@ class YTShortClipperApp(ctk.CTk):
         self.add_captions = add_captions
         self.add_hook = add_hook
 
+        if isinstance(self.session_data, dict):
+            self._ensure_workspace_highlight_ids(self.session_data)
+            self.session_data["selected_highlight_ids"] = [
+                highlight.get("highlight_id")
+                for highlight in selected_highlights
+                if isinstance(highlight, dict) and highlight.get("highlight_id")
+            ]
+
         # Reset UI for clipping
         self.processing = True
         self.cancelled = False
 
         # Reset clipping page UI
         self.pages["clipping"].reset_ui()
+        self.pages["clipping"].back_btn.configure(
+            command=lambda: self.show_page("session_workspace")
+        )
+        self.pages["clipping"].results_btn.configure(
+            text="🧰 Return to Workspace",
+            command=lambda: self.show_page("session_workspace"),
+        )
         self.show_page("clipping")
 
         # Start processing in background thread
@@ -3231,14 +3675,17 @@ class YTShortClipperApp(ctk.CTk):
         self.processing = False
         self.pages["processing"].on_error(error)
 
+    def open_path(self, target_path):
+        """Open a file or folder in the platform file explorer."""
+        target = str(target_path)
+        if sys.platform == "win32":
+            os.startfile(target)
+        else:
+            subprocess.run(["open" if sys.platform == "darwin" else "xdg-open", target])
+
     def open_output(self):
         output_dir = self.config.get("output_dir", str(OUTPUT_DIR))
-        if sys.platform == "win32":
-            os.startfile(output_dir)
-        else:
-            subprocess.run(
-                ["open" if sys.platform == "darwin" else "xdg-open", output_dir]
-            )
+        self.open_path(output_dir)
 
     def open_discord(self):
         """Open Discord server invite link"""

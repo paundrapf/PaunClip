@@ -55,7 +55,7 @@ class SessionBrowserPage(ctk.CTkFrame):
         # Instructions
         ctk.CTkLabel(
             self,
-            text="Resume a previous highlight detection session",
+            text="Resume a previous session in the unified workspace shell",
             font=ctk.CTkFont(size=12),
             text_color="gray",
         ).pack(padx=20, pady=(0, 10))
@@ -223,16 +223,27 @@ class SessionBrowserPage(ctk.CTkFrame):
             clips_dir = session_record["clips_dir"]
             has_clips = session_record["has_clips"] and any(clips_dir.iterdir())
 
-            # View Session button (always show if highlights exist)
+            resume_enabled_statuses = {
+                "highlights_found",
+                "editing",
+                "render_queued",
+                "rendering",
+                "partial",
+                "failed",
+                "completed",
+            }
+
+            # Resume Editing button when a session has highlight/editor state
             if highlights_count > 0:
                 view_session_btn = ctk.CTkButton(
                     action_row,
-                    text="👁️ View Session",
+                    text="🧰 Resume Editing",
                     height=32,
                     width=140,
                     font=ctk.CTkFont(size=11),
                     fg_color=("#3B8ED0", "#1F6AA5"),
                     command=lambda d=data: self.resume_session(d),
+                    state="normal" if status in resume_enabled_statuses else "disabled",
                 )
                 view_session_btn.pack(side="left", padx=(0, 5))
 
@@ -282,7 +293,7 @@ class SessionBrowserPage(ctk.CTkFrame):
         session_data["srt_path"] = session_data["srt_path"]
 
         # Call resume callback
-        self.on_resume(session_data)
+        self.on_resume(session_data, origin="session_browser")
 
     def view_clips(self, clips_dir: Path):
         """View clips in results page UI"""
