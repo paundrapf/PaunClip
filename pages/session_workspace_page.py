@@ -67,6 +67,10 @@ class SessionWorkspacePage(ctk.CTkFrame):
 
         self.add_hook_var = ctk.BooleanVar(value=False)
         self.add_captions_var = ctk.BooleanVar(value=False)
+        self.tts_voice_var = ctk.StringVar(value="")
+        self.caption_mode_var = ctk.StringVar(value="auto")
+        self.watermark_preset_var = ctk.StringVar(value="default")
+        self.auto_source_video_var = ctk.BooleanVar(value=True)
 
         self.create_ui()
 
@@ -303,12 +307,112 @@ class SessionWorkspacePage(ctk.CTkFrame):
 
         ctk.CTkLabel(
             editor_card,
-            text="Hook Text Shell",
+            text="Hook Text",
             font=ctk.CTkFont(size=11, weight="bold"),
             anchor="w",
         ).pack(fill="x", padx=14, pady=(0, 3))
         self.hook_text = ctk.CTkTextbox(editor_card, height=105)
         self.hook_text.pack(fill="both", padx=14, pady=(0, 8))
+
+        clip_overrides_card = ctk.CTkFrame(
+            editor_card, fg_color=("#171717", "#101010"), corner_radius=10
+        )
+        clip_overrides_card.pack(fill="x", padx=14, pady=(0, 8))
+
+        ctk.CTkLabel(
+            clip_overrides_card,
+            text="Clip Overrides",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(10, 4))
+
+        self.editor_defaults_hint_label = ctk.CTkLabel(
+            clip_overrides_card,
+            text="Watermark 'default' follows saved settings, and Auto Source Video keeps credit_watermark compatibility.",
+            font=ctk.CTkFont(size=9),
+            text_color="gray",
+            anchor="w",
+            justify="left",
+            wraplength=440,
+        )
+        self.editor_defaults_hint_label.pack(fill="x", padx=12, pady=(0, 10))
+
+        voice_row = ctk.CTkFrame(clip_overrides_card, fg_color="transparent")
+        voice_row.pack(fill="x", padx=12, pady=(0, 8))
+
+        ctk.CTkLabel(
+            voice_row,
+            text="TTS Voice",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            anchor="w",
+            width=130,
+        ).pack(side="left")
+
+        self.tts_voice_entry = ctk.CTkEntry(
+            voice_row,
+            textvariable=self.tts_voice_var,
+            height=32,
+            placeholder_text="nova / autumn / custom",
+        )
+        self.tts_voice_entry.pack(side="left", fill="x", expand=True)
+
+        caption_row = ctk.CTkFrame(clip_overrides_card, fg_color="transparent")
+        caption_row.pack(fill="x", padx=12, pady=(0, 8))
+
+        ctk.CTkLabel(
+            caption_row,
+            text="Caption Mode",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            anchor="w",
+            width=130,
+        ).pack(side="left")
+
+        self.caption_mode_menu = ctk.CTkOptionMenu(
+            caption_row,
+            variable=self.caption_mode_var,
+            values=["auto", "off", "manual_override"],
+            command=self.on_editor_option_changed,
+        )
+        self.caption_mode_menu.pack(side="left", fill="x", expand=True)
+
+        watermark_row = ctk.CTkFrame(clip_overrides_card, fg_color="transparent")
+        watermark_row.pack(fill="x", padx=12, pady=(0, 8))
+
+        ctk.CTkLabel(
+            watermark_row,
+            text="Brand Watermark",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            anchor="w",
+            width=130,
+        ).pack(side="left")
+
+        self.watermark_preset_menu = ctk.CTkOptionMenu(
+            watermark_row,
+            variable=self.watermark_preset_var,
+            values=["default", "off"],
+            command=self.on_editor_option_changed,
+        )
+        self.watermark_preset_menu.pack(side="left", fill="x", expand=True)
+
+        source_credit_row = ctk.CTkFrame(clip_overrides_card, fg_color="transparent")
+        source_credit_row.pack(fill="x", padx=12, pady=(0, 10))
+
+        ctk.CTkLabel(
+            source_credit_row,
+            text="Auto Source Video",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            anchor="w",
+            width=130,
+        ).pack(side="left")
+
+        self.auto_source_video_switch = ctk.CTkSwitch(
+            source_credit_row,
+            text="Enabled",
+            variable=self.auto_source_video_var,
+            width=120,
+            command=self.on_editor_option_changed,
+        )
+        self.auto_source_video_switch.pack(side="left")
 
         options_card = ctk.CTkFrame(
             editor_card, fg_color=("#171717", "#101010"), corner_radius=10
@@ -463,6 +567,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
         self.title_entry.bind("<KeyRelease>", self.on_editor_changed)
         self.description_text.bind("<KeyRelease>", self.on_editor_changed)
         self.hook_text.bind("<KeyRelease>", self.on_editor_changed)
+        self.tts_voice_entry.bind("<KeyRelease>", self.on_editor_changed)
 
     def on_page_shown(self):
         """Refresh workspace whenever it becomes visible."""
@@ -500,6 +605,10 @@ class SessionWorkspacePage(ctk.CTkFrame):
 
         self.add_hook_var.set(bool(workspace_state.get("add_hook", True)))
         self.add_captions_var.set(bool(workspace_state.get("add_captions", True)))
+        self.editor_defaults_hint_label.configure(
+            text=self.state.get("editor_defaults_hint")
+            or "Watermark 'default' follows saved settings, and Auto Source Video keeps credit_watermark compatibility."
+        )
 
         self.selected_highlight_ids = {
             highlight_id
@@ -808,6 +917,39 @@ class SessionWorkspacePage(ctk.CTkFrame):
         self.update_queue_summary(self.state.get("queue_summary") or {})
         self.update_action_states()
 
+    def get_workspace_editor_defaults(self) -> dict:
+        """Return state-provided defaults for clip-aware editor fields."""
+        defaults = self.state.get("editor_defaults") or {}
+        return {
+            "tts_voice": str(defaults.get("tts_voice") or "nova"),
+            "caption_mode": str(defaults.get("caption_mode") or "auto"),
+            "watermark_preset": str(defaults.get("watermark_preset") or "default"),
+            "source_credit_enabled": bool(defaults.get("source_credit_enabled", True)),
+        }
+
+    def build_blank_editor_payload(self) -> dict:
+        """Return empty editor fields plus default clip-override values."""
+        defaults = self.get_workspace_editor_defaults()
+        return {
+            "title": "",
+            "description": "",
+            "hook_text": "",
+            "tts_voice": defaults["tts_voice"],
+            "caption_mode": defaults["caption_mode"],
+            "watermark_preset": defaults["watermark_preset"],
+            "source_credit_enabled": defaults["source_credit_enabled"],
+        }
+
+    def build_option_values(
+        self, current_value: str, base_values: list[str]
+    ) -> list[str]:
+        """Keep existing compatibility values selectable in option menus."""
+        values = list(base_values)
+        normalized = str(current_value or "").strip()
+        if normalized and normalized not in values:
+            values.append(normalized)
+        return values
+
     def load_active_highlight(self):
         """Populate editor controls from the focused highlight."""
         self._loading_editor = True
@@ -820,9 +962,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
                 self.active_highlight_meta.configure(
                     text="Render Current Clip stays disabled until one highlight is focused."
                 )
-                self.set_editor_values(
-                    {"title": "", "description": "", "hook_text": ""}
-                )
+                self.set_editor_values(self.build_blank_editor_payload())
                 self.editor_status_label.configure(
                     text="Pick a highlight to inspect its draft fields.",
                     text_color="gray",
@@ -849,6 +989,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
 
     def set_editor_values(self, payload: dict):
         """Replace the current editor contents."""
+        defaults = self.get_workspace_editor_defaults()
         self.title_entry.delete(0, "end")
         self.title_entry.insert(0, payload.get("title", ""))
 
@@ -858,12 +999,66 @@ class SessionWorkspacePage(ctk.CTkFrame):
         self.hook_text.delete("1.0", "end")
         self.hook_text.insert("1.0", payload.get("hook_text", ""))
 
+        self.tts_voice_var.set(
+            str(payload.get("tts_voice") or defaults.get("tts_voice") or "nova")
+        )
+
+        caption_mode = str(
+            payload.get("caption_mode") or defaults.get("caption_mode") or "auto"
+        )
+        self.caption_mode_menu.configure(
+            values=self.build_option_values(
+                caption_mode,
+                ["auto", "off", "manual_override"],
+            )
+        )
+        self.caption_mode_var.set(caption_mode)
+
+        watermark_preset = str(
+            payload.get("watermark_preset")
+            or defaults.get("watermark_preset")
+            or "default"
+        )
+        self.watermark_preset_menu.configure(
+            values=self.build_option_values(watermark_preset, ["default", "off"])
+        )
+        self.watermark_preset_var.set(watermark_preset)
+        self.auto_source_video_var.set(
+            bool(
+                payload.get(
+                    "source_credit_enabled",
+                    defaults.get("source_credit_enabled", True),
+                )
+            )
+        )
+
     def get_highlight_editor_payload(self, highlight: dict) -> dict:
         """Return the editable draft fields for a highlight."""
+        defaults = self.get_workspace_editor_defaults()
+        editor_state = highlight.get("editor") or {}
         return {
             "title": str(highlight.get("title") or ""),
             "description": str(highlight.get("description") or ""),
             "hook_text": str(highlight.get("hook_text") or ""),
+            "tts_voice": str(
+                editor_state.get("tts_voice") or defaults.get("tts_voice") or "nova"
+            ),
+            "caption_mode": str(
+                editor_state.get("caption_mode")
+                or defaults.get("caption_mode")
+                or "auto"
+            ),
+            "watermark_preset": str(
+                editor_state.get("watermark_preset")
+                or defaults.get("watermark_preset")
+                or "default"
+            ),
+            "source_credit_enabled": bool(
+                editor_state.get(
+                    "source_credit_enabled",
+                    defaults.get("source_credit_enabled", True),
+                )
+            ),
         }
 
     def get_editor_payload(self) -> dict:
@@ -872,6 +1067,10 @@ class SessionWorkspacePage(ctk.CTkFrame):
             "title": self.title_entry.get().strip(),
             "description": self.description_text.get("1.0", "end").strip(),
             "hook_text": self.hook_text.get("1.0", "end").strip(),
+            "tts_voice": self.tts_voice_var.get().strip(),
+            "caption_mode": self.caption_mode_var.get().strip(),
+            "watermark_preset": self.watermark_preset_var.get().strip(),
+            "source_credit_enabled": self.auto_source_video_var.get(),
         }
 
     def capture_active_draft(self):
@@ -887,6 +1086,10 @@ class SessionWorkspacePage(ctk.CTkFrame):
         self.capture_active_draft()
         self.persist_workspace_state(highlight_updates=self.get_editor_payload())
         self.refresh_editor_dirty_state()
+
+    def on_editor_option_changed(self, _value=None):
+        """Track option-menu and switch changes for clip-aware editor fields."""
+        self.on_editor_changed()
 
     def on_render_options_changed(self):
         """Persist render option toggles so restart restores the shell state."""

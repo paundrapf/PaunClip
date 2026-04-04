@@ -45,6 +45,7 @@ from utils.campaign_queue import (
 from utils.logger import debug_log, setup_error_logging, log_error, get_error_log_path
 from utils.storage import (
     build_clip_render_inputs,
+    build_default_highlight_editor,
     discover_clips,
     ensure_clip_jobs,
     ensure_session_highlights,
@@ -1306,6 +1307,7 @@ class YTShortClipperApp(ctk.CTk):
             return False
 
         highlights = self._ensure_workspace_highlight_ids(session_data)
+        editor_defaults = self._get_workspace_editor_defaults(session_data)
         highlight_lookup = {
             highlight.get("highlight_id"): highlight
             for highlight in highlights
@@ -1321,6 +1323,38 @@ class YTShortClipperApp(ctk.CTk):
             highlight["hook_text"] = updates.get(
                 "hook_text", highlight.get("hook_text", "")
             )
+            editor_state = build_default_highlight_editor(highlight.get("editor"))
+            editor_state["tts_voice"] = str(
+                updates.get(
+                    "tts_voice",
+                    editor_state.get("tts_voice")
+                    or editor_defaults.get("tts_voice", "nova"),
+                )
+            ).strip() or editor_defaults.get("tts_voice", "nova")
+            editor_state["caption_mode"] = str(
+                updates.get(
+                    "caption_mode",
+                    editor_state.get("caption_mode")
+                    or editor_defaults.get("caption_mode", "auto"),
+                )
+            ).strip().lower() or editor_defaults.get("caption_mode", "auto")
+            editor_state["source_credit_enabled"] = bool(
+                updates.get(
+                    "source_credit_enabled",
+                    editor_state.get(
+                        "source_credit_enabled",
+                        editor_defaults.get("source_credit_enabled", True),
+                    ),
+                )
+            )
+            editor_state["watermark_preset"] = str(
+                updates.get(
+                    "watermark_preset",
+                    editor_state.get("watermark_preset")
+                    or editor_defaults.get("watermark_preset", "default"),
+                )
+            ).strip().lower() or editor_defaults.get("watermark_preset", "default")
+            highlight["editor"] = editor_state
 
         if selected_highlight_ids is not None:
             session_data["selected_highlight_ids"] = [
@@ -1407,6 +1441,48 @@ class YTShortClipperApp(ctk.CTk):
         if mode:
             return f"Highlight provider: {mode} • {model}"
         return f"Highlight provider: {model}"
+
+    def _get_workspace_editor_defaults(self, session_data: dict | None = None) -> dict:
+        """Build clip-editor defaults from persisted provider and overlay settings."""
+        session_payload = session_data if isinstance(session_data, dict) else {}
+        provider_snapshot = session_payload.get("provider_snapshot")
+        hook_runtime = (
+            provider_snapshot.get("hook_maker")
+            if isinstance(provider_snapshot, dict)
+            else {}
+        )
+        hook_config = self.config.get_ai_provider_config("hook_maker")
+        credit_watermark = self.config.get("credit_watermark", {})
+
+        default_voice = (
+            str(
+                (hook_runtime or {}).get("tts_voice")
+                or hook_config.get("tts_voice")
+                or "nova"
+            ).strip()
+            or "nova"
+        )
+        source_credit_enabled = True
+        if isinstance(credit_watermark, dict) and "enabled" in credit_watermark:
+            source_credit_enabled = bool(credit_watermark.get("enabled"))
+
+        return {
+            "tts_voice": default_voice,
+            "caption_mode": "auto",
+            "watermark_preset": "default",
+            "source_credit_enabled": source_credit_enabled,
+        }
+
+    def _build_workspace_editor_defaults_hint(self, defaults: dict) -> str:
+        """Return concise helper copy for workspace clip overrides."""
+        watermark = self.config.get("watermark", {})
+        watermark_state = "on" if bool((watermark or {}).get("enabled")) else "off"
+        source_state = "on" if defaults.get("source_credit_enabled", True) else "off"
+        return (
+            f"TTS default: {defaults.get('tts_voice', 'nova')}   •   "
+            f"Brand watermark settings default: {watermark_state}   •   "
+            f"Auto Source Video default: {source_state}"
+        )
 
     def _build_workspace_output_records(
         self, session_data: dict, session_dir: Path
@@ -1507,6 +1583,7 @@ class YTShortClipperApp(ctk.CTk):
 
         session_dir_value = session_data.get("session_dir")
         session_dir = Path(session_dir_value) if session_dir_value else None
+        editor_defaults = self._get_workspace_editor_defaults(session_data)
         output_clips = (
             self._build_workspace_output_records(session_data, session_dir)
             if session_dir
@@ -1614,6 +1691,10 @@ class YTShortClipperApp(ctk.CTk):
             "workspace_state": session_data.get("workspace_state") or {},
             "source_rows": source_rows,
             "provider_summary": self._build_workspace_provider_summary(session_data),
+            "editor_defaults": editor_defaults,
+            "editor_defaults_hint": self._build_workspace_editor_defaults_hint(
+                editor_defaults
+            ),
             "highlights": workspace_highlights,
             "default_selected_ids": selected_highlight_ids,
             "queue_summary": queue_counts,
