@@ -4,9 +4,14 @@ Configuration manager for YT Short Clipper
 
 import json
 import uuid
+from datetime import datetime
 from pathlib import Path
 
-from utils.storage import get_campaign_manifest_path, get_session_manifest_path
+from utils.storage import (
+    get_campaign_manifest_path,
+    get_campaigns_dir,
+    get_session_manifest_path,
+)
 
 
 USER_PROVIDER_MODES = ("openai_api", "groq_rotate")
@@ -357,6 +362,186 @@ class ConfigManager:
         """Save configuration dict to file"""
         with open(self.config_file, "w") as f:
             json.dump(config, f, indent=2)
+
+    def _build_campaign_catalog(self, campaigns: list[dict]) -> list[dict]:
+        """Build lightweight config summaries from canonical campaign manifests."""
+        catalog = []
+        for campaign in campaigns:
+            catalog.append(
+                {
+                    "id": campaign.get("id", ""),
+                    "name": campaign.get("name", "Untitled Campaign"),
+                    "status": campaign.get("status", "active"),
+                    "updated_at": campaign.get("updated_at"),
+                }
+            )
+        return catalog
+
+    def _sync_campaign_catalog(self, campaigns: list[dict]):
+        """Mirror canonical campaign manifests into lightweight config state."""
+        catalog = self._build_campaign_catalog(campaigns)
+        if self.config.get("campaigns") != catalog:
+            self.config["campaigns"] = catalog
+            self.save()
+
+    def _normalize_campaign_manifest(self, campaign_data: dict) -> dict:
+        """Normalize a campaign manifest into the additive canonical shape."""
+        now = datetime.utcnow().replace(microsecond=0).isoformat()
+        normalized = campaign_data.copy() if isinstance(campaign_data, dict) else {}
+
+        normalized["id"] = str(normalized.get("id", "")).strip()
+        normalized["name"] = (
+            str(normalized.get("name", "Untitled Campaign")).strip()
+            or "Untitled Campaign"
+        )
+        normalized["channel_url"] = str(normalized.get("channel_url", "")).strip()
+        normalized["channel_id"] = str(normalized.get("channel_id", "")).strip()
+
+        status = str(normalized.get("status", "active")).strip().lower()
+        normalized["status"] = status if status in {"active", "archived"} else "active"
+
+        defaults = normalized.get("defaults")
+        normalized["defaults"] = defaults if isinstance(defaults, dict) else {}
+
+        sync_state = normalized.get("sync_state")
+        sync_state = sync_state.copy() if isinstance(sync_state, dict) else {}
+        sync_state.setdefault("last_synced_at", None)
+        sync_state.setdefault("last_seen_published_at", None)
+        sync_state.setdefault("next_page_token", None)
+        sync_state.setdefault("last_error", None)
+        normalized["sync_state"] = sync_state
+
+        normalized["created_at"] = normalized.get("created_at") or now
+        normalized["updated_at"] = normalized.get("updated_at") or now
+        normalized["archived_at"] = normalized.get("archived_at")
+
+        if normalized["status"] == "archived" and not normalized["archived_at"]:
+            normalized["archived_at"] = normalized["updated_at"]
+        if normalized["status"] != "archived":
+            normalized["archived_at"] = None
+
+        return normalized
+
+    def _write_campaign_manifest(self, campaign_data: dict) -> dict:
+        """Persist a campaign manifest and return the normalized record."""
+        normalized = self._normalize_campaign_manifest(campaign_data)
+        manifest_path = self.get_campaign_manifest_path(normalized["id"])
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(normalized, f, indent=2, ensure_ascii=False)
+
+        return normalized
+
+    def list_campaigns(self, include_archived: bool = True) -> list[dict]:
+        """Return campaign manifests discovered from canonical filesystem storage."""
+        output_dir = Path(self.config.get("output_dir", self.output_dir))
+        campaigns_dir = get_campaigns_dir(output_dir)
+        campaigns = []
+
+        if campaigns_dir.exists():
+            for campaign_dir in campaigns_dir.iterdir():
+                if not campaign_dir.is_dir():
+                    continue
+
+                manifest_path = campaign_dir / "campaign.json"
+                if not manifest_path.exists():
+                    continue
+
+                try:
+                    with open(manifest_path, "r", encoding="utf-8") as f:
+                        campaign_data = json.load(f)
+                except Exception:
+                    continue
+
+                campaign_data.setdefault("id", campaign_dir.name)
+                normalized = self._normalize_campaign_manifest(campaign_data)
+                if normalized["status"] == "archived" and not include_archived:
+                    continue
+
+                campaigns.append(normalized)
+
+        campaigns = sorted(campaigns, key=lambda campaign: campaign.get("name") or "")
+        campaigns = sorted(
+            campaigns,
+            key=lambda campaign: campaign.get("updated_at") or "",
+            reverse=True,
+        )
+        campaigns = sorted(
+            campaigns,
+            key=lambda campaign: campaign.get("status") != "active",
+        )
+        self._sync_campaign_catalog(campaigns)
+        return campaigns
+
+    def get_campaign(self, campaign_id: str) -> dict | None:
+        """Load a single canonical campaign manifest by id."""
+        if not campaign_id:
+            return None
+
+        manifest_path = self.get_campaign_manifest_path(campaign_id)
+        if not manifest_path.exists():
+            return None
+
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            campaign_data = json.load(f)
+
+        campaign_data.setdefault("id", campaign_id)
+        return self._normalize_campaign_manifest(campaign_data)
+
+    def create_campaign(self, name: str, channel_url: str = "") -> dict:
+        """Create and persist a new canonical campaign manifest."""
+        now = datetime.utcnow().replace(microsecond=0).isoformat()
+        campaign_name = str(name).strip() or "Untitled Campaign"
+        campaign_id = (
+            f"camp_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        )
+        campaign_data = {
+            "id": campaign_id,
+            "name": campaign_name,
+            "channel_url": str(channel_url).strip(),
+            "channel_id": "",
+            "status": "active",
+            "defaults": {},
+            "sync_state": {
+                "last_synced_at": None,
+                "last_seen_published_at": None,
+                "next_page_token": None,
+                "last_error": None,
+            },
+            "created_at": now,
+            "updated_at": now,
+            "archived_at": None,
+        }
+        created = self._write_campaign_manifest(campaign_data)
+        self._sync_campaign_catalog(self.list_campaigns())
+        return created
+
+    def rename_campaign(self, campaign_id: str, new_name: str) -> dict:
+        """Rename an existing campaign manifest."""
+        campaign = self.get_campaign(campaign_id)
+        if not campaign:
+            raise FileNotFoundError(f"Campaign not found: {campaign_id}")
+
+        campaign["name"] = str(new_name).strip() or campaign["name"]
+        campaign["updated_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
+        updated = self._write_campaign_manifest(campaign)
+        self._sync_campaign_catalog(self.list_campaigns())
+        return updated
+
+    def archive_campaign(self, campaign_id: str) -> dict:
+        """Archive an active campaign manifest."""
+        campaign = self.get_campaign(campaign_id)
+        if not campaign:
+            raise FileNotFoundError(f"Campaign not found: {campaign_id}")
+
+        now = datetime.utcnow().replace(microsecond=0).isoformat()
+        campaign["status"] = "archived"
+        campaign["updated_at"] = now
+        campaign["archived_at"] = now
+        updated = self._write_campaign_manifest(campaign)
+        self._sync_campaign_catalog(self.list_campaigns())
+        return updated
 
     def get(self, key, default=None):
         """Get configuration value"""

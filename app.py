@@ -12,7 +12,7 @@ import re
 import urllib.request
 import io
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 from openai import OpenAI
 from PIL import Image, ImageTk
 
@@ -34,6 +34,7 @@ from dialogs.youtube_upload import YouTubeUploadDialog
 from dialogs.terms_of_service import TermsOfServiceDialog
 from components.progress_step import ProgressStep
 from pages.settings_page import SettingsPage
+from pages.campaigns_page import CampaignsPage
 from pages.browse_page import BrowsePage
 from pages.results_page import ResultsPage
 from pages.status_pages import APIStatusPage, LibStatusPage
@@ -91,6 +92,8 @@ class YTShortClipperApp(ctk.CTk):
 
         # Session data for highlight selection flow
         self.session_data = None  # Will store result from find_highlights_only
+        self.active_campaign_id = None
+        self.active_campaign_name = None
 
         self.title("YT Short Clipper")
         self.geometry("780x620")
@@ -106,6 +109,7 @@ class YTShortClipperApp(ctk.CTk):
         self.container.pack(fill="both", expand=True)
 
         self.pages = {}
+        self.create_campaigns_page()
         self.create_home_page()
         self.create_processing_page()
         self.create_clipping_page()
@@ -118,7 +122,7 @@ class YTShortClipperApp(ctk.CTk):
         self.create_lib_status_page()
         self.create_contact_page()
 
-        self.show_page("home")
+        self.show_page("campaigns")
         self.load_config()
         self.check_youtube_status()
 
@@ -187,6 +191,9 @@ class YTShortClipperApp(ctk.CTk):
         if name == "home":
             self.reset_home_page()
 
+        if hasattr(self.pages[name], "on_page_shown"):
+            self.pages[name].on_page_shown()
+
     def reset_home_page(self):
         """Reset home page to initial state"""
         self.source_mode_var.set("youtube")
@@ -219,6 +226,7 @@ class YTShortClipperApp(ctk.CTk):
 
         # Update start button state
         self.update_start_button_state()
+        self.update_manual_context_banner()
 
     def create_home_page(self):
         page = ctk.CTkFrame(self.container, fg_color=("#1a1a1a", "#0a0a0a"))
@@ -230,6 +238,31 @@ class YTShortClipperApp(ctk.CTk):
         # Top header
         header = PageHeader(page, self, show_nav_buttons=True)
         header.pack(fill="x", padx=20, pady=(15, 10))
+
+        manual_context_row = ctk.CTkFrame(page, fg_color="transparent")
+        manual_context_row.pack(fill="x", padx=20, pady=(0, 8))
+
+        ctk.CTkButton(
+            manual_context_row,
+            text="← Campaigns",
+            width=112,
+            height=30,
+            fg_color=("#2b2b2b", "#1a1a1a"),
+            hover_color=("#3a3a3a", "#2a2a2a"),
+            font=ctk.CTkFont(size=10),
+            command=self.show_campaigns_page,
+        ).pack(side="left")
+
+        self.manual_context_label = ctk.CTkLabel(
+            manual_context_row,
+            text="",
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+            anchor="w",
+            justify="left",
+        )
+        self.manual_context_label.pack(side="left", fill="x", expand=True, padx=(10, 0))
+        self.update_manual_context_banner()
 
         # Load icons for buttons
         try:
@@ -863,12 +896,27 @@ class YTShortClipperApp(ctk.CTk):
             self.process_selected_highlights,  # Process callback
         )
 
+    def create_campaigns_page(self):
+        """Create campaigns dashboard as the new root page."""
+        self.pages["campaigns"] = CampaignsPage(
+            self.container,
+            self.get_campaign_dashboard_records,
+            self.create_campaign,
+            self.rename_campaign,
+            self.open_campaign,
+            self.archive_campaign,
+            self.start_manual_session,
+            lambda: self.show_page("session_browser"),
+            lambda: self.show_page("browse"),
+            lambda: self.show_page("settings"),
+        )
+
     def create_session_browser_page(self):
         """Create session browser page as embedded frame"""
         self.pages["session_browser"] = SessionBrowserPage(
             self.container,
             self.config,
-            lambda: self.show_page("home"),  # Back to home
+            self.show_campaigns_page,
             self.resume_session,  # Resume callback
             self,  # Pass app reference
         )
@@ -891,7 +939,7 @@ class YTShortClipperApp(ctk.CTk):
             self.container,
             self.config,
             self.on_settings_saved,
-            lambda: self.show_page("home"),
+            self.show_campaigns_page,
             OUTPUT_DIR,
             self.check_update_manual,
         )
@@ -903,14 +951,14 @@ class YTShortClipperApp(ctk.CTk):
             lambda: self.client,
             lambda: self.config,
             lambda: (self.youtube_connected, self.youtube_channel),
-            lambda: self.show_page("home"),
+            self.show_campaigns_page,
             self.refresh_icon,
         )
 
     def create_lib_status_page(self):
         """Create library status page as embedded frame"""
         self.pages["lib_status"] = LibStatusPage(
-            self.container, lambda: self.show_page("home"), self.refresh_icon
+            self.container, self.show_campaigns_page, self.refresh_icon
         )
 
     def create_browse_page(self):
@@ -919,7 +967,7 @@ class YTShortClipperApp(ctk.CTk):
             self.container,
             self.config,
             self.client,
-            lambda: self.show_page("home"),
+            self.show_campaigns_page,
             self.refresh_icon,
             self.get_youtube_client,
         )
@@ -929,8 +977,181 @@ class YTShortClipperApp(ctk.CTk):
         self.pages["contact"] = ContactPage(
             self.container,
             lambda: self.config.get("installation_id", "unknown"),
-            lambda: self.show_page("home"),
+            self.show_campaigns_page,
         )
+
+    def show_campaigns_page(self):
+        """Show the campaigns dashboard root page."""
+        self.show_page("campaigns")
+
+    def set_active_campaign(self, campaign: dict | None = None):
+        """Store the currently opened campaign context for the manual flow."""
+        if isinstance(campaign, dict):
+            self.active_campaign_id = campaign.get("id")
+            self.active_campaign_name = campaign.get("name")
+        else:
+            self.active_campaign_id = None
+            self.active_campaign_name = None
+
+        self.update_manual_context_banner()
+
+    def update_manual_context_banner(self):
+        """Refresh the manual intake banner based on active campaign context."""
+        if not hasattr(self, "manual_context_label"):
+            return
+
+        if self.active_campaign_name:
+            self.manual_context_label.configure(
+                text=(
+                    f"Campaign context: {self.active_campaign_name} "
+                    "• current open action routes into the manual intake flow"
+                ),
+                text_color=("#3B8ED0", "#74B9FF"),
+            )
+        else:
+            self.manual_context_label.configure(
+                text="Manual one-off session • not linked to a campaign",
+                text_color="gray",
+            )
+
+    def start_manual_session(self):
+        """Open the existing manual intake flow with no campaign context."""
+        self.set_active_campaign(None)
+        self.show_page("home")
+
+    def create_campaign(self):
+        """Prompt for a new campaign name and persist its manifest."""
+        name = simpledialog.askstring(
+            "Add Campaign",
+            "Campaign name:",
+            parent=self,
+        )
+        if name is None:
+            return False
+
+        campaign_name = name.strip()
+        if not campaign_name:
+            messagebox.showerror("Add Campaign", "Campaign name cannot be empty.")
+            return False
+
+        campaign = self.config.create_campaign(campaign_name)
+        self.set_active_campaign(campaign)
+        return campaign
+
+    def rename_campaign(self, campaign_id: str):
+        """Rename an existing campaign manifest."""
+        campaign = self.config.get_campaign(campaign_id)
+        if not campaign:
+            messagebox.showerror(
+                "Rename Campaign", "Campaign manifest could not be found."
+            )
+            return False
+
+        new_name = simpledialog.askstring(
+            "Rename Campaign",
+            "New campaign name:",
+            initialvalue=campaign.get("name", ""),
+            parent=self,
+        )
+        if new_name is None:
+            return False
+
+        new_name = new_name.strip()
+        if not new_name:
+            messagebox.showerror("Rename Campaign", "Campaign name cannot be empty.")
+            return False
+
+        updated = self.config.rename_campaign(campaign_id, new_name)
+        if self.active_campaign_id == campaign_id:
+            self.set_active_campaign(updated)
+        return updated
+
+    def archive_campaign(self, campaign_id: str):
+        """Archive a selected active campaign manifest."""
+        campaign = self.config.get_campaign(campaign_id)
+        if not campaign:
+            messagebox.showerror(
+                "Archive Campaign", "Campaign manifest could not be found."
+            )
+            return False
+
+        if campaign.get("status") == "archived":
+            return False
+
+        if not messagebox.askyesno(
+            "Archive Campaign",
+            f"Archive '{campaign.get('name', 'this campaign')}'?\n\n"
+            "The manifest will stay on disk and remain visible in the dashboard.",
+            parent=self,
+        ):
+            return False
+
+        updated = self.config.archive_campaign(campaign_id)
+        if self.active_campaign_id == campaign_id:
+            self.set_active_campaign(updated)
+        return updated
+
+    def open_campaign(self, campaign_id: str):
+        """Open a campaign into the current manual intake flow."""
+        campaign = self.config.get_campaign(campaign_id)
+        if not campaign:
+            messagebox.showerror(
+                "Open Campaign", "Campaign manifest could not be found."
+            )
+            return False
+
+        self.set_active_campaign(campaign)
+        self.show_page("home")
+        return True
+
+    def get_campaign_dashboard_records(self) -> list[dict]:
+        """Return dashboard-ready campaign records with lightweight session summary."""
+        from utils.storage import LEGACY_CAMPAIGN_ID, discover_sessions
+
+        campaigns = [campaign.copy() for campaign in self.config.list_campaigns()]
+        output_dir = Path(self.config.get("output_dir", OUTPUT_DIR))
+        session_summary = {}
+
+        for session_record in discover_sessions(output_dir):
+            campaign_id = session_record.get("campaign_id")
+            if not campaign_id or campaign_id == LEGACY_CAMPAIGN_ID:
+                continue
+
+            summary = session_summary.setdefault(
+                campaign_id,
+                {
+                    "session_count": 0,
+                    "completed_session_count": 0,
+                    "failed_session_count": 0,
+                    "last_activity": None,
+                },
+            )
+            summary["session_count"] += 1
+
+            status = session_record.get("data", {}).get("status")
+            if status == "completed":
+                summary["completed_session_count"] += 1
+            if status in {"failed", "partial"}:
+                summary["failed_session_count"] += 1
+
+            created_at = session_record.get("data", {}).get("created_at")
+            if created_at and (
+                not summary["last_activity"] or created_at > summary["last_activity"]
+            ):
+                summary["last_activity"] = created_at
+
+        for campaign in campaigns:
+            summary = session_summary.get(campaign.get("id"), {})
+            campaign["session_count"] = summary.get("session_count", 0)
+            campaign["completed_session_count"] = summary.get(
+                "completed_session_count", 0
+            )
+            campaign["failed_session_count"] = summary.get("failed_session_count", 0)
+            campaign["last_activity"] = summary.get("last_activity") or campaign.get(
+                "updated_at"
+            )
+
+        return campaigns
 
     def load_config(self):
         self._hydrate_provider_runtime(update_ui=True)
