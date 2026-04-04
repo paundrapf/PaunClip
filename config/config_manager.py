@@ -543,6 +543,25 @@ class ConfigManager:
         self._sync_campaign_catalog(self.list_campaigns())
         return updated
 
+    def update_campaign(self, campaign_id: str, **changes) -> dict:
+        """Update an existing campaign manifest with additive field changes."""
+        campaign = self.get_campaign(campaign_id)
+        if not campaign:
+            raise FileNotFoundError(f"Campaign not found: {campaign_id}")
+
+        for key, value in changes.items():
+            if key == "sync_state" and isinstance(value, dict):
+                sync_state = campaign.get("sync_state", {}).copy()
+                sync_state.update(value)
+                campaign["sync_state"] = sync_state
+            else:
+                campaign[key] = value
+
+        campaign["updated_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
+        updated = self._write_campaign_manifest(campaign)
+        self._sync_campaign_catalog(self.list_campaigns())
+        return updated
+
     def get(self, key, default=None):
         """Get configuration value"""
         return self.config.get(key, default)

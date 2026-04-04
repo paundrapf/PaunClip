@@ -27,7 +27,23 @@ from utils.helpers import (
     get_ytdlp_path,
     extract_video_id,
 )
+from utils.campaign_queue import (
+    build_deterministic_session_id,
+    build_session_source,
+    fetch_channel_videos,
+    find_existing_video_session,
+    get_deterministic_session_dir,
+    load_channel_fetch_record,
+    merge_fetched_videos,
+    normalize_queue_status,
+    queue_all_new_videos,
+    save_channel_fetch_record,
+    sync_queue_with_sessions,
+    update_queue_video,
+    utc_now_iso,
+)
 from utils.logger import debug_log, setup_error_logging, log_error, get_error_log_path
+from utils.storage import load_session_manifest, write_session_manifest
 from config.config_manager import ConfigManager
 from dialogs.model_selector import SearchableModelDropdown
 from dialogs.youtube_upload import YouTubeUploadDialog
@@ -35,6 +51,7 @@ from dialogs.terms_of_service import TermsOfServiceDialog
 from components.progress_step import ProgressStep
 from pages.settings_page import SettingsPage
 from pages.campaigns_page import CampaignsPage
+from pages.campaign_detail_page import CampaignDetailPage
 from pages.browse_page import BrowsePage
 from pages.results_page import ResultsPage
 from pages.status_pages import APIStatusPage, LibStatusPage
@@ -110,6 +127,7 @@ class YTShortClipperApp(ctk.CTk):
 
         self.pages = {}
         self.create_campaigns_page()
+        self.create_campaign_detail_page()
         self.create_home_page()
         self.create_processing_page()
         self.create_clipping_page()
@@ -911,6 +929,21 @@ class YTShortClipperApp(ctk.CTk):
             lambda: self.show_page("settings"),
         )
 
+    def create_campaign_detail_page(self):
+        """Create the campaign detail queue page."""
+        self.pages["campaign_detail"] = CampaignDetailPage(
+            self.container,
+            self.get_campaign_detail_state,
+            self.show_campaigns_page,
+            self.fetch_active_campaign_videos,
+            self.queue_all_active_campaign_videos,
+            self.queue_active_campaign_video,
+            self.process_active_campaign_video,
+            self.skip_active_campaign_video,
+            self.retry_active_campaign_video,
+            self.open_active_campaign_video_session,
+        )
+
     def create_session_browser_page(self):
         """Create session browser page as embedded frame"""
         self.pages["session_browser"] = SessionBrowserPage(
@@ -1092,7 +1125,7 @@ class YTShortClipperApp(ctk.CTk):
         return updated
 
     def open_campaign(self, campaign_id: str):
-        """Open a campaign into the current manual intake flow."""
+        """Open a campaign into the campaign detail queue page."""
         campaign = self.config.get_campaign(campaign_id)
         if not campaign:
             messagebox.showerror(
@@ -1101,7 +1134,7 @@ class YTShortClipperApp(ctk.CTk):
             return False
 
         self.set_active_campaign(campaign)
-        self.show_page("home")
+        self.show_page("campaign_detail")
         return True
 
     def get_campaign_dashboard_records(self) -> list[dict]:
@@ -1152,6 +1185,313 @@ class YTShortClipperApp(ctk.CTk):
             )
 
         return campaigns
+
+    def get_campaign_detail_state(self) -> dict:
+        """Return current campaign + queue state for the detail page."""
+        campaign = self.get_active_campaign_record()
+        if not campaign:
+            return {"campaign": None, "channel_fetch": {"videos": []}, "num_clips": 5}
+
+        channel_fetch = self.load_campaign_queue_snapshot(campaign, persist=True)
+        return {
+            "campaign": campaign,
+            "channel_fetch": channel_fetch,
+            "num_clips": self.get_default_clip_count(),
+        }
+
+    def get_active_campaign_record(self) -> dict | None:
+        """Load the active campaign manifest from canonical storage."""
+        if not self.active_campaign_id:
+            return None
+        return self.config.get_campaign(self.active_campaign_id)
+
+    def get_output_dir_path(self) -> Path:
+        """Return the configured output directory as a Path."""
+        return Path(self.config.get("output_dir", OUTPUT_DIR))
+
+    def get_default_clip_count(self) -> int:
+        """Return the current manual clip count with a safe default."""
+        if hasattr(self, "clips_var"):
+            try:
+                count = int(self.clips_var.get())
+                if 1 <= count <= 10:
+                    return count
+            except Exception:
+                pass
+        return 5
+
+    def load_campaign_queue_snapshot(
+        self, campaign: dict, persist: bool = False
+    ) -> dict:
+        """Load and session-sync the persisted channel queue snapshot."""
+        output_dir = self.get_output_dir_path()
+        loaded = load_channel_fetch_record(output_dir, campaign)
+        synced = sync_queue_with_sessions(output_dir, campaign, loaded)
+        if persist or synced != loaded:
+            save_channel_fetch_record(output_dir, campaign, synced)
+        return synced
+
+    def save_campaign_queue_snapshot(self, campaign: dict, snapshot: dict) -> dict:
+        """Persist queue state and keep session-derived status fields refreshed."""
+        output_dir = self.get_output_dir_path()
+        synced = sync_queue_with_sessions(output_dir, campaign, snapshot)
+        save_channel_fetch_record(output_dir, campaign, synced)
+        return synced
+
+    def get_campaign_queue_video(
+        self, campaign: dict, video_id: str
+    ) -> tuple[dict, dict] | tuple[None, dict]:
+        """Return one queue video row plus the current snapshot."""
+        snapshot = self.load_campaign_queue_snapshot(campaign, persist=True)
+        for video in snapshot.get("videos", []):
+            if video.get("video_id") == video_id:
+                return video, snapshot
+        return None, snapshot
+
+    def fetch_active_campaign_videos(self):
+        """Fetch latest public channel videos into the persisted campaign queue."""
+        campaign = self.get_active_campaign_record()
+        if not campaign:
+            messagebox.showerror("Fetch Channel", "No active campaign is selected.")
+            return
+
+        if not campaign.get("channel_url"):
+            channel_url = simpledialog.askstring(
+                "Channel URL",
+                "Enter the YouTube channel URL for this campaign:",
+                initialvalue="https://www.youtube.com/@",
+                parent=self,
+            )
+            if not channel_url:
+                return
+            campaign = self.config.update_campaign(
+                campaign["id"],
+                channel_url=channel_url.strip(),
+                sync_state={"last_error": None},
+            )
+            self.set_active_campaign(campaign)
+
+        detail_page = self.pages.get("campaign_detail")
+        if detail_page:
+            detail_page.fetch_btn.configure(state="disabled", text="Fetching...")
+
+        def worker():
+            try:
+                fetched = fetch_channel_videos(
+                    campaign.get("channel_url", ""),
+                    ytdlp_path=self.ytdlp_path,
+                )
+                updated_campaign = self.config.update_campaign(
+                    campaign["id"],
+                    channel_id=fetched.get("channel_id")
+                    or campaign.get("channel_id", ""),
+                    sync_state={"last_synced_at": utc_now_iso(), "last_error": None},
+                )
+                snapshot = self.load_campaign_queue_snapshot(
+                    updated_campaign, persist=False
+                )
+                snapshot["channel_id"] = fetched.get("channel_id") or snapshot.get(
+                    "channel_id", ""
+                )
+                snapshot["fetched_at"] = utc_now_iso()
+                snapshot["last_error"] = None
+                snapshot["videos"] = merge_fetched_videos(
+                    snapshot.get("videos", []), fetched.get("videos", [])
+                )
+                self.save_campaign_queue_snapshot(updated_campaign, snapshot)
+                self.after(
+                    0,
+                    lambda c=updated_campaign: self._after_campaign_queue_change(c),
+                )
+            except Exception as e:
+                updated_campaign = self.config.update_campaign(
+                    campaign["id"],
+                    sync_state={"last_error": str(e)},
+                )
+                snapshot = self.load_campaign_queue_snapshot(
+                    updated_campaign, persist=False
+                )
+                snapshot["last_error"] = str(e)
+                self.save_campaign_queue_snapshot(updated_campaign, snapshot)
+                self.after(
+                    0,
+                    lambda err=str(e),
+                    c=updated_campaign: self._on_campaign_fetch_error(c, err),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _after_campaign_queue_change(self, campaign: dict | None = None):
+        """Refresh active campaign state after queue changes."""
+        if campaign:
+            self.set_active_campaign(campaign)
+        if "campaign_detail" in self.pages:
+            self.pages["campaign_detail"].refresh_from_state()
+
+    def _on_campaign_fetch_error(self, campaign: dict, error_text: str):
+        """Restore fetch UI state and surface the error."""
+        self._after_campaign_queue_change(campaign)
+        detail_page = self.pages.get("campaign_detail")
+        if detail_page:
+            detail_page.fetch_btn.configure(text="Fetch Latest Videos")
+        messagebox.showerror(
+            "Fetch Channel", f"Failed to fetch channel videos.\n\n{error_text}"
+        )
+
+    def queue_all_active_campaign_videos(self):
+        """Queue every newly fetched campaign video."""
+        campaign = self.get_active_campaign_record()
+        if not campaign:
+            return
+        snapshot = self.load_campaign_queue_snapshot(campaign, persist=False)
+        updated = queue_all_new_videos(snapshot)
+        self.save_campaign_queue_snapshot(campaign, updated)
+        self._after_campaign_queue_change(campaign)
+
+    def queue_active_campaign_video(self, video_id: str):
+        """Queue a single fetched campaign video."""
+        campaign = self.get_active_campaign_record()
+        if not campaign:
+            return
+        snapshot = self.load_campaign_queue_snapshot(campaign, persist=False)
+        updated = update_queue_video(
+            snapshot,
+            video_id,
+            status="queued",
+            last_error=None,
+        )
+        self.save_campaign_queue_snapshot(campaign, updated)
+        self._after_campaign_queue_change(campaign)
+
+    def skip_active_campaign_video(self, video_id: str):
+        """Mark a queued/fetched video as skipped."""
+        campaign = self.get_active_campaign_record()
+        if not campaign:
+            return
+        snapshot = self.load_campaign_queue_snapshot(campaign, persist=False)
+        updated = update_queue_video(
+            snapshot,
+            video_id,
+            status="skipped",
+            last_error=None,
+        )
+        self.save_campaign_queue_snapshot(campaign, updated)
+        self._after_campaign_queue_change(campaign)
+
+    def retry_active_campaign_video(self, video_id: str):
+        """Retry a previously failed or skipped queue row."""
+        campaign = self.get_active_campaign_record()
+        if not campaign:
+            return
+        snapshot = self.load_campaign_queue_snapshot(campaign, persist=False)
+        updated = update_queue_video(
+            snapshot,
+            video_id,
+            status="queued",
+            last_error=None,
+        )
+        self.save_campaign_queue_snapshot(campaign, updated)
+        self.process_active_campaign_video(video_id)
+
+    def open_active_campaign_video_session(self, video_id: str):
+        """Open an existing session for a fetched video, or process it if missing."""
+        campaign = self.get_active_campaign_record()
+        if not campaign:
+            return
+        video, _snapshot = self.get_campaign_queue_video(campaign, video_id)
+        if not video:
+            messagebox.showerror("Open Session", "Queue item could not be found.")
+            return
+
+        existing = find_existing_video_session(
+            self.get_output_dir_path(), campaign.get("id", ""), video
+        )
+        if existing and existing.get("data"):
+            self.resume_session(existing["data"].copy())
+            return
+
+        self.process_active_campaign_video(video_id)
+
+    def process_active_campaign_video(self, video_id: str):
+        """Create or resume a deterministic session for one queued campaign video."""
+        if self.processing:
+            messagebox.showinfo(
+                "Campaign Queue",
+                "Another processing job is still running. Wait for it to finish first.",
+            )
+            return
+
+        campaign = self.get_active_campaign_record()
+        if not campaign:
+            messagebox.showerror("Campaign Queue", "No active campaign is selected.")
+            return
+
+        video, snapshot = self.get_campaign_queue_video(campaign, video_id)
+        if not video:
+            messagebox.showerror("Campaign Queue", "Queue item could not be found.")
+            return
+
+        existing = find_existing_video_session(
+            self.get_output_dir_path(), campaign.get("id", ""), video
+        )
+        if existing and existing.get("data", {}).get("highlights"):
+            updated = update_queue_video(
+                snapshot,
+                video_id,
+                status=normalize_queue_status(
+                    existing["data"].get("status") or existing["data"].get("stage")
+                ),
+                last_error=existing["data"].get("last_error"),
+                session_id=existing["data"].get("session_id")
+                or existing["session_dir"].name,
+                session_dir=str(existing["session_dir"]),
+            )
+            self.save_campaign_queue_snapshot(campaign, updated)
+            self.resume_session(existing["data"].copy())
+            return
+
+        if not self.client and not self._hydrate_provider_runtime(update_ui=True):
+            messagebox.showerror(
+                "Campaign Queue",
+                "Configure Highlight Finder first in Settings before processing queue items.",
+            )
+            return
+
+        self.processing = True
+        self.cancelled = False
+        self.token_usage = {
+            "gpt_input": 0,
+            "gpt_output": 0,
+            "whisper_seconds": 0,
+            "tts_chars": 0,
+        }
+        self.pages["processing"].reset_ui()
+        self.pages["processing"].switch_to_standard_mode(
+            "Downloading Video & Subtitles"
+        )
+        self.steps = self.pages["processing"].steps
+        self.show_page("processing")
+
+        deterministic_session_dir = get_deterministic_session_dir(
+            self.get_output_dir_path(), campaign.get("id", ""), video
+        )
+        queued_snapshot = update_queue_video(
+            snapshot,
+            video_id,
+            status="queued",
+            last_error=None,
+            session_id=build_deterministic_session_id(video),
+            session_dir=str(deterministic_session_dir),
+        )
+        self.save_campaign_queue_snapshot(campaign, queued_snapshot)
+
+        output_dir = str(self.get_output_dir_path())
+        model = self._get_effective_highlight_model()
+        threading.Thread(
+            target=self.run_campaign_queue_processing,
+            args=(campaign, video, output_dir, model),
+            daemon=True,
+        ).start()
 
     def load_config(self):
         self._hydrate_provider_runtime(update_ui=True)
@@ -2310,6 +2650,314 @@ class YTShortClipperApp(ctk.CTk):
                 self.after(0, self.on_cancelled)
             else:
                 self.after(0, lambda: self.on_error(error_msg))
+
+    def run_campaign_queue_processing(
+        self, campaign: dict, video: dict, output_dir, model
+    ):
+        """Process one fetched campaign video into a deterministic session."""
+        try:
+            from clipper_core import AutoClipperCore
+
+            def log_with_debug(msg):
+                debug_log(msg)
+                self.after(0, lambda: self.update_status(msg))
+
+            ai_providers = self.config.get("ai_providers", {})
+            highlight_finder = ai_providers.get("highlight_finder", {})
+            system_prompt = highlight_finder.get("system_message") or self.config.get(
+                "system_prompt", None
+            )
+            temperature = self.config.get("temperature", 1.0)
+
+            core = AutoClipperCore(
+                client=self.client,
+                ffmpeg_path=get_ffmpeg_path(),
+                ytdlp_path=get_ytdlp_path(),
+                output_dir=output_dir,
+                model=model,
+                temperature=temperature,
+                system_prompt=system_prompt,
+                ai_providers=self.provider_router.build_runtime_provider_configs()
+                if self.provider_router
+                else self.config.get("ai_providers"),
+                provider_router=self.provider_router,
+                provider_snapshot=self.provider_snapshot,
+                subtitle_language="id",
+                log_callback=log_with_debug,
+                progress_callback=lambda s, p: self.after(
+                    0, lambda: self.update_progress(s, p)
+                ),
+                token_callback=lambda a, b, c, d: self.after(
+                    0, lambda: self.update_tokens(a, b, c, d)
+                ),
+                cancel_check=lambda: self.cancelled,
+            )
+
+            session_data = self._run_campaign_phase_one(core, campaign, video)
+            if not self.cancelled and session_data:
+                self.session_data = session_data
+                self.after(
+                    0,
+                    lambda c=campaign,
+                    vid=video.get("video_id", ""),
+                    data=session_data: self._on_campaign_processing_complete(
+                        c, vid, data
+                    ),
+                )
+            elif self.cancelled:
+                self.after(0, self.on_cancelled)
+
+        except Exception as e:
+            error_msg = str(e)
+            debug_log(f"ERROR: {error_msg}")
+            log_error(
+                f"Campaign queue processing failed for {video.get('video_url', '')}",
+                e,
+            )
+            self.after(
+                0,
+                lambda c=campaign,
+                vid=video.get("video_id", ""),
+                err=error_msg: self._on_campaign_processing_failed(c, vid, err),
+            )
+
+    def _run_campaign_phase_one(self, core, campaign: dict, video: dict) -> dict | None:
+        """Run deterministic phase-1 creation for a fetched channel video."""
+        session_dir = get_deterministic_session_dir(
+            self.get_output_dir_path(), campaign.get("id", ""), video
+        )
+        source = build_session_source(campaign.get("channel_url", ""), video)
+        video_info = {
+            "title": video.get("title", "Untitled Video"),
+            "description": "",
+            "channel": video.get("channel_name", ""),
+        }
+
+        self._write_campaign_session_manifest(
+            session_dir,
+            campaign,
+            video,
+            source,
+            status="queued",
+            video_info=video_info,
+            last_error=None,
+        )
+        self.after(
+            0,
+            lambda c=campaign,
+            vid=video.get("video_id", ""),
+            sid=session_dir.name,
+            sdir=str(session_dir): self._update_campaign_queue_row(
+                c,
+                vid,
+                status="queued",
+                session_id=sid,
+                session_dir=sdir,
+                last_error=None,
+            ),
+        )
+
+        self.after(
+            0,
+            lambda c=campaign,
+            vid=video.get("video_id", ""),
+            sid=session_dir.name,
+            sdir=str(session_dir): self._update_campaign_queue_row(
+                c,
+                vid,
+                status="downloading",
+                session_id=sid,
+                session_dir=sdir,
+                last_error=None,
+            ),
+        )
+        self._write_campaign_session_manifest(
+            session_dir,
+            campaign,
+            video,
+            source,
+            status="downloading",
+            video_info=video_info,
+            last_error=None,
+        )
+
+        video_path, srt_path, downloaded_info = core.download_video(
+            video.get("video_url", "")
+        )
+        video_info.update(downloaded_info or {})
+        if self.cancelled:
+            return None
+
+        if srt_path:
+            self.after(
+                0,
+                lambda: self.update_progress("Finding highlights with AI...", 0.6),
+            )
+            transcript = core.parse_srt(srt_path)
+            highlights = core.find_highlights(
+                transcript, video_info, self.get_default_clip_count()
+            )
+            if not highlights:
+                raise Exception(
+                    "❌ No valid highlights found!\n\n"
+                    "Possible causes:\n"
+                    "1. AI model failed to generate highlights\n"
+                    "2. Video transcript too short or not suitable\n"
+                    "3. AI model configuration issue"
+                )
+            manifest = self._write_campaign_session_manifest(
+                session_dir,
+                campaign,
+                video,
+                source,
+                status="highlights_found",
+                video_info=video_info,
+                video_path=video_path,
+                srt_path=srt_path,
+                highlights=highlights,
+                transcription_method="subtitle",
+                last_error=None,
+            )
+        else:
+            self.after(
+                0,
+                lambda c=campaign,
+                vid=video.get("video_id", ""): self._update_campaign_queue_row(
+                    c,
+                    vid,
+                    status="transcribing",
+                    last_error=None,
+                ),
+            )
+            self._write_campaign_session_manifest(
+                session_dir,
+                campaign,
+                video,
+                source,
+                status="transcribing",
+                video_info=video_info,
+                video_path=video_path,
+                srt_path="",
+                highlights=[],
+                last_error=None,
+            )
+            manifest = core.find_highlights_with_transcription(
+                video_path,
+                video_info,
+                self.get_default_clip_count(),
+                session_dir=str(session_dir),
+                campaign_id=campaign.get("id"),
+            )
+            manifest["campaign_name"] = campaign.get("name")
+            manifest["source"] = source
+            manifest["last_error"] = None
+            write_session_manifest(session_dir, manifest)
+
+        return load_session_manifest(session_dir / "session_data.json")
+
+    def _write_campaign_session_manifest(
+        self,
+        session_dir: Path,
+        campaign: dict,
+        video: dict,
+        source: dict,
+        *,
+        status: str,
+        video_info: dict,
+        video_path: str = "",
+        srt_path: str = "",
+        highlights: list | None = None,
+        transcription_method: str | None = None,
+        last_error=None,
+    ) -> dict:
+        """Write a minimal deterministic campaign session manifest."""
+        existing = {}
+        manifest_path = session_dir / "session_data.json"
+        if manifest_path.exists():
+            existing = load_session_manifest(manifest_path)
+
+        created_at = existing.get("created_at") or utc_now_iso()
+        manifest = {
+            "session_id": session_dir.name,
+            "session_dir": str(session_dir),
+            "campaign_id": campaign.get("id"),
+            "campaign_name": campaign.get("name"),
+            "source": source,
+            "video_path": video_path or existing.get("video_path", ""),
+            "srt_path": srt_path or existing.get("srt_path", ""),
+            "video_info": video_info or existing.get("video_info", {}),
+            "highlights": highlights
+            if highlights is not None
+            else existing.get("highlights", []),
+            "selected_highlight_ids": existing.get("selected_highlight_ids", []),
+            "clip_jobs": existing.get("clip_jobs", []),
+            "created_at": created_at,
+            "updated_at": utc_now_iso(),
+            "status": status,
+            "stage": status,
+            "transcription_method": transcription_method
+            or existing.get("transcription_method"),
+            "last_error": last_error,
+        }
+        write_session_manifest(session_dir, manifest)
+        return manifest
+
+    def _update_campaign_queue_row(self, campaign: dict, video_id: str, **changes):
+        """Persist one queue row update on the main thread."""
+        snapshot = self.load_campaign_queue_snapshot(campaign, persist=False)
+        updated = update_queue_video(snapshot, video_id, **changes)
+        self.save_campaign_queue_snapshot(campaign, updated)
+        self._after_campaign_queue_change(campaign)
+
+    def _on_campaign_processing_complete(
+        self, campaign: dict, video_id: str, session_data: dict
+    ):
+        """Persist success state and open the resumed session flow."""
+        self._update_campaign_queue_row(
+            campaign,
+            video_id,
+            status=normalize_queue_status(
+                session_data.get("status") or session_data.get("stage")
+            ),
+            session_id=session_data.get("session_id"),
+            session_dir=session_data.get("session_dir"),
+            last_error=None,
+        )
+        self.show_highlight_selection()
+
+    def _on_campaign_processing_failed(
+        self, campaign: dict, video_id: str, error_msg: str
+    ):
+        """Persist failed queue/session state for a deterministic campaign source."""
+        video, _snapshot = self.get_campaign_queue_video(campaign, video_id)
+        if video:
+            session_dir = get_deterministic_session_dir(
+                self.get_output_dir_path(), campaign.get("id", ""), video
+            )
+            source = build_session_source(campaign.get("channel_url", ""), video)
+            self._write_campaign_session_manifest(
+                session_dir,
+                campaign,
+                video,
+                source,
+                status="failed",
+                video_info={
+                    "title": video.get("title", "Untitled Video"),
+                    "description": "",
+                    "channel": video.get("channel_name", ""),
+                },
+                last_error=error_msg,
+            )
+        self._update_campaign_queue_row(
+            campaign,
+            video_id,
+            status="failed",
+            last_error=error_msg,
+        )
+        if self.cancelled or "cancel" in error_msg.lower():
+            self.on_cancelled()
+        else:
+            self.on_error(error_msg)
 
     def show_highlight_selection(self):
         """Show highlight selection page with found highlights"""
