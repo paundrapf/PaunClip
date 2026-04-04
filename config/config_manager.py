@@ -9,6 +9,9 @@ from pathlib import Path
 from utils.storage import get_campaign_manifest_path, get_session_manifest_path
 
 
+USER_PROVIDER_MODES = ("openai_api", "groq_rotate")
+
+
 class ConfigManager:
     """Manages application configuration"""
 
@@ -97,6 +100,7 @@ class ConfigManager:
             "output_dir": str(self.output_dir),
             "system_prompt": AutoClipperCore.get_default_prompt(),
             "installation_id": str(uuid.uuid4()),
+            "provider_mode": "openai_api",
             "ai_providers": self._get_default_ai_providers(),
             "watermark": {
                 "enabled": False,
@@ -124,6 +128,11 @@ class ConfigManager:
         """Ensure ai_providers exists, has defaults, and supports legacy fallback."""
         changed = False
         defaults = self._get_default_ai_providers()
+        provider_mode = str(config.get("provider_mode", "")).strip().lower()
+
+        if provider_mode not in USER_PROVIDER_MODES:
+            config["provider_mode"] = "openai_api"
+            changed = True
 
         if "ai_providers" not in config or not isinstance(config["ai_providers"], dict):
             config["ai_providers"] = {}
@@ -139,6 +148,8 @@ class ConfigManager:
 
             merged = provider_defaults.copy()
             merged.update(provider_config)
+            merged.setdefault("mode", "openai_api")
+            merged.setdefault("strategy", "single")
 
             if provider_key == "hook_maker":
                 hook_base_url = str(merged.get("base_url", "")).lower()
@@ -188,16 +199,22 @@ class ConfigManager:
         """Get default AI provider configuration"""
         return {
             "highlight_finder": {
+                "mode": "openai_api",
+                "strategy": "single",
                 "base_url": "https://api.openai.com/v1",
                 "api_key": "",
                 "model": "gpt-4.1",
             },
             "caption_maker": {
+                "mode": "openai_api",
+                "strategy": "single",
                 "base_url": "https://api.openai.com/v1",
                 "api_key": "",
                 "model": "whisper-1",
             },
             "hook_maker": {
+                "mode": "openai_api",
+                "strategy": "single",
                 "base_url": "https://api.openai.com/v1",
                 "api_key": "",
                 "model": "tts-1",
@@ -206,6 +223,8 @@ class ConfigManager:
                 "tts_speed": 1.0,
             },
             "youtube_title_maker": {
+                "mode": "openai_api",
+                "strategy": "single",
                 "base_url": "https://api.openai.com/v1",
                 "api_key": "",
                 "model": "gpt-4.1",
@@ -296,6 +315,39 @@ class ConfigManager:
                 defaults["tts_speed"] = 1.0
 
         return defaults
+
+    def get_provider_mode(self) -> str:
+        """Get the user-facing provider mode."""
+        provider_mode = (
+            str(self.config.get("provider_mode", "openai_api")).strip().lower()
+        )
+        if provider_mode not in USER_PROVIDER_MODES:
+            return "openai_api"
+        return provider_mode
+
+    def get_runtime_env_lookup_paths(self) -> list[Path]:
+        """Return locked runtime .env lookup paths in precedence order."""
+        app_root = self.config_file.resolve().parent
+        wrapper_root = app_root.parent
+        return [wrapper_root / ".env", app_root / ".env"]
+
+    def build_provider_router(self):
+        """Build the runtime provider router from persisted config and .env data."""
+        from utils.provider_router import ProviderRouter
+
+        ai_providers = {}
+        for provider_key in self._get_default_ai_providers().keys():
+            ai_providers[provider_key] = self.get_ai_provider_config(provider_key)
+
+        return ProviderRouter(
+            ai_providers=ai_providers,
+            provider_mode=self.get_provider_mode(),
+            env_lookup_paths=self.get_runtime_env_lookup_paths(),
+        )
+
+    def get_provider_status_snapshot(self) -> dict:
+        """Return a redacted runtime provider status summary."""
+        return self.build_provider_router().get_runtime_status()
 
     def save(self):
         """Save configuration to file"""

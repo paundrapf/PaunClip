@@ -71,6 +71,8 @@ class YTShortClipperApp(ctk.CTk):
 
         self.config = ConfigManager(CONFIG_FILE, OUTPUT_DIR)
         self.client = None
+        self.provider_router = None
+        self.provider_snapshot = {}
         self.current_thumbnail = None
         self.processing = False
         self.cancelled = False
@@ -931,7 +933,54 @@ class YTShortClipperApp(ctk.CTk):
         )
 
     def load_config(self):
-        self._hydrate_highlight_client(update_ui=True)
+        self._hydrate_provider_runtime(update_ui=True)
+
+    def _hydrate_provider_runtime(self, update_ui: bool = False) -> bool:
+        """Hydrate runtime provider router and primary highlight client."""
+        self.client = None
+        self.provider_snapshot = {}
+
+        try:
+            self.provider_router = self.config.build_provider_router()
+            self.provider_snapshot = self.provider_router.build_provider_snapshot()
+        except Exception:
+            self.provider_router = None
+            if update_ui and hasattr(self, "api_dot"):
+                self.api_dot.configure(text_color="#e74c3c")
+                self.api_status_label.configure(text="Provider error")
+            return False
+
+        if not self.provider_router.is_provider_ready("highlight_finder"):
+            if update_ui and hasattr(self, "api_dot"):
+                self.api_dot.configure(text_color="#e74c3c")
+                mode_label = (
+                    "Groq Rotate"
+                    if self.provider_router.get_user_provider_mode() == "groq_rotate"
+                    else "Not configured"
+                )
+                self.api_status_label.configure(text=mode_label)
+            return False
+
+        try:
+            self.client = self.provider_router.build_client("highlight_finder")
+            highlight_runtime = self.provider_router.get_task_runtime_config(
+                "highlight_finder"
+            )
+            if update_ui and hasattr(self, "api_dot"):
+                self.api_dot.configure(text_color="#27ae60")
+                status_text = (
+                    "Groq Rotate"
+                    if highlight_runtime.get("mode") == "groq_rotate"
+                    else (highlight_runtime.get("model", "")[:15] or "Connected")
+                )
+                self.api_status_label.configure(text=status_text)
+            return True
+        except Exception:
+            self.client = None
+            if update_ui and hasattr(self, "api_dot"):
+                self.api_dot.configure(text_color="#e74c3c")
+                self.api_status_label.configure(text="Invalid runtime")
+            return False
 
     def _get_provider_config(self, provider_key: str) -> dict:
         """Get effective provider config with legacy fallback where supported."""
@@ -952,6 +1001,8 @@ class YTShortClipperApp(ctk.CTk):
 
     def _get_highlight_provider_config(self) -> dict:
         """Get effective Highlight Finder configuration."""
+        if self.provider_router:
+            return self.provider_router.resolve_task_provider("highlight_finder")
         return self._get_provider_config("highlight_finder")
 
     def _get_effective_highlight_model(self) -> str:
@@ -961,32 +1012,7 @@ class YTShortClipperApp(ctk.CTk):
 
     def _hydrate_highlight_client(self, update_ui: bool = False) -> bool:
         """Hydrate runtime Highlight Finder client from persisted provider config."""
-        self.client = None
-        hf_config = self._get_highlight_provider_config()
-        api_key = hf_config.get("api_key", "").strip()
-        base_url = hf_config.get("base_url", "https://api.openai.com/v1").strip()
-        model = hf_config.get("model", "").strip()
-
-        if not api_key:
-            if update_ui and hasattr(self, "api_dot"):
-                self.api_dot.configure(text_color="#e74c3c")
-                self.api_status_label.configure(text="Not configured")
-            return False
-
-        try:
-            self.client = OpenAI(api_key=api_key, base_url=base_url)
-            if update_ui and hasattr(self, "api_dot"):
-                self.api_dot.configure(text_color="#27ae60")
-                self.api_status_label.configure(
-                    text=model[:15] if model else "Connected"
-                )
-            return True
-        except Exception:
-            self.client = None
-            if update_ui and hasattr(self, "api_dot"):
-                self.api_dot.configure(text_color="#e74c3c")
-                self.api_status_label.configure(text="Invalid key")
-            return False
+        return self._hydrate_provider_runtime(update_ui=update_ui)
 
     def check_youtube_status(self):
         """Check YouTube connection status"""
@@ -1031,21 +1057,16 @@ class YTShortClipperApp(ctk.CTk):
         if isinstance(updated_config, dict):
             self.config.config.update(updated_config)
             self.config.save()
-            self._hydrate_highlight_client(update_ui=True)
+            self._hydrate_provider_runtime(update_ui=True)
 
     def get_youtube_client(self):
         """Get OpenAI client for YouTube title generation"""
-        ai_providers = self.config.get("ai_providers", {})
-        yt_config = ai_providers.get("youtube_title_maker", {})
+        if self.provider_router and self.provider_router.is_provider_ready(
+            "youtube_title_maker"
+        ):
+            return self.provider_router.build_client("youtube_title_maker")
 
-        if yt_config.get("api_key"):
-            return OpenAI(
-                api_key=yt_config.get("api_key"),
-                base_url=yt_config.get("base_url", "https://api.openai.com/v1"),
-            )
-        else:
-            # Fallback to main client for backward compatibility
-            return self.client
+        return self.client
 
     def on_url_change(self, *args):
         if self.get_source_mode() != "youtube":
@@ -1452,27 +1473,43 @@ class YTShortClipperApp(ctk.CTk):
                 from openai import OpenAI
 
                 # Validate Highlight Finder (required for all processing)
+                if not self.provider_router:
+                    self._hydrate_provider_runtime(update_ui=False)
+
                 hf_config = self._get_highlight_provider_config()
-                hf_api_key = hf_config.get("api_key", "").strip()
-                hf_base_url = hf_config.get(
-                    "base_url", "https://api.openai.com/v1"
-                ).strip()
                 hf_model = hf_config.get("model", "").strip()
 
-                if not hf_api_key or not hf_model:
-                    self.after(
-                        0,
-                        lambda: self._on_validation_failed(
+                if (
+                    not self.provider_router
+                    or not self.provider_router.is_provider_ready("highlight_finder")
+                ):
+                    mode = (
+                        self.config.get_provider_mode()
+                        if hasattr(self.config, "get_provider_mode")
+                        else "openai_api"
+                    )
+                    if mode == "groq_rotate":
+                        message = (
+                            "Groq Rotate is not runtime-ready!\n\n"
+                            + "No Groq keys were loaded from the locked .env lookup order.\n\n"
+                            + "Expected lookup order:\n"
+                            + "1. 7.Clipper/.env\n2. yt-short-clipper/.env\n3. process environment"
+                        )
+                    else:
+                        message = (
                             "Highlight Finder API is not configured!\n\n"
                             + "This is required to find viral moments in videos.\n\n"
                             + "Please configure it in Settings → AI API Settings → Highlight Finder"
-                        ),
+                        )
+                    self.after(
+                        0,
+                        lambda m=message: self._on_validation_failed(m),
                     )
                     return
 
                 # Test Highlight Finder API
                 try:
-                    hf_client = OpenAI(api_key=hf_api_key, base_url=hf_base_url)
+                    hf_client = self.provider_router.build_client("highlight_finder")
 
                     # Try to list models to verify API key and model availability
                     try:
@@ -1490,9 +1527,6 @@ class YTShortClipperApp(ctk.CTk):
                             )
                             return
                     except Exception as list_error:
-                        # If models.list() fails, the API key might still be valid
-                        # Some providers don't support models.list()
-                        # Just verify the API key is not empty and continue
                         pass
 
                 except Exception as e:
@@ -1530,7 +1564,7 @@ class YTShortClipperApp(ctk.CTk):
         self.start_btn.configure(state="normal", text="Find Highlights")
         source_mode = self.get_source_mode()
 
-        if not self.client and not self._hydrate_highlight_client(update_ui=True):
+        if not self.client and not self._hydrate_provider_runtime(update_ui=True):
             messagebox.showerror(
                 "Error", "Configure API settings first!\nClick ⚙️ button."
             )
@@ -1544,9 +1578,9 @@ class YTShortClipperApp(ctk.CTk):
             messagebox.showerror("Error", "Clips must be 1-10!")
             return
 
-        ai_providers = self.config.get("ai_providers", {})
-        cm_config = ai_providers.get("caption_maker", {})
-        cm_api_key = cm_config.get("api_key", "").strip()
+        cm_ready = self.provider_router and self.provider_router.is_provider_ready(
+            "caption_maker"
+        )
 
         url = self.url_var.get().strip()
         local_video_path = self.local_video_var.get().strip()
@@ -1576,7 +1610,7 @@ class YTShortClipperApp(ctk.CTk):
             # Check if user already knows there's no subtitle (selected AI transcription)
             use_ai_transcription = subtitle_lang == "none"
 
-        if use_ai_transcription and not cm_api_key:
+        if use_ai_transcription and not cm_ready:
             messagebox.showerror(
                 "Error",
                 "Caption Maker is not configured!\n\n"
@@ -1698,7 +1732,11 @@ class YTShortClipperApp(ctk.CTk):
                 credit_watermark_settings=credit_watermark_settings,
                 face_tracking_mode=face_tracking_mode,
                 mediapipe_settings=mediapipe_settings,
-                ai_providers=self.config.get("ai_providers"),
+                ai_providers=self.provider_router.build_runtime_provider_configs()
+                if self.provider_router
+                else self.config.get("ai_providers"),
+                provider_router=self.provider_router,
+                provider_snapshot=self.provider_snapshot,
                 subtitle_language=subtitle_lang,
                 log_callback=log_with_debug,
                 progress_callback=lambda s, p: self.after(
@@ -1839,7 +1877,11 @@ class YTShortClipperApp(ctk.CTk):
                 model=model,
                 temperature=temperature,
                 system_prompt=system_prompt,
-                ai_providers=self.config.get("ai_providers"),
+                ai_providers=self.provider_router.build_runtime_provider_configs()
+                if self.provider_router
+                else self.config.get("ai_providers"),
+                provider_router=self.provider_router,
+                provider_snapshot=self.provider_snapshot,
                 subtitle_language=subtitle_lang,
                 log_callback=log_with_debug,
                 progress_callback=lambda s, p: self.after(
@@ -1921,7 +1963,11 @@ class YTShortClipperApp(ctk.CTk):
                 model=model,
                 temperature=temperature,
                 system_prompt=system_prompt,
-                ai_providers=self.config.get("ai_providers"),
+                ai_providers=self.provider_router.build_runtime_provider_configs()
+                if self.provider_router
+                else self.config.get("ai_providers"),
+                provider_router=self.provider_router,
+                provider_snapshot=self.provider_snapshot,
                 subtitle_language="none",
                 log_callback=log_with_debug,
                 progress_callback=lambda s, p: self.after(
@@ -2189,7 +2235,11 @@ class YTShortClipperApp(ctk.CTk):
                 credit_watermark_settings=credit_watermark_settings,
                 face_tracking_mode=face_tracking_mode,
                 mediapipe_settings=mediapipe_settings,
-                ai_providers=ai_providers,
+                ai_providers=self.provider_router.build_runtime_provider_configs()
+                if self.provider_router
+                else ai_providers,
+                provider_router=self.provider_router,
+                provider_snapshot=self.provider_snapshot,
                 subtitle_language="id",  # Already downloaded
                 log_callback=log_with_debug,
                 progress_callback=lambda s, p: self.after(

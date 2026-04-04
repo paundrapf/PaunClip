@@ -114,6 +114,8 @@ class AutoClipperCore:
         face_tracking_mode: str = "opencv",
         mediapipe_settings: dict = None,
         ai_providers: dict = None,
+        provider_router=None,
+        provider_snapshot: dict = None,
         subtitle_language: str = "id",
         log_callback=None,
         progress_callback=None,
@@ -122,9 +124,30 @@ class AutoClipperCore:
     ):
         # Multi-provider support
         self.ai_providers = ai_providers or {}
+        self.provider_router = provider_router
+        self.provider_snapshot = (
+            copy.deepcopy(provider_snapshot)
+            if isinstance(provider_snapshot, dict)
+            else {}
+        )
 
         # Create separate clients for each provider
-        if self.ai_providers:
+        if self.provider_router:
+            self.highlight_client = self.provider_router.build_client(
+                "highlight_finder"
+            )
+            hf_config = self.provider_router.get_task_runtime_config("highlight_finder")
+            self.model = hf_config.get("model", model)
+
+            self.caption_client = self.provider_router.build_client("caption_maker")
+            cm_config = self.provider_router.get_task_runtime_config("caption_maker")
+            self.whisper_model = cm_config.get("model", "whisper-1")
+
+            self.tts_client = self.provider_router.build_client("hook_maker")
+            hm_config = self.provider_router.get_task_runtime_config("hook_maker")
+            self.tts_model = hm_config.get("model", tts_model)
+            self.hook_maker_config = hm_config.copy()
+        elif self.ai_providers:
             # Highlight Finder client
             hf_config = self.ai_providers.get("highlight_finder", {})
             self.highlight_client = OpenAI(
@@ -159,6 +182,11 @@ class AutoClipperCore:
             self.tts_model = tts_model
             self.whisper_model = "whisper-1"
             self.hook_maker_config = {}
+
+        if not self.provider_snapshot:
+            self.provider_snapshot = self._build_safe_provider_snapshot(
+                self.ai_providers
+            )
 
         # Keep original client for backward compatibility
         self.client = client
@@ -268,6 +296,31 @@ class AutoClipperCore:
             "is_groq_tts": is_groq_tts,
         }
 
+    def _build_safe_provider_snapshot(self, ai_providers: dict | None) -> dict:
+        """Build a manifest-safe provider snapshot with secrets removed."""
+        safe_snapshot = {}
+        providers = ai_providers if isinstance(ai_providers, dict) else {}
+
+        for provider_key in [
+            "highlight_finder",
+            "caption_maker",
+            "hook_maker",
+            "youtube_title_maker",
+        ]:
+            provider_config = providers.get(provider_key, {})
+            if not isinstance(provider_config, dict):
+                safe_snapshot[provider_key] = {}
+                continue
+
+            safe_config = {
+                key: copy.deepcopy(value)
+                for key, value in provider_config.items()
+                if key not in {"api_key", "selected_key_id"}
+            }
+            safe_snapshot[provider_key] = safe_config
+
+        return safe_snapshot
+
     def _build_session_manifest(
         self,
         session_dir: Path,
@@ -303,9 +356,9 @@ class AutoClipperCore:
             "status": status,
             "transcription_method": transcription_method,
             "campaign_id": campaign_id,
-            "provider_snapshot": copy.deepcopy(self.ai_providers)
-            if isinstance(self.ai_providers, dict)
-            else {},
+            "provider_snapshot": copy.deepcopy(self.provider_snapshot)
+            if isinstance(self.provider_snapshot, dict)
+            else self._build_safe_provider_snapshot(self.ai_providers),
             "clip_jobs": clip_jobs if isinstance(clip_jobs, list) else [],
             "last_error": last_error,
         }
@@ -342,6 +395,12 @@ class AutoClipperCore:
 
     def _synthesize_hook_tts_audio(self, hook_text: str) -> str:
         """Generate hook TTS audio using provider-specific settings."""
+        if self.provider_router and self.provider_router.uses_rotation("hook_maker"):
+            self.tts_client = self.provider_router.build_client("hook_maker")
+            self.hook_maker_config = self.provider_router.get_task_runtime_config(
+                "hook_maker"
+            ).copy()
+
         settings = self._get_hook_tts_settings()
         speech_input = hook_text.strip()
 
@@ -363,7 +422,25 @@ class AutoClipperCore:
         self.log(f"  🎙 TTS model: {settings['model']}")
         self.log(f"  🎙 TTS voice: {settings['voice']}")
 
-        tts_response = self.tts_client.audio.speech.create(**request_kwargs)
+        try:
+            tts_response = self.tts_client.audio.speech.create(**request_kwargs)
+            if self.provider_router:
+                self.provider_router.mark_success("hook_maker")
+        except Exception as error:
+            if self.provider_router:
+                lower_error = str(error).lower()
+                if "429" in lower_error or "rate limit" in lower_error:
+                    self.provider_router.mark_rate_limited(
+                        "hook_maker", self._extract_retry_delay_seconds(str(error))
+                    )
+                elif any(
+                    marker in lower_error
+                    for marker in ["401", "403", "invalid", "unauthorized"]
+                ):
+                    self.provider_router.mark_failure("hook_maker", "auth")
+                else:
+                    self.provider_router.mark_failure("hook_maker", "request_failed")
+            raise
 
         file_suffix = f".{settings['response_format']}"
         if file_suffix not in {
@@ -2470,6 +2547,13 @@ Transcript:
                 raise Exception("Cancelled by user")
 
             try:
+                if self.provider_router and self.provider_router.uses_rotation(
+                    "highlight_finder"
+                ):
+                    self.highlight_client = self.provider_router.build_client(
+                        "highlight_finder"
+                    )
+
                 response = self.highlight_client.chat.completions.create(
                     **request_kwargs
                 )
@@ -2499,6 +2583,9 @@ Transcript:
                         0,
                     )
 
+                if self.provider_router:
+                    self.provider_router.mark_success("highlight_finder")
+
                 return response.choices[0].message.content.strip()
             except Exception as error:
                 error_type, retry_after, error_text = (
@@ -2509,6 +2596,10 @@ Transcript:
                     raise HighlightRequestTooLargeError(error_text) from error
 
                 if error_type == "rate_limit":
+                    if self.provider_router:
+                        self.provider_router.mark_rate_limited(
+                            "highlight_finder", retry_after
+                        )
                     if attempt >= max_attempts:
                         raise HighlightRateLimitError(
                             error_text, retry_after
@@ -2525,6 +2616,17 @@ Transcript:
                     ):
                         raise Exception("Cancelled by user")
                     continue
+
+                if self.provider_router:
+                    failure_type = (
+                        "auth"
+                        if any(
+                            marker in error_text.lower()
+                            for marker in ["401", "403", "invalid", "unauthorized"]
+                        )
+                        else "request_failed"
+                    )
+                    self.provider_router.mark_failure("highlight_finder", failure_type)
 
                 raise
 
@@ -3069,7 +3171,7 @@ Candidates:
                     f"Failed to get highlights from AI model.\n\n"
                     f"Error: {str(e)}\n\n"
                     f"Please check:\n"
-                    f"1. API key is valid: {self.highlight_client.api_key[:20]}...\n"
+                    f"1. Provider credentials are valid\n"
                     f"2. Base URL is correct: {self.highlight_client.base_url}\n"
                     f"3. Model exists: {self.model}\n"
                     f"4. You have sufficient credits/quota"
@@ -3080,7 +3182,7 @@ Candidates:
                     f"Failed to get highlights from AI model.\n\n"
                     f"Error: {str(e)}\n\n"
                     f"Please check:\n"
-                    f"1. API key is valid: {self.highlight_client.api_key[:20]}...\n"
+                    f"1. Provider credentials are valid\n"
                     f"2. Base URL is correct: {self.highlight_client.base_url}\n"
                     f"3. Model exists: {self.model}\n"
                     f"4. You have sufficient credits/quota"
