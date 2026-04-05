@@ -103,6 +103,10 @@ class HighlightRateLimitError(Exception):
         self.retry_after = retry_after
 
 
+class PortraitWriterError(Exception):
+    """Raised when portrait video writing cannot be initialized or kept healthy."""
+
+
 class AutoClipperCore:
     """Core processing logic for Auto Clipper"""
 
@@ -498,6 +502,60 @@ class AutoClipperCore:
                 return cmd[:index] + replacement_args + cmd[index + len(encoder_args) :]
 
         return cmd[:]
+
+    def _create_portrait_video_writer(
+        self,
+        temp_video: str,
+        fps: float,
+        out_w: int,
+        out_h: int,
+        context: str,
+        writer_factory=None,
+    ):
+        """Create a portrait VideoWriter and fail fast if it cannot open."""
+        fourcc_factory = getattr(cv2, "VideoWriter_fourcc")
+        fourcc = fourcc_factory(*"mp4v")
+        writer_factory = writer_factory or cv2.VideoWriter
+        writer = writer_factory(temp_video, fourcc, fps, (out_w, out_h))
+
+        if not writer or not getattr(writer, "isOpened", lambda: False)():
+            raise PortraitWriterError(
+                f"{context}: failed to open portrait VideoWriter for '{temp_video}'"
+            )
+
+        return writer
+
+    def _write_portrait_frame(
+        self,
+        writer,
+        frame,
+        frame_idx: int,
+        context: str,
+        failure_count: int,
+        max_failures: int = 3,
+    ) -> int:
+        """Write a portrait frame, escalating repeated failures into one exception."""
+        try:
+            if not getattr(writer, "isOpened", lambda: False)():
+                raise RuntimeError("VideoWriter is no longer open")
+
+            write_result = writer.write(frame)
+            if write_result is False:
+                raise RuntimeError("VideoWriter.write returned False")
+
+            return 0
+        except Exception as error:
+            next_failure_count = failure_count + 1
+            self.log(
+                f"  [WARNING] {context}: failed to write frame {frame_idx} "
+                f"({next_failure_count}/{max_failures}): {error}"
+            )
+            if next_failure_count >= max_failures:
+                raise PortraitWriterError(
+                    f"{context}: portrait writer failed repeatedly at frame "
+                    f"{frame_idx} ({next_failure_count} consecutive failures)"
+                ) from error
+            return next_failure_count
 
     def _should_retry_with_cpu(
         self, error_text: str, encoder_args: list | None
@@ -3587,10 +3645,19 @@ Candidates:
         """Convert landscape to 9:16 portrait with speaker tracking (OpenCV Haar Cascade)"""
 
         cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            raise Exception(f"Failed to open video: {input_path}")
+
         orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        if total_frames == 0 or fps == 0:
+            cap.release()
+            raise Exception(
+                f"Invalid video properties: {total_frames} frames, {fps} fps"
+            )
 
         # Calculate crop dimensions
         target_ratio = 9 / 16
@@ -3631,10 +3698,12 @@ Candidates:
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         temp_video = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
 
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(temp_video, fourcc, fps, (out_w, out_h))
+        out = self._create_portrait_video_writer(
+            temp_video, fps, out_w, out_h, "OpenCV portrait conversion"
+        )
 
         frame_idx = 0
+        write_failure_count = 0
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -3649,7 +3718,13 @@ Candidates:
             resized = cv2.resize(
                 cropped, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4
             )
-            out.write(resized)
+            write_failure_count = self._write_portrait_frame(
+                out,
+                resized,
+                frame_idx,
+                "OpenCV portrait conversion",
+                write_failure_count,
+            )
             frame_idx += 1
 
         cap.release()
@@ -3877,14 +3952,12 @@ Candidates:
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         temp_video = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
 
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(temp_video, fourcc, fps, (out_w, out_h))
-
-        if not out.isOpened():
-            cap.release()
-            raise Exception(f"Failed to create VideoWriter: {temp_video}")
+        out = self._create_portrait_video_writer(
+            temp_video, fps, out_w, out_h, "MediaPipe portrait conversion"
+        )
 
         frame_idx = 0
+        write_failure_count = 0
         while True:
             if self.is_cancelled():
                 cap.release()
@@ -3908,7 +3981,13 @@ Candidates:
             resized = cv2.resize(
                 cropped, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4
             )
-            out.write(resized)
+            write_failure_count = self._write_portrait_frame(
+                out,
+                resized,
+                frame_idx,
+                "MediaPipe portrait conversion",
+                write_failure_count,
+            )
 
             frame_idx += 1
 
@@ -4762,17 +4841,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         temp_video = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
 
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(temp_video, fourcc, fps, (out_w, out_h))
-
-        if not out.isOpened():
-            cap.release()
-            raise Exception(f"Failed to create VideoWriter: {temp_video}")
+        out = self._create_portrait_video_writer(
+            temp_video, fps, out_w, out_h, "OpenCV portrait conversion"
+        )
 
         frame_idx = 0
         last_log_time = 0
         last_frame_time = time.time()
-        import time
+        write_failure_count = 0
 
         while True:
             # Check for cancellation
@@ -4810,11 +4886,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 cropped, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4
             )
 
-            # Write frame with error checking
-            success = out.write(resized)
-            if not success:
-                print(f"[WARNING] Failed to write frame {frame_idx}")
-                sys.stdout.flush()
+            write_failure_count = self._write_portrait_frame(
+                out,
+                resized,
+                frame_idx,
+                "OpenCV portrait conversion",
+                write_failure_count,
+            )
 
             frame_idx += 1
 
@@ -5061,16 +5139,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         temp_video = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
 
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(temp_video, fourcc, fps, (out_w, out_h))
-
-        if not out.isOpened():
-            cap.release()
-            raise Exception(f"Failed to create VideoWriter: {temp_video}")
+        out = self._create_portrait_video_writer(
+            temp_video, fps, out_w, out_h, "MediaPipe portrait conversion"
+        )
 
         frame_idx = 0
         last_log_time = 0
         last_frame_time = time.time()
+        write_failure_count = 0
 
         while True:
             if self.is_cancelled():
@@ -5106,10 +5182,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 cropped, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4
             )
 
-            success = out.write(resized)
-            if not success:
-                print(f"[WARNING] Failed to write frame {frame_idx}")
-                sys.stdout.flush()
+            write_failure_count = self._write_portrait_frame(
+                out,
+                resized,
+                frame_idx,
+                "MediaPipe portrait conversion",
+                write_failure_count,
+            )
 
             frame_idx += 1
 
