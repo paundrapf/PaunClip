@@ -9,6 +9,9 @@ from tkinter import messagebox
 class SessionWorkspacePage(ctk.CTkFrame):
     """Passive workspace shell for one session."""
 
+    GROQ_TTS_VOICES = ["autumn", "diana", "hannah", "austin", "daniel", "troy"]
+    OPENAI_TTS_VOICES = ["nova"]
+
     STATUS_COLORS = {
         "queued": "#95a5a6",
         "metadata_fetched": "#3498db",
@@ -72,6 +75,8 @@ class SessionWorkspacePage(ctk.CTkFrame):
         self.caption_mode_var = ctk.StringVar(value="auto")
         self.watermark_preset_var = ctk.StringVar(value="default")
         self.auto_source_video_var = ctk.BooleanVar(value=True)
+        self.tts_voice_menu = None
+        self.tts_voice_hint_label = None
 
         self.create_ui()
 
@@ -349,13 +354,24 @@ class SessionWorkspacePage(ctk.CTkFrame):
             width=130,
         ).pack(side="left")
 
-        self.tts_voice_entry = ctk.CTkEntry(
+        self.tts_voice_menu = ctk.CTkOptionMenu(
             voice_row,
-            textvariable=self.tts_voice_var,
-            height=32,
-            placeholder_text="nova / autumn / custom",
+            variable=self.tts_voice_var,
+            values=self.OPENAI_TTS_VOICES,
+            command=self.on_editor_option_changed,
         )
-        self.tts_voice_entry.pack(side="left", fill="x", expand=True)
+        self.tts_voice_menu.pack(side="left", fill="x", expand=True)
+
+        self.tts_voice_hint_label = ctk.CTkLabel(
+            clip_overrides_card,
+            text="",
+            font=ctk.CTkFont(size=9),
+            text_color="gray",
+            anchor="w",
+            justify="left",
+            wraplength=440,
+        )
+        self.tts_voice_hint_label.pack(fill="x", padx=12, pady=(0, 8))
 
         caption_row = ctk.CTkFrame(clip_overrides_card, fg_color="transparent")
         caption_row.pack(fill="x", padx=12, pady=(0, 8))
@@ -568,7 +584,6 @@ class SessionWorkspacePage(ctk.CTkFrame):
         self.title_entry.bind("<KeyRelease>", self.on_editor_changed)
         self.description_text.bind("<KeyRelease>", self.on_editor_changed)
         self.hook_text.bind("<KeyRelease>", self.on_editor_changed)
-        self.tts_voice_entry.bind("<KeyRelease>", self.on_editor_changed)
 
     def on_page_shown(self):
         """Refresh workspace whenever it becomes visible."""
@@ -603,6 +618,8 @@ class SessionWorkspacePage(ctk.CTkFrame):
             self.active_highlight_id = workspace_state.get("active_highlight_id")
             self.local_drafts = {}
             self.selected_highlight_ids = set(default_selected)
+
+        self.refresh_tts_voice_control()
 
         self.add_hook_var.set(bool(workspace_state.get("add_hook", True)))
         self.add_captions_var.set(bool(workspace_state.get("add_captions", True)))
@@ -951,6 +968,75 @@ class SessionWorkspacePage(ctk.CTkFrame):
             values.append(normalized)
         return values
 
+    def get_tts_voice_options(self, current_value: str = "") -> list[str]:
+        """Return provider-aware TTS voice options for the workspace editor."""
+        defaults = self.get_workspace_editor_defaults()
+        session = self.state.get("session") or {}
+        provider_snapshot = session.get("provider_snapshot") or {}
+        hook_runtime = provider_snapshot.get("hook_maker") or {}
+        default_voice = str(defaults.get("tts_voice") or "").strip().lower()
+        hook_base_url = str(hook_runtime.get("base_url") or "").strip().lower()
+        hook_model = str(hook_runtime.get("model") or "").strip().lower()
+        is_groq_hook = (
+            "groq" in hook_base_url
+            or "orpheus" in hook_model
+            or default_voice in self.GROQ_TTS_VOICES
+        )
+
+        base_values = self.GROQ_TTS_VOICES if is_groq_hook else self.OPENAI_TTS_VOICES
+        normalized_values = [
+            str(value).strip().lower() for value in base_values if str(value).strip()
+        ]
+        return self.build_option_values(current_value, normalized_values)
+
+    def get_tts_voice_hint(self) -> str:
+        """Return helper text for the active Hook Maker voice path."""
+        defaults = self.get_workspace_editor_defaults()
+        if str(defaults.get("tts_voice") or "").strip().lower() in self.GROQ_TTS_VOICES:
+            return (
+                "Hook Maker is on the Groq / Orpheus path, so the workspace voice "
+                "selector follows the supported Groq voices."
+            )
+
+        session = self.state.get("session") or {}
+        provider_snapshot = session.get("provider_snapshot") or {}
+        hook_runtime = provider_snapshot.get("hook_maker") or {}
+        hook_base_url = str(hook_runtime.get("base_url") or "").strip().lower()
+        hook_model = str(hook_runtime.get("model") or "").strip().lower()
+        if "groq" in hook_base_url or "orpheus" in hook_model:
+            return (
+                "Hook Maker is on the Groq / Orpheus path, so the workspace voice "
+                "selector follows the supported Groq voices."
+            )
+
+        return (
+            "Hook Maker is on the OpenAI-style path, so the workspace voice selector "
+            "follows the default OpenAI voice list."
+        )
+
+    def refresh_tts_voice_control(self, current_value: str | None = None):
+        """Sync the workspace voice selector with provider-aware options."""
+        if self.tts_voice_menu is None:
+            return
+
+        voice_value = (
+            str(
+                current_value
+                if current_value is not None
+                else self.tts_voice_var.get() or ""
+            )
+            .strip()
+            .lower()
+        )
+        voice_options = self.get_tts_voice_options(voice_value)
+        self.tts_voice_menu.configure(values=voice_options)
+
+        next_voice = voice_value if voice_value in voice_options else voice_options[0]
+        self.tts_voice_var.set(next_voice)
+
+        if self.tts_voice_hint_label is not None:
+            self.tts_voice_hint_label.configure(text=self.get_tts_voice_hint())
+
     def load_active_highlight(self):
         """Populate editor controls from the focused highlight."""
         self._loading_editor = True
@@ -1000,7 +1086,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
         self.hook_text.delete("1.0", "end")
         self.hook_text.insert("1.0", payload.get("hook_text", ""))
 
-        self.tts_voice_var.set(
+        self.refresh_tts_voice_control(
             str(payload.get("tts_voice") or defaults.get("tts_voice") or "nova")
         )
 
@@ -1068,7 +1154,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
             "title": self.title_entry.get().strip(),
             "description": self.description_text.get("1.0", "end").strip(),
             "hook_text": self.hook_text.get("1.0", "end").strip(),
-            "tts_voice": self.tts_voice_var.get().strip(),
+            "tts_voice": self.tts_voice_var.get().strip().lower(),
             "caption_mode": self.caption_mode_var.get().strip(),
             "watermark_preset": self.watermark_preset_var.get().strip(),
             "source_credit_enabled": self.auto_source_video_var.get(),

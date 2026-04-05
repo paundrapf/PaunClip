@@ -433,6 +433,19 @@ def build_provider_snapshot(ai_providers: dict | None) -> dict:
     return snapshot
 
 
+def has_provider_snapshot_values(provider_snapshot: dict | None) -> bool:
+    """Return True when the snapshot contains at least one populated provider."""
+    if not isinstance(provider_snapshot, dict):
+        return False
+
+    for provider_key in PROVIDER_SNAPSHOT_KEYS:
+        provider_value = provider_snapshot.get(provider_key)
+        if isinstance(provider_value, dict) and provider_value:
+            return True
+
+    return False
+
+
 def get_campaigns_dir(output_dir: Path | str) -> Path:
     return Path(output_dir) / "campaigns"
 
@@ -598,9 +611,11 @@ def normalize_session_manifest(
         normalized.setdefault("campaign_name", legacy_group["campaign_name"])
 
     normalized["campaign_id"] = campaign_id
-    normalized["provider_snapshot"] = build_provider_snapshot(
-        normalized.get("provider_snapshot")
-    )
+    provider_snapshot_source = normalized.get("provider_snapshot")
+    if not has_provider_snapshot_values(provider_snapshot_source):
+        provider_snapshot_source = normalized.get("ai_providers")
+
+    normalized["provider_snapshot"] = build_provider_snapshot(provider_snapshot_source)
     normalized["workspace_state"] = build_default_workspace_state(
         normalized.get("workspace_state")
     )
