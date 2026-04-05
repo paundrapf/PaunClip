@@ -173,6 +173,16 @@ class SessionBrowserPage(ctk.CTkFrame):
                     anchor="w",
                 ).pack(side="left", padx=(0, 15))
 
+            session_id = session_record.get("session_id") or data.get("session_id")
+            if session_id:
+                ctk.CTkLabel(
+                    info_row,
+                    text=f"🧩 {session_id}",
+                    font=ctk.CTkFont(size=10),
+                    text_color="gray",
+                    anchor="w",
+                ).pack(side="left", padx=(0, 15))
+
             campaign_label = session_record.get("campaign_label") or data.get(
                 "campaign_label"
             )
@@ -247,11 +257,11 @@ class SessionBrowserPage(ctk.CTkFrame):
                 )
                 view_session_btn.pack(side="left", padx=(0, 5))
 
-            # View clips button (if clips exist)
+            # Open output button (if clips exist)
             if has_clips:
                 clips_btn = ctk.CTkButton(
                     action_row,
-                    text="🎬 View Clips",
+                    text="📂 Open Output",
                     height=32,
                     width=120,
                     font=ctk.CTkFont(size=11),

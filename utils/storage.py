@@ -550,6 +550,10 @@ def get_campaign_label(session_data: dict) -> str | None:
     if isinstance(campaign_name, str) and campaign_name.strip():
         return campaign_name.strip()
 
+    campaign_label = session_data.get("campaign_label")
+    if isinstance(campaign_label, str) and campaign_label.strip():
+        return campaign_label.strip()
+
     campaign_id = session_data.get("campaign_id")
     if campaign_id == LEGACY_CAMPAIGN_ID:
         return LEGACY_CAMPAIGN_LABEL

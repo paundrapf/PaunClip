@@ -996,6 +996,7 @@ class YTShortClipperApp(ctk.CTk):
             lambda: self.show_page("home"),
             self.open_output,
             self.get_youtube_client,
+            lambda record: self.open_parent_session(record, origin="results"),
         )
 
     def create_settings_page(self):
@@ -1035,6 +1036,7 @@ class YTShortClipperApp(ctk.CTk):
             self.show_campaigns_page,
             self.refresh_icon,
             self.get_youtube_client,
+            lambda record: self.open_parent_session(record, origin="browse"),
         )
 
     def create_contact_page(self):
@@ -1733,6 +1735,12 @@ class YTShortClipperApp(ctk.CTk):
             return
         if self.session_workspace_origin == "session_browser":
             self.show_page("session_browser")
+            return
+        if self.session_workspace_origin == "results":
+            self.show_page("results")
+            return
+        if self.session_workspace_origin == "browse":
+            self.show_page("browse")
             return
         self.show_page("home")
 
@@ -3660,6 +3668,53 @@ class YTShortClipperApp(ctk.CTk):
         # Show results page
         self.pages["results"].show_results()
         self.show_page("results")
+
+    def open_parent_session(self, record: dict, origin: str = "browse"):
+        """Open a linked parent session from a session or clip record."""
+        if not isinstance(record, dict):
+            messagebox.showinfo(
+                "Session Workspace",
+                "The linked session could not be resolved from this record.",
+            )
+            return
+
+        session_manifest_path = record.get("session_manifest_path")
+        if session_manifest_path:
+            session_manifest_path = Path(session_manifest_path)
+
+        if session_manifest_path is None or not session_manifest_path.exists():
+            session_dir = record.get("session_dir")
+            if session_dir:
+                candidate = Path(session_dir) / "session_data.json"
+                if candidate.exists():
+                    session_manifest_path = candidate
+
+        if session_manifest_path is None or not session_manifest_path.exists():
+            folder = record.get("folder")
+            if folder:
+                folder_path = Path(folder)
+                if folder_path.parent.name == "clips":
+                    candidate = folder_path.parent.parent / "session_data.json"
+                    if candidate.exists():
+                        session_manifest_path = candidate
+
+        if session_manifest_path is None or not session_manifest_path.exists():
+            messagebox.showinfo(
+                "Session Workspace",
+                "No parent session manifest is available for this item.",
+            )
+            return
+
+        try:
+            session_data = load_session_manifest(session_manifest_path)
+        except Exception as exc:
+            messagebox.showerror(
+                "Session Workspace",
+                f"Failed to load the parent session:\n{str(exc)}",
+            )
+            return
+
+        self.resume_session(session_data, origin=origin)
 
     def process_selected_highlights(
         self,
