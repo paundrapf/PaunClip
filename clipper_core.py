@@ -307,18 +307,29 @@ class AutoClipperCore:
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
 
-        crop_positions = []
+        if total_frames <= 0:
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+
+        max_position = max(0, int(orig_w - crop_w))
+        sample_indices = self._build_sparse_analysis_indices(
+            total_frames,
+            float(cap.get(cv2.CAP_PROP_FPS) or 0.0),
+        )
+        if not sample_indices:
+            return []
+
+        sampled_positions = {}
         current_target = orig_w / 2
-        frame_count = 0
         last_log_time = 0.0
 
-        while True:
+        for sample_idx, frame_idx in enumerate(sample_indices, start=1):
             if self.is_cancelled():
                 raise Exception("Cancelled by user")
 
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             if not ret:
-                break
+                continue
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(50, 50))
@@ -328,17 +339,107 @@ class AutoClipperCore:
                 current_target = largest[0] + largest[2] / 2
 
             crop_x = int(current_target - crop_w / 2)
-            crop_x = max(0, min(crop_x, orig_w - crop_w))
-            crop_positions.append(crop_x)
-            frame_count += 1
-
+            crop_x = max(0, min(crop_x, max_position))
+            sampled_positions[int(frame_idx)] = crop_x
             if progress_callback and total_frames > 0:
                 current_time = time.time()
-                if frame_count % 30 == 0 or (current_time - last_log_time) > 2:
-                    progress_callback((frame_count / total_frames) * progress_scale)
+                if sample_idx % 8 == 0 or (current_time - last_log_time) > 2:
+                    progress_callback(
+                        (sample_idx / max(1, len(sample_indices))) * progress_scale
+                    )
                     last_log_time = current_time
 
+        if 0 not in sampled_positions:
+            sampled_positions[0] = max(
+                0, min(int(round(current_target - crop_w / 2)), max_position)
+            )
+        if total_frames > 1 and (total_frames - 1) not in sampled_positions:
+            sampled_positions[total_frames - 1] = max(
+                0, min(int(round(current_target - crop_w / 2)), max_position)
+            )
+
+        crop_positions = self._interpolate_sparse_positions(
+            sampled_positions,
+            total_frames=total_frames,
+            max_position=max_position,
+        )
+
+        if progress_callback and total_frames > 0:
+            progress_callback(progress_scale)
+
+        analyzed_ratio = len(sampled_positions) / max(1, total_frames)
+        self.log(
+            f"  OpenCV sparse analysis: {len(sampled_positions)}/{total_frames} anchor frames ({analyzed_ratio:.1%})"
+        )
         return crop_positions
+
+    def _build_sparse_analysis_indices(
+        self, total_frames: int, fps: float = 30.0
+    ) -> list[int]:
+        """Choose bounded OpenCV analysis anchors for safe sampling."""
+        total_frames = max(0, int(total_frames or 0))
+        if total_frames <= 0:
+            return []
+
+        effective_fps = fps if fps and fps > 0 else 30.0
+        sample_step = max(1, min(24, int(round(effective_fps * 0.4))))
+
+        indices = list(range(0, total_frames, sample_step))
+        if not indices:
+            indices = [0]
+        if indices[-1] != total_frames - 1:
+            indices.append(total_frames - 1)
+        return indices
+
+    def _interpolate_sparse_positions(
+        self,
+        sampled_positions: dict[int, int],
+        *,
+        total_frames: int,
+        max_position: int,
+    ) -> list[int]:
+        """Expand sparse crop anchors into one bounded position per frame."""
+        total_frames = max(0, int(total_frames or 0))
+        if total_frames <= 0:
+            return []
+
+        if not sampled_positions:
+            return [0] * total_frames
+
+        max_position = max(0, int(max_position))
+        sorted_samples = sorted(
+            (
+                max(0, min(int(frame_idx), total_frames - 1)),
+                max(0, min(int(position), max_position)),
+            )
+            for frame_idx, position in sampled_positions.items()
+        )
+
+        positions = [sorted_samples[0][1]] * total_frames
+        previous_frame, previous_position = sorted_samples[0]
+        positions[previous_frame] = previous_position
+
+        for frame_idx, position in sorted_samples[1:]:
+            if frame_idx <= previous_frame:
+                positions[previous_frame] = position
+                previous_frame, previous_position = frame_idx, position
+                continue
+
+            frame_span = frame_idx - previous_frame
+            for current_frame in range(previous_frame, frame_idx + 1):
+                ratio = (current_frame - previous_frame) / frame_span
+                interpolated = (
+                    previous_position + (position - previous_position) * ratio
+                )
+                positions[current_frame] = max(
+                    0, min(int(round(interpolated)), max_position)
+                )
+            previous_frame, previous_position = frame_idx, position
+
+        for current_frame in range(previous_frame, total_frames):
+            positions[current_frame] = previous_position
+
+        return positions
 
     def _load_cached_crop_track(
         self,
