@@ -35,6 +35,7 @@ class CampaignDetailPage(ctk.CTkFrame):
         on_skip_video_callback,
         on_retry_video_callback,
         on_open_session_callback,
+        on_edit_url_callback=None,
     ):
         super().__init__(parent)
         self.get_state = get_state_callback
@@ -46,6 +47,7 @@ class CampaignDetailPage(ctk.CTkFrame):
         self.on_skip_video = on_skip_video_callback
         self.on_retry_video = on_retry_video_callback
         self.on_open_session = on_open_session_callback
+        self.on_edit_url = on_edit_url_callback
 
         self.state = {}
         self.create_ui()
@@ -103,7 +105,7 @@ class CampaignDetailPage(ctk.CTkFrame):
         summary_card.pack(fill="x", padx=20, pady=(0, 10))
 
         self.channel_label = self._add_summary_row(
-            summary_card, "Channel URL", "Not linked yet"
+            summary_card, "Channel URL", "Not linked yet", edit_command=self.on_edit_url
         )
         self.sync_label = self._add_summary_row(
             summary_card, "Last Sync", "Never fetched"
@@ -141,7 +143,9 @@ class CampaignDetailPage(ctk.CTkFrame):
         self.list_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.list_frame.pack(fill="both", expand=True, padx=20, pady=(0, 18))
 
-    def _add_summary_row(self, parent, label: str, initial_value: str):
+    def _add_summary_row(
+        self, parent, label: str, initial_value: str, edit_command=None
+    ):
         row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill="x", padx=14, pady=6)
         ctk.CTkLabel(
@@ -161,6 +165,21 @@ class CampaignDetailPage(ctk.CTkFrame):
             wraplength=520,
         )
         value_label.pack(side="left", fill="x", expand=True)
+
+        if edit_command:
+            ctk.CTkButton(
+                row,
+                text="Edit",
+                width=40,
+                height=20,
+                font=ctk.CTkFont(size=10),
+                fg_color="transparent",
+                border_width=1,
+                border_color="gray",
+                hover_color=("gray75", "gray25"),
+                command=edit_command,
+            ).pack(side="right", padx=(10, 0))
+
         return value_label
 
     def on_page_shown(self):

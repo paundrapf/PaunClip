@@ -974,6 +974,9 @@ class YTShortClipperApp(ctk.CTk):
             self.skip_active_campaign_video,
             self.retry_active_campaign_video,
             self.open_active_campaign_video_session,
+            lambda: self.edit_campaign_url(self.active_campaign_id)
+            if self.active_campaign_id
+            else None,
         )
 
     def create_session_browser_page(self):
@@ -1101,9 +1104,44 @@ class YTShortClipperApp(ctk.CTk):
             messagebox.showerror("Add Campaign", "Campaign name cannot be empty.")
             return False
 
-        campaign = self.config.create_campaign(campaign_name)
+        channel_url = simpledialog.askstring(
+            "Add Campaign",
+            "YouTube Channel URL (optional):",
+            parent=self,
+        )
+        if channel_url is None:
+            return False
+
+        campaign = self.config.create_campaign(campaign_name, channel_url.strip())
         self.set_active_campaign(campaign)
         return campaign
+
+    def edit_campaign_url(self, campaign_id: str):
+        """Edit the channel URL for an existing campaign."""
+        campaign = self.config.get_campaign(campaign_id)
+        if not campaign:
+            messagebox.showerror(
+                "Edit Channel URL", "Campaign manifest could not be found."
+            )
+            return False
+
+        new_url = simpledialog.askstring(
+            "Edit Channel URL",
+            "YouTube Channel URL:",
+            initialvalue=campaign.get("channel_url", ""),
+            parent=self,
+        )
+        if new_url is None:
+            return False
+
+        updated = self.config.update_campaign(campaign_id, channel_url=new_url.strip())
+        if self.active_campaign_id == campaign_id:
+            self.set_active_campaign(updated)
+
+        if hasattr(self, "pages") and "campaign_detail" in self.pages:
+            self.pages["campaign_detail"].refresh_from_state()
+
+        return updated
 
     def rename_campaign(self, campaign_id: str):
         """Rename an existing campaign manifest."""
