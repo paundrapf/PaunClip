@@ -268,6 +268,116 @@ class AutoClipperCore:
         """Get safe CPU encoder arguments."""
         return ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
 
+    def _normalize_tracking_mode(self, tracking_mode: str | None = None) -> str:
+        """Normalize tracking mode names to supported runtime values."""
+        mode = str(tracking_mode or "").strip().lower()
+
+        if mode in {"mediapipe", "media_pipe"}:
+            return "mediapipe"
+        if mode in {"smooth_follow", "smooth", "follow", "fluid"}:
+            return "smooth_follow"
+        return "opencv"
+
+    def _resolve_tracking_mode(
+        self, highlight: dict | None = None, tracking_mode: str | None = None
+    ) -> str:
+        """Resolve the effective tracking mode for one portrait render."""
+        if tracking_mode:
+            return self._normalize_tracking_mode(tracking_mode)
+
+        if isinstance(highlight, dict):
+            editor = highlight.get("editor")
+            if isinstance(editor, dict) and editor.get("tracking_mode"):
+                return self._normalize_tracking_mode(editor.get("tracking_mode"))
+
+        return self._normalize_tracking_mode(self.face_tracking_mode)
+
+    def _analyze_opencv_crop_positions(
+        self,
+        cap,
+        orig_w: int,
+        crop_w: int,
+        *,
+        total_frames: int = 0,
+        progress_callback=None,
+        progress_scale: float = 0.4,
+    ) -> list[int]:
+        """Analyze face positions for OpenCV-based portrait crops."""
+        face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+
+        crop_positions = []
+        current_target = orig_w / 2
+        frame_count = 0
+        last_log_time = 0.0
+
+        while True:
+            if self.is_cancelled():
+                raise Exception("Cancelled by user")
+
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(50, 50))
+
+            if len(faces) > 0:
+                largest = max(faces, key=lambda f: f[2] * f[3])
+                current_target = largest[0] + largest[2] / 2
+
+            crop_x = int(current_target - crop_w / 2)
+            crop_x = max(0, min(crop_x, orig_w - crop_w))
+            crop_positions.append(crop_x)
+            frame_count += 1
+
+            if progress_callback and total_frames > 0:
+                current_time = time.time()
+                if frame_count % 30 == 0 or (current_time - last_log_time) > 2:
+                    progress_callback((frame_count / total_frames) * progress_scale)
+                    last_log_time = current_time
+
+        return crop_positions
+
+    def _smooth_follow_positions(
+        self, positions: list[int], max_position: int, fps: float = 30.0
+    ) -> list[int]:
+        """Generate a more fluid crop path without hard shot locks."""
+        if not positions:
+            return positions
+
+        max_position = max(0, int(max_position))
+        effective_fps = fps if fps and fps > 0 else 30.0
+        smooth_window = max(5, int(round(effective_fps * 0.35)))
+        tail_window = max(3, int(round(effective_fps * 0.18)))
+
+        anchors = []
+        for index in range(len(positions)):
+            start = max(0, index - smooth_window // 2)
+            end = min(len(positions), index + smooth_window // 2 + 1)
+            anchors.append(float(np.median(positions[start:end])))
+
+        followed = [max(0.0, min(float(anchors[0]), max_position))]
+        base_step = max(8.0, min(32.0, max_position * 0.012))
+
+        for anchor in anchors[1:]:
+            previous = followed[-1]
+            delta = anchor - previous
+            eased_delta = delta * 0.28
+            step_limit = min(max_position, base_step + abs(delta) * 0.22)
+            limited_delta = float(np.clip(eased_delta, -step_limit, step_limit))
+            next_position = previous + limited_delta
+            followed.append(max(0.0, min(next_position, max_position)))
+
+        smoothed = []
+        for index in range(len(followed)):
+            start = max(0, index - tail_window + 1)
+            window = followed[start : index + 1]
+            smoothed.append(int(round(np.mean(window))))
+
+        return [max(0, min(position, max_position)) for position in smoothed]
+
     def _get_hook_tts_settings(self) -> dict:
         """Resolve provider-aware Hook Maker TTS settings."""
         hm_config = self.hook_maker_config.copy() if self.hook_maker_config else {}
@@ -3294,6 +3404,7 @@ Candidates:
 
         start = highlight["start_time"].replace(",", ".")
         end = highlight["end_time"].replace(",", ".")
+        tracking_mode = self._resolve_tracking_mode(highlight)
 
         self.log(f"\n[Clip {index}] {highlight['title']}")
 
@@ -3405,6 +3516,7 @@ Candidates:
                 str(cut_file),
                 str(portrait_file),
                 lambda p: clip_progress("Converting to portrait...", current_step, p),
+                tracking_mode=tracking_mode,
             )
             self.log("  ✓ Portrait conversion")
         current_step += 1
@@ -3623,26 +3735,41 @@ Candidates:
             "metadata": metadata,
         }
 
-    def convert_to_portrait(self, input_path: str, output_path: str):
+    def convert_to_portrait(
+        self, input_path: str, output_path: str, tracking_mode: str | None = None
+    ):
         """Convert landscape to 9:16 portrait with speaker tracking (router method)"""
+        mode = self._resolve_tracking_mode(tracking_mode=tracking_mode)
         try:
-            if self.face_tracking_mode == "mediapipe":
+            if mode == "mediapipe":
                 self.log("  Using MediaPipe (Active Speaker Detection)")
                 return self.convert_to_portrait_mediapipe(input_path, output_path)
+            if mode == "smooth_follow":
+                self.log("  Using Smooth Follow (Fluid OpenCV)")
+                return self.convert_to_portrait_opencv(
+                    input_path, output_path, tracking_mode=mode
+                )
             else:
                 self.log("  Using OpenCV (Fast Mode)")
-                return self.convert_to_portrait_opencv(input_path, output_path)
+                return self.convert_to_portrait_opencv(
+                    input_path, output_path, tracking_mode=mode
+                )
         except Exception as e:
             # Fallback to OpenCV if MediaPipe fails
-            if self.face_tracking_mode == "mediapipe":
+            if mode == "mediapipe":
                 self.log(f"  ⚠ MediaPipe failed: {e}")
                 self.log("  Falling back to OpenCV mode...")
-                return self.convert_to_portrait_opencv(input_path, output_path)
+                return self.convert_to_portrait_opencv(
+                    input_path, output_path, tracking_mode="opencv"
+                )
             else:
                 raise
 
-    def convert_to_portrait_opencv(self, input_path: str, output_path: str):
+    def convert_to_portrait_opencv(
+        self, input_path: str, output_path: str, tracking_mode: str | None = None
+    ):
         """Convert landscape to 9:16 portrait with speaker tracking (OpenCV Haar Cascade)"""
+        mode = self._normalize_tracking_mode(tracking_mode)
 
         cap = cv2.VideoCapture(input_path)
         if not cap.isOpened():
@@ -3665,34 +3792,16 @@ Candidates:
         crop_h = orig_h
         out_w, out_h = 1080, 1920
 
-        # Face detector
-        face_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        )
-
         # First pass: analyze frames
-        crop_positions = []
-        current_target = orig_w / 2
-
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(50, 50))
-
-            if len(faces) > 0:
-                # Find largest face
-                largest = max(faces, key=lambda f: f[2] * f[3])
-                current_target = largest[0] + largest[2] / 2
-
-            crop_x = int(current_target - crop_w / 2)
-            crop_x = max(0, min(crop_x, orig_w - crop_w))
-            crop_positions.append(crop_x)
+        crop_positions = self._analyze_opencv_crop_positions(cap, orig_w, crop_w)
 
         # Stabilize positions
-        crop_positions = self.stabilize_positions(crop_positions)
+        if mode == "smooth_follow":
+            crop_positions = self._smooth_follow_positions(
+                crop_positions, orig_w - crop_w, fps
+            )
+        else:
+            crop_positions = self.stabilize_positions(crop_positions)
 
         # Second pass: create video
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -4715,35 +4824,59 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             raise Exception(f"FFmpeg process failed:\n{error_summary}")
 
     def convert_to_portrait_with_progress(
-        self, input_path: str, output_path: str, progress_callback
+        self,
+        input_path: str,
+        output_path: str,
+        progress_callback,
+        tracking_mode: str | None = None,
     ):
         """Convert landscape to 9:16 portrait with speaker tracking and progress (router method)"""
+        mode = self._resolve_tracking_mode(tracking_mode=tracking_mode)
         try:
-            if self.face_tracking_mode == "mediapipe":
+            if mode == "mediapipe":
                 self.log("  Using MediaPipe (Active Speaker Detection)")
                 return self.convert_to_portrait_mediapipe_with_progress(
                     input_path, output_path, progress_callback
                 )
+            if mode == "smooth_follow":
+                self.log("  Using Smooth Follow (Fluid OpenCV)")
+                return self.convert_to_portrait_opencv_with_progress(
+                    input_path,
+                    output_path,
+                    progress_callback,
+                    tracking_mode=mode,
+                )
             else:
                 self.log("  Using OpenCV (Fast Mode)")
                 return self.convert_to_portrait_opencv_with_progress(
-                    input_path, output_path, progress_callback
+                    input_path,
+                    output_path,
+                    progress_callback,
+                    tracking_mode=mode,
                 )
         except Exception as e:
             # Fallback to OpenCV if MediaPipe fails
-            if self.face_tracking_mode == "mediapipe":
+            if mode == "mediapipe":
                 self.log(f"  ⚠ MediaPipe failed: {e}")
                 self.log("  Falling back to OpenCV mode...")
                 return self.convert_to_portrait_opencv_with_progress(
-                    input_path, output_path, progress_callback
+                    input_path,
+                    output_path,
+                    progress_callback,
+                    tracking_mode="opencv",
                 )
             else:
                 raise
 
     def convert_to_portrait_opencv_with_progress(
-        self, input_path: str, output_path: str, progress_callback
+        self,
+        input_path: str,
+        output_path: str,
+        progress_callback,
+        tracking_mode: str | None = None,
     ):
         """Convert landscape to 9:16 portrait with speaker tracking and progress (OpenCV)"""
+        mode = self._normalize_tracking_mode(tracking_mode)
 
         self.log("[DEBUG] Starting portrait conversion...")
         print("[DEBUG] Starting portrait conversion...")
@@ -4776,62 +4909,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         crop_h = orig_h
         out_w, out_h = 1080, 1920
 
-        # Face detector
-        face_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        )
-
         # First pass: analyze frames (0-40%)
         print("[DEBUG] Pass 1: Analyzing frames...")
         sys.stdout.flush()
 
-        crop_positions = []
-        current_target = orig_w / 2
-        frame_count = 0
-        last_log_time = 0
-        import time
+        crop_positions = self._analyze_opencv_crop_positions(
+            cap,
+            orig_w,
+            crop_w,
+            total_frames=total_frames,
+            progress_callback=progress_callback,
+            progress_scale=0.4,
+        )
 
-        while True:
-            # Check for cancellation
-            if self.is_cancelled():
-                cap.release()
-                raise Exception("Cancelled by user")
-
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(50, 50))
-
-            if len(faces) > 0:
-                # Find largest face
-                largest = max(faces, key=lambda f: f[2] * f[3])
-                current_target = largest[0] + largest[2] / 2
-
-            crop_x = int(current_target - crop_w / 2)
-            crop_x = max(0, min(crop_x, orig_w - crop_w))
-            crop_positions.append(crop_x)
-
-            frame_count += 1
-
-            # Update progress more frequently with time-based logging
-            current_time = time.time()
-            if (
-                frame_count % 30 == 0 or (current_time - last_log_time) > 2
-            ):  # Every 30 frames or 2 seconds
-                progress = (frame_count / total_frames) * 0.4  # 0-40%
-                print(
-                    f"[DEBUG] Pass 1 progress: {progress * 100:.1f}% ({frame_count}/{total_frames} frames)"
-                )
-                sys.stdout.flush()
-                progress_callback(progress)
-                last_log_time = current_time
-
-        print(f"[DEBUG] Analyzed {frame_count} frames")
+        print(f"[DEBUG] Analyzed {len(crop_positions)} frames")
 
         # Stabilize positions
-        crop_positions = self.stabilize_positions(crop_positions)
+        if mode == "smooth_follow":
+            crop_positions = self._smooth_follow_positions(
+                crop_positions, orig_w - crop_w, fps
+            )
+        else:
+            crop_positions = self.stabilize_positions(crop_positions)
         progress_callback(0.45)
 
         # Second pass: create video (45-85%)
