@@ -3614,6 +3614,19 @@ Candidates:
         dirty_stage_set = {
             str(stage or "").strip().lower() for stage in dirty_stages or []
         }
+        effective_dirty_stage_set = set(dirty_stage_set)
+        if "cut" in effective_dirty_stage_set:
+            effective_dirty_stage_set.update(
+                {"portrait", "hook", "captions", "compose"}
+            )
+        if "portrait" in effective_dirty_stage_set:
+            effective_dirty_stage_set.update({"hook", "captions", "compose"})
+        if "hook" in effective_dirty_stage_set:
+            effective_dirty_stage_set.add("compose")
+            if add_hook and add_captions:
+                effective_dirty_stage_set.add("captions")
+        if "captions" in effective_dirty_stage_set:
+            effective_dirty_stage_set.add("compose")
 
         self.log(f"  Output folder: {clip_dir}")
 
@@ -3653,6 +3666,8 @@ Candidates:
         artifact_paths = {
             "cut": Path("artifacts") / "cut.mp4",
             "portrait": Path("artifacts") / "portrait.mp4",
+            "hook": Path("artifacts") / "hook.mp4",
+            "captions": Path("artifacts") / "captions.mp4",
             "crop_track": Path("source") / "crop_track.json",
             "final_composition": Path("master.mp4"),
             "master": Path("master.mp4"),
@@ -3661,7 +3676,7 @@ Candidates:
 
         def prime_stage_artifact(stage_name: str, destination: Path):
             if (
-                stage_name in dirty_stage_set
+                stage_name in effective_dirty_stage_set
                 or destination.exists()
                 or stable_clip_dir is None
             ):
@@ -3674,11 +3689,28 @@ Candidates:
 
         cut_file = artifact_dir / "cut.mp4"
         portrait_file = artifact_dir / "portrait.mp4"
+        hook_artifact_file = artifact_dir / "hook.mp4"
+        captions_artifact_file = artifact_dir / "captions.mp4"
         crop_track_file = source_dir / "crop_track.json"
         prime_stage_artifact("cut", cut_file)
         prime_stage_artifact("portrait", portrait_file)
-        if "cut" not in dirty_stage_set and "portrait" not in dirty_stage_set:
+        prime_stage_artifact("hook", hook_artifact_file)
+        prime_stage_artifact("captions", captions_artifact_file)
+        if (
+            "cut" not in effective_dirty_stage_set
+            and "portrait" not in effective_dirty_stage_set
+        ):
             prime_stage_artifact("crop_track", crop_track_file)
+
+        stable_metadata = {}
+        if stable_clip_dir is not None:
+            stable_data_path = stable_clip_dir / "data.json"
+            if stable_data_path.exists():
+                try:
+                    with open(stable_data_path, "r", encoding="utf-8") as stable_file:
+                        stable_metadata = json.load(stable_file)
+                except Exception:
+                    stable_metadata = {}
 
         # Step 1: Cut video with progress tracking
         if self.is_cancelled():
@@ -3688,7 +3720,7 @@ Candidates:
         # Get video duration for progress calculation
         duration = self.parse_timestamp(end) - self.parse_timestamp(start)
 
-        if cut_file.exists() and "cut" not in dirty_stage_set:
+        if cut_file.exists() and "cut" not in effective_dirty_stage_set:
             self.log("  ↺ Reused cut artifact")
             clip_progress("Cutting video...", current_step, 1.0)
         else:
@@ -3727,7 +3759,7 @@ Candidates:
         if self.is_cancelled():
             return
         clip_progress("Converting to portrait...", current_step, 0)
-        if portrait_file.exists() and "portrait" not in dirty_stage_set:
+        if portrait_file.exists() and "portrait" not in effective_dirty_stage_set:
             self.log("  ↺ Reused portrait artifact")
             clip_progress("Converting to portrait...", current_step, 1.0)
         else:
@@ -3750,21 +3782,28 @@ Candidates:
             if self.is_cancelled():
                 return
             clip_progress("Adding hook...", current_step, 0)
-            hooked_file = clip_dir / "temp_hooked.mp4"
             hook_text = highlight.get("hook_text", highlight["title"])
-            hook_duration = self.add_hook_with_progress(
-                str(current_output),
-                hook_text,
-                str(hooked_file),
-                lambda p: clip_progress("Adding hook...", current_step, p),
-            )
+            if hook_artifact_file.exists() and "hook" not in effective_dirty_stage_set:
+                hook_duration = float(stable_metadata.get("hook_duration_seconds") or 0)
+                current_output = hook_artifact_file
+                self.log("  ↺ Reused hook artifact")
+                clip_progress("Adding hook...", current_step, 1.0)
+            else:
+                hook_duration = self.add_hook_with_progress(
+                    str(current_output),
+                    hook_text,
+                    str(hook_artifact_file),
+                    lambda p: clip_progress("Adding hook...", current_step, p),
+                )
 
-            # Verify hooked file was created
-            if not hooked_file.exists():
-                raise Exception(f"Failed to create hooked video: {hooked_file}")
+                # Verify hooked file was created
+                if not hook_artifact_file.exists():
+                    raise Exception(
+                        f"Failed to create hooked video: {hook_artifact_file}"
+                    )
 
-            self.log(f"  ✓ Added hook ({hook_duration:.1f}s)")
-            current_output = hooked_file
+                self.log(f"  ✓ Added hook ({hook_duration:.1f}s)")
+                current_output = hook_artifact_file
             current_step += 1
         else:
             self.log("  ⊘ Skipped hook (disabled)")
@@ -3779,37 +3818,29 @@ Candidates:
             # Use portrait_file (without hook) as audio source for transcription
             audio_source = str(portrait_file) if add_hook else None
 
-            # If watermark enabled, add captions to temp file first
-            if self.watermark_settings.get("enabled"):
-                temp_captioned = clip_dir / "temp_captioned.mp4"
+            if (
+                captions_artifact_file.exists()
+                and "captions" not in effective_dirty_stage_set
+            ):
+                current_output = captions_artifact_file
+                self.log("  ↺ Reused captions artifact")
+                clip_progress("Adding captions...", current_step, 1.0)
+            else:
                 self.add_captions_api_with_progress(
                     str(current_output),
-                    str(temp_captioned),
+                    str(captions_artifact_file),
                     audio_source,
                     hook_duration,
                     lambda p: clip_progress("Adding captions...", current_step, p),
                 )
 
-                if not temp_captioned.exists():
+                if not captions_artifact_file.exists():
                     raise Exception(
-                        f"Failed to create captioned video: {temp_captioned}"
+                        f"Failed to create captioned video: {captions_artifact_file}"
                     )
 
-                current_output = temp_captioned
-            else:
-                # No watermark, captions go directly to final
-                self.add_captions_api_with_progress(
-                    str(current_output),
-                    str(final_file),
-                    audio_source,
-                    hook_duration,
-                    lambda p: clip_progress("Adding captions...", current_step, p),
-                )
-
-                if not final_file.exists():
-                    raise Exception(f"Failed to create final video: {final_file}")
-
-            self.log("  ✓ Added captions")
+                current_output = captions_artifact_file
+                self.log("  ✓ Added captions")
             current_step += 1
         else:
             self.log("  ⊘ Skipped captions (disabled)")
@@ -3841,17 +3872,11 @@ Candidates:
             self.log("  ✓ Added watermark")
             current_output = final_file
             current_step += 1
-
-            # Cleanup temp captioned file if exists
-            if add_captions:
-                try:
-                    temp_captioned = clip_dir / "temp_captioned.mp4"
-                    if temp_captioned.exists():
-                        temp_captioned.unlink()
-                except Exception as e:
-                    self.log(f"  Warning: Could not delete temp_captioned.mp4: {e}")
         elif not add_captions:
             # No captions and no watermark, just copy current output to final
+            shutil.copy(str(current_output), str(final_file))
+            current_output = final_file
+        elif str(current_output) != str(final_file):
             shutil.copy(str(current_output), str(final_file))
             current_output = final_file
 
@@ -3894,15 +3919,6 @@ Candidates:
         # Mark complete
         clip_progress("Done", total_steps, 0)
 
-        # Cleanup temp files
-        if add_hook:
-            try:
-                hooked_file = clip_dir / "temp_hooked.mp4"
-                if hooked_file.exists():
-                    hooked_file.unlink()
-            except Exception as e:
-                self.log(f"  Warning: Could not delete temp_hooked.mp4: {e}")
-
         # Save metadata
         rendered_at = utc_now_iso()
         metadata = {
@@ -3918,6 +3934,7 @@ Candidates:
             "status": "completed",
             "has_hook": add_hook,
             "has_captions": add_captions,
+            "hook_duration_seconds": hook_duration,
             "has_watermark": self.watermark_settings.get("enabled", False),
             "has_credit": self.credit_watermark_settings.get("enabled", False),
             "channel_name": self.channel_name,

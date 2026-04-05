@@ -7,6 +7,7 @@ import json
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, cast
 
 from utils.helpers import get_deno_path
 from utils.storage import discover_sessions, get_campaign_dir, get_session_dir
@@ -88,7 +89,8 @@ def normalize_channel_fetch_record(snapshot: dict | None, campaign: dict) -> dic
     base["channel_id"] = base.get("channel_id") or campaign.get("channel_id", "")
     base["last_error"] = base.get("last_error") or None
 
-    videos = base.get("videos")
+    videos_raw = base.get("videos")
+    videos = videos_raw if isinstance(videos_raw, list) else []
     base["videos"] = [
         normalize_queue_video(video)
         for video in videos
@@ -224,8 +226,18 @@ def sync_queue_with_sessions(
             queue_video["updated_at"] = (
                 session_data.get("updated_at") or queue_video["updated_at"]
             )
-        elif queue_video.get("status") not in {"skipped", "failed"}:
-            queue_video["status"] = normalize_queue_status(queue_video.get("status"))
+        else:
+            had_linked_session = bool(
+                queue_video.get("session_id") or queue_video.get("session_dir")
+            )
+            if had_linked_session:
+                queue_video["session_id"] = ""
+                queue_video["session_dir"] = ""
+
+            if queue_video.get("status") not in {"skipped", "failed"}:
+                queue_video["status"] = normalize_queue_status(
+                    queue_video.get("status")
+                )
 
         if not queue_video.get("video_url") and queue_video.get("video_id"):
             queue_video["video_url"] = build_video_watch_url(queue_video["video_id"])
@@ -272,9 +284,8 @@ def merge_fetched_videos(
 def update_queue_video(snapshot: dict, video_id: str, **changes) -> dict:
     """Return a queue snapshot with one video row updated."""
     normalized = snapshot.copy() if isinstance(snapshot, dict) else {"videos": []}
-    videos = (
-        normalized.get("videos") if isinstance(normalized.get("videos"), list) else []
-    )
+    videos_raw = normalized.get("videos")
+    videos = videos_raw if isinstance(videos_raw, list) else []
     updated_videos = []
     for video in videos:
         queue_video = normalize_queue_video(video)
@@ -345,10 +356,10 @@ def _fetch_channel_videos_module(channel_url: str, limit: int) -> dict:
         options["js_runtimes"] = {"deno": {"path": deno_path}}
         options["remote_components"] = ["ejs:github"]
 
-    with yt_dlp.YoutubeDL(options) as ydl:
+    with yt_dlp.YoutubeDL(cast(Any, options)) as ydl:
         data = ydl.extract_info(channel_url, download=False)
 
-    return _parse_channel_payload(data)
+    return _parse_channel_payload(cast(Any, data))
 
 
 def _fetch_channel_videos_subprocess(

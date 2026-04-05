@@ -1070,8 +1070,8 @@ class YTShortClipperApp(ctk.CTk):
         if self.active_campaign_name:
             self.manual_context_label.configure(
                 text=(
-                    f"Campaign context: {self.active_campaign_name} "
-                    "• current open action routes into the manual intake flow"
+                    f"Campaign selected: {self.active_campaign_name} "
+                    "• Campaign Detail handles queued videos, while this page is the manual one-off flow"
                 ),
                 text_color=("#3B8ED0", "#74B9FF"),
             )
@@ -2234,6 +2234,16 @@ class YTShortClipperApp(ctk.CTk):
             return self.provider_router.resolve_task_provider("highlight_finder")
         return self._get_provider_config("highlight_finder")
 
+    def _is_caption_maker_ready(self) -> bool:
+        """Check Caption Maker readiness from runtime provider resolution."""
+        if not self.provider_router:
+            self._hydrate_provider_runtime(update_ui=False)
+
+        return bool(
+            self.provider_router
+            and self.provider_router.is_provider_ready("caption_maker")
+        )
+
     def _get_effective_highlight_model(self) -> str:
         """Get runtime model for highlight finding."""
         hf_config = self._get_highlight_provider_config()
@@ -2808,9 +2818,7 @@ class YTShortClipperApp(ctk.CTk):
             messagebox.showerror("Error", "Clips must be 1-10!")
             return
 
-        cm_ready = self.provider_router and self.provider_router.is_provider_ready(
-            "caption_maker"
-        )
+        cm_ready = self._is_caption_maker_ready()
 
         url = self.url_var.get().strip()
         local_video_path = self.local_video_var.get().strip()
@@ -3240,12 +3248,8 @@ class YTShortClipperApp(ctk.CTk):
         self.steps[0].set_done("Downloaded (no subtitle)")
         self.pages["processing"].update_status("No subtitle found for this video.")
 
-        # Check if Caption Maker is configured
-        ai_providers = self.config.get("ai_providers", {})
-        cm_config = ai_providers.get("caption_maker", {})
-        cm_api_key = cm_config.get("api_key", "").strip()
-
-        if not cm_api_key:
+        # Check Caption Maker readiness from runtime provider resolution
+        if not self._is_caption_maker_ready():
             self.on_error(
                 "No subtitle found for this video.\n\n"
                 "You can use AI transcription (Whisper API) as a fallback,\n"

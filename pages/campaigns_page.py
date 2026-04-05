@@ -58,7 +58,7 @@ class CampaignsPage(ctk.CTkFrame):
         ).pack(fill="x")
         ctk.CTkLabel(
             title_col,
-            text="Manage campaign manifests first, then jump into the current manual session flow when needed.",
+            text="Manage campaign manifests here, then open a campaign for its detail queue or start a separate manual session.",
             font=ctk.CTkFont(size=11),
             text_color="gray",
             anchor="w",
@@ -102,7 +102,7 @@ class CampaignsPage(ctk.CTkFrame):
         helper_card.pack(fill="x", padx=20, pady=(0, 10))
         ctk.CTkLabel(
             helper_card,
-            text="Task 4 scope: the dashboard is live now. Opening a campaign routes into the existing manual intake flow until the campaign detail queue lands in a follow-up task.",
+            text="Campaigns Dashboard is live now. Opening a campaign goes to Campaign Detail, while New Manual Session stays a separate one-off flow.",
             font=ctk.CTkFont(size=10),
             text_color="gray",
             wraplength=700,
@@ -215,7 +215,7 @@ class CampaignsPage(ctk.CTkFrame):
             ).pack(pady=(26, 6))
             ctk.CTkLabel(
                 empty_state,
-                text="Create your first campaign, or keep using the current manual session flow right away.",
+                text="Create your first campaign, or start a separate manual session right away.",
                 font=ctk.CTkFont(size=11),
                 text_color="gray",
                 wraplength=620,
