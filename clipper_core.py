@@ -340,6 +340,118 @@ class AutoClipperCore:
 
         return crop_positions
 
+    def _load_cached_crop_track(
+        self,
+        crop_track_path: str | Path | None,
+        *,
+        tracking_mode: str,
+        analysis_backend: str,
+        orig_w: int,
+        orig_h: int,
+        crop_w: int,
+        crop_h: int,
+        fps: float,
+        total_frames: int,
+    ) -> list[int] | None:
+        """Load a cached crop track when its additive metadata still matches."""
+        if not crop_track_path:
+            return None
+
+        track_path = Path(crop_track_path)
+        if not track_path.exists():
+            return None
+
+        try:
+            with open(track_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception as error:
+            self.log(f"  ⚠ Ignoring unreadable crop track cache: {error}")
+            return None
+
+        if not isinstance(payload, dict):
+            return None
+
+        if str(payload.get("tracking_mode") or "").strip().lower() != tracking_mode:
+            return None
+        if (
+            str(payload.get("analysis_backend") or "").strip().lower()
+            != analysis_backend
+        ):
+            return None
+
+        video_info = payload.get("video") or {}
+        crop_info = payload.get("crop") or {}
+        stored_fps = float(video_info.get("fps") or 0.0)
+        if (
+            int(video_info.get("width") or 0) != int(orig_w)
+            or int(video_info.get("height") or 0) != int(orig_h)
+            or int(video_info.get("total_frames") or 0) != int(total_frames)
+            or abs(stored_fps - float(fps or 0.0)) > 0.01
+            or int(crop_info.get("width") or 0) != int(crop_w)
+            or int(crop_info.get("height") or 0) != int(crop_h)
+        ):
+            return None
+
+        raw_positions = payload.get("positions")
+        if not isinstance(raw_positions, list) or len(raw_positions) != int(
+            total_frames
+        ):
+            return None
+
+        max_position = max(0, int(orig_w - crop_w))
+        positions = []
+        for value in raw_positions:
+            try:
+                position = int(round(float(value)))
+            except (TypeError, ValueError):
+                return None
+            positions.append(max(0, min(position, max_position)))
+
+        self.log(f"  ↺ Reused crop track cache: {track_path}")
+        return positions
+
+    def _write_crop_track_artifact(
+        self,
+        crop_track_path: str | Path | None,
+        *,
+        tracking_mode: str,
+        analysis_backend: str,
+        orig_w: int,
+        orig_h: int,
+        crop_w: int,
+        crop_h: int,
+        fps: float,
+        total_frames: int,
+        positions: list[int],
+    ):
+        """Persist the final crop path for additive portrait-stage reuse."""
+        if not crop_track_path:
+            return
+
+        track_path = Path(crop_track_path)
+        track_path.parent.mkdir(parents=True, exist_ok=True)
+
+        payload = {
+            "version": 1,
+            "tracking_mode": tracking_mode,
+            "analysis_backend": analysis_backend,
+            "video": {
+                "width": int(orig_w),
+                "height": int(orig_h),
+                "fps": float(fps),
+                "total_frames": int(total_frames),
+            },
+            "crop": {
+                "width": int(crop_w),
+                "height": int(crop_h),
+            },
+            "positions": [int(position) for position in positions],
+            "updated_at": utc_now_iso(),
+        }
+
+        with open(track_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
     def _smooth_follow_positions(
         self, positions: list[int], max_position: int, fps: float = 30.0
     ) -> list[int]:
@@ -3396,6 +3508,8 @@ Candidates:
         stable_clip_dir = Path(stable_clip_dir) if stable_clip_dir else None
         artifact_dir = clip_dir / "artifacts"
         artifact_dir.mkdir(parents=True, exist_ok=True)
+        source_dir = clip_dir / "source"
+        source_dir.mkdir(parents=True, exist_ok=True)
         dirty_stage_set = {
             str(stage or "").strip().lower() for stage in dirty_stages or []
         }
@@ -3438,6 +3552,7 @@ Candidates:
         artifact_paths = {
             "cut": Path("artifacts") / "cut.mp4",
             "portrait": Path("artifacts") / "portrait.mp4",
+            "crop_track": Path("source") / "crop_track.json",
             "final_composition": Path("master.mp4"),
             "master": Path("master.mp4"),
             "thumb": Path("thumb.jpg"),
@@ -3458,8 +3573,11 @@ Candidates:
 
         cut_file = artifact_dir / "cut.mp4"
         portrait_file = artifact_dir / "portrait.mp4"
+        crop_track_file = source_dir / "crop_track.json"
         prime_stage_artifact("cut", cut_file)
         prime_stage_artifact("portrait", portrait_file)
+        if "cut" not in dirty_stage_set and "portrait" not in dirty_stage_set:
+            prime_stage_artifact("crop_track", crop_track_file)
 
         # Step 1: Cut video with progress tracking
         if self.is_cancelled():
@@ -3517,6 +3635,7 @@ Candidates:
                 str(portrait_file),
                 lambda p: clip_progress("Converting to portrait...", current_step, p),
                 tracking_mode=tracking_mode,
+                crop_track_path=str(crop_track_file),
             )
             self.log("  ✓ Portrait conversion")
         current_step += 1
@@ -3736,23 +3855,37 @@ Candidates:
         }
 
     def convert_to_portrait(
-        self, input_path: str, output_path: str, tracking_mode: str | None = None
+        self,
+        input_path: str,
+        output_path: str,
+        tracking_mode: str | None = None,
+        crop_track_path: str | None = None,
     ):
         """Convert landscape to 9:16 portrait with speaker tracking (router method)"""
         mode = self._resolve_tracking_mode(tracking_mode=tracking_mode)
         try:
             if mode == "mediapipe":
                 self.log("  Using MediaPipe (Active Speaker Detection)")
-                return self.convert_to_portrait_mediapipe(input_path, output_path)
+                return self.convert_to_portrait_mediapipe(
+                    input_path,
+                    output_path,
+                    crop_track_path=crop_track_path,
+                )
             if mode == "smooth_follow":
                 self.log("  Using Smooth Follow (Fluid OpenCV)")
                 return self.convert_to_portrait_opencv(
-                    input_path, output_path, tracking_mode=mode
+                    input_path,
+                    output_path,
+                    tracking_mode=mode,
+                    crop_track_path=crop_track_path,
                 )
             else:
                 self.log("  Using OpenCV (Fast Mode)")
                 return self.convert_to_portrait_opencv(
-                    input_path, output_path, tracking_mode=mode
+                    input_path,
+                    output_path,
+                    tracking_mode=mode,
+                    crop_track_path=crop_track_path,
                 )
         except Exception as e:
             # Fallback to OpenCV if MediaPipe fails
@@ -3760,13 +3893,20 @@ Candidates:
                 self.log(f"  ⚠ MediaPipe failed: {e}")
                 self.log("  Falling back to OpenCV mode...")
                 return self.convert_to_portrait_opencv(
-                    input_path, output_path, tracking_mode="opencv"
+                    input_path,
+                    output_path,
+                    tracking_mode="opencv",
+                    crop_track_path=crop_track_path,
                 )
             else:
                 raise
 
     def convert_to_portrait_opencv(
-        self, input_path: str, output_path: str, tracking_mode: str | None = None
+        self,
+        input_path: str,
+        output_path: str,
+        tracking_mode: str | None = None,
+        crop_track_path: str | None = None,
     ):
         """Convert landscape to 9:16 portrait with speaker tracking (OpenCV Haar Cascade)"""
         mode = self._normalize_tracking_mode(tracking_mode)
@@ -3792,16 +3932,40 @@ Candidates:
         crop_h = orig_h
         out_w, out_h = 1080, 1920
 
-        # First pass: analyze frames
-        crop_positions = self._analyze_opencv_crop_positions(cap, orig_w, crop_w)
+        crop_positions = self._load_cached_crop_track(
+            crop_track_path,
+            tracking_mode=mode,
+            analysis_backend="opencv",
+            orig_w=orig_w,
+            orig_h=orig_h,
+            crop_w=crop_w,
+            crop_h=crop_h,
+            fps=fps,
+            total_frames=total_frames,
+        )
+        if crop_positions is None:
+            # First pass: analyze frames
+            crop_positions = self._analyze_opencv_crop_positions(cap, orig_w, crop_w)
 
-        # Stabilize positions
-        if mode == "smooth_follow":
-            crop_positions = self._smooth_follow_positions(
-                crop_positions, orig_w - crop_w, fps
+            # Stabilize positions
+            if mode == "smooth_follow":
+                crop_positions = self._smooth_follow_positions(
+                    crop_positions, orig_w - crop_w, fps
+                )
+            else:
+                crop_positions = self.stabilize_positions(crop_positions)
+            self._write_crop_track_artifact(
+                crop_track_path,
+                tracking_mode=mode,
+                analysis_backend="opencv",
+                orig_w=orig_w,
+                orig_h=orig_h,
+                crop_w=crop_w,
+                crop_h=crop_h,
+                fps=fps,
+                total_frames=total_frames,
+                positions=crop_positions,
             )
-        else:
-            crop_positions = self.stabilize_positions(crop_positions)
 
         # Second pass: create video
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -3931,7 +4095,12 @@ Candidates:
             except ImportError:
                 raise Exception("MediaPipe not installed. Run: pip install mediapipe")
 
-    def convert_to_portrait_mediapipe(self, input_path: str, output_path: str):
+    def convert_to_portrait_mediapipe(
+        self,
+        input_path: str,
+        output_path: str,
+        crop_track_path: str | None = None,
+    ):
         """Convert landscape to 9:16 portrait with active speaker detection (MediaPipe)"""
 
         # Initialize MediaPipe
@@ -3958,103 +4127,130 @@ Candidates:
         crop_h = orig_h
         out_w, out_h = 1080, 1920
 
+        crop_positions = self._load_cached_crop_track(
+            crop_track_path,
+            tracking_mode="mediapipe",
+            analysis_backend="mediapipe",
+            orig_w=orig_w,
+            orig_h=orig_h,
+            crop_w=crop_w,
+            crop_h=crop_h,
+            fps=fps,
+            total_frames=total_frames,
+        )
+
         # MediaPipe Face Mesh settings
         lip_threshold = self.mediapipe_settings.get("lip_activity_threshold", 0.15)
         switch_threshold = self.mediapipe_settings.get("switch_threshold", 0.3)
         min_shot_duration = self.mediapipe_settings.get("min_shot_duration", 90)
         center_weight = self.mediapipe_settings.get("center_weight", 0.3)
 
-        # First pass: analyze frames with MediaPipe
-        self.log("  Pass 1: Analyzing lip movements...")
-        crop_positions = []
-        face_activities = []  # Store activity scores per frame
+        if crop_positions is None:
+            # First pass: analyze frames with MediaPipe
+            self.log("  Pass 1: Analyzing lip movements...")
+            crop_positions = []
+            face_activities = []  # Store activity scores per frame
 
-        with self.mp_face_mesh.FaceMesh(
-            static_image_mode=False,
-            max_num_faces=3,
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
-        ) as face_mesh:
-            frame_count = 0
-            prev_lip_distances = {}  # Track previous lip distances per face
+            with self.mp_face_mesh.FaceMesh(
+                static_image_mode=False,
+                max_num_faces=3,
+                refine_landmarks=True,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+            ) as face_mesh:
+                frame_count = 0
+                prev_lip_distances = {}  # Track previous lip distances per face
 
-            while True:
-                if self.is_cancelled():
-                    cap.release()
-                    raise Exception("Cancelled by user")
+                while True:
+                    if self.is_cancelled():
+                        cap.release()
+                        raise Exception("Cancelled by user")
 
-                ret, frame = cap.read()
-                if not ret:
-                    break
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
 
-                # Convert to RGB for MediaPipe
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results = face_mesh.process(rgb_frame)
+                    # Convert to RGB for MediaPipe
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    results = face_mesh.process(rgb_frame)
 
-                best_face_x = orig_w / 2  # Default to center
-                max_activity = 0
+                    best_face_x = orig_w / 2  # Default to center
+                    max_activity = 0
 
-                if results.multi_face_landmarks:
-                    faces_data = []
+                    if results.multi_face_landmarks:
+                        faces_data = []
 
-                    for face_id, face_landmarks in enumerate(
-                        results.multi_face_landmarks
-                    ):
-                        # Calculate lip activity
-                        activity = self._calculate_lip_activity(
-                            face_landmarks,
-                            orig_w,
-                            orig_h,
-                            prev_lip_distances.get(face_id, None),
-                        )
+                        for face_id, face_landmarks in enumerate(
+                            results.multi_face_landmarks
+                        ):
+                            # Calculate lip activity
+                            activity = self._calculate_lip_activity(
+                                face_landmarks,
+                                orig_w,
+                                orig_h,
+                                prev_lip_distances.get(face_id, None),
+                            )
 
-                        # Get face center position
-                        face_x = face_landmarks.landmark[1].x * orig_w  # Nose tip
+                            # Get face center position
+                            face_x = face_landmarks.landmark[1].x * orig_w  # Nose tip
 
-                        # Calculate combined score (activity + center position)
-                        center_score = 1.0 - abs(face_x - orig_w / 2) / (orig_w / 2)
-                        combined_score = (activity * (1 - center_weight)) + (
-                            center_score * center_weight
-                        )
+                            # Calculate combined score (activity + center position)
+                            center_score = 1.0 - abs(face_x - orig_w / 2) / (orig_w / 2)
+                            combined_score = (activity * (1 - center_weight)) + (
+                                center_score * center_weight
+                            )
 
-                        faces_data.append(
-                            {
-                                "x": face_x,
-                                "activity": activity,
-                                "combined_score": combined_score,
-                            }
-                        )
+                            faces_data.append(
+                                {
+                                    "x": face_x,
+                                    "activity": activity,
+                                    "combined_score": combined_score,
+                                }
+                            )
 
-                        # Update previous lip distance
-                        upper_lip = face_landmarks.landmark[13]  # Upper lip center
-                        lower_lip = face_landmarks.landmark[14]  # Lower lip center
-                        lip_distance = abs(upper_lip.y - lower_lip.y)
-                        prev_lip_distances[face_id] = lip_distance
+                            # Update previous lip distance
+                            upper_lip = face_landmarks.landmark[13]  # Upper lip center
+                            lower_lip = face_landmarks.landmark[14]  # Lower lip center
+                            lip_distance = abs(upper_lip.y - lower_lip.y)
+                            prev_lip_distances[face_id] = lip_distance
 
-                    # Select face with highest combined score
-                    if faces_data:
-                        best_face = max(faces_data, key=lambda f: f["combined_score"])
-                        best_face_x = best_face["x"]
-                        max_activity = best_face["activity"]
+                        # Select face with highest combined score
+                        if faces_data:
+                            best_face = max(
+                                faces_data, key=lambda f: f["combined_score"]
+                            )
+                            best_face_x = best_face["x"]
+                            max_activity = best_face["activity"]
 
-                # Calculate crop position
-                crop_x = int(best_face_x - crop_w / 2)
-                crop_x = max(0, min(crop_x, orig_w - crop_w))
-                crop_positions.append(crop_x)
-                face_activities.append(max_activity)
+                    # Calculate crop position
+                    crop_x = int(best_face_x - crop_w / 2)
+                    crop_x = max(0, min(crop_x, orig_w - crop_w))
+                    crop_positions.append(crop_x)
+                    face_activities.append(max_activity)
 
-                frame_count += 1
+                    frame_count += 1
 
-                if frame_count % 30 == 0:
-                    self.log(f"    Analyzed {frame_count}/{total_frames} frames...")
+                    if frame_count % 30 == 0:
+                        self.log(f"    Analyzed {frame_count}/{total_frames} frames...")
 
-        self.log(f"  Analyzed {frame_count} frames with MediaPipe")
+            self.log(f"  Analyzed {frame_count} frames with MediaPipe")
 
-        # Stabilize positions with shot-based switching
-        crop_positions = self._stabilize_positions_with_activity(
-            crop_positions, face_activities, min_shot_duration, switch_threshold
-        )
+            # Stabilize positions with shot-based switching
+            crop_positions = self._stabilize_positions_with_activity(
+                crop_positions, face_activities, min_shot_duration, switch_threshold
+            )
+            self._write_crop_track_artifact(
+                crop_track_path,
+                tracking_mode="mediapipe",
+                analysis_backend="mediapipe",
+                orig_w=orig_w,
+                orig_h=orig_h,
+                crop_w=crop_w,
+                crop_h=crop_h,
+                fps=fps,
+                total_frames=total_frames,
+                positions=crop_positions,
+            )
 
         # Second pass: create video
         self.log("  Pass 2: Creating portrait video...")
@@ -4829,6 +5025,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         output_path: str,
         progress_callback,
         tracking_mode: str | None = None,
+        crop_track_path: str | None = None,
     ):
         """Convert landscape to 9:16 portrait with speaker tracking and progress (router method)"""
         mode = self._resolve_tracking_mode(tracking_mode=tracking_mode)
@@ -4836,7 +5033,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             if mode == "mediapipe":
                 self.log("  Using MediaPipe (Active Speaker Detection)")
                 return self.convert_to_portrait_mediapipe_with_progress(
-                    input_path, output_path, progress_callback
+                    input_path,
+                    output_path,
+                    progress_callback,
+                    crop_track_path=crop_track_path,
                 )
             if mode == "smooth_follow":
                 self.log("  Using Smooth Follow (Fluid OpenCV)")
@@ -4845,6 +5045,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     output_path,
                     progress_callback,
                     tracking_mode=mode,
+                    crop_track_path=crop_track_path,
                 )
             else:
                 self.log("  Using OpenCV (Fast Mode)")
@@ -4853,6 +5054,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     output_path,
                     progress_callback,
                     tracking_mode=mode,
+                    crop_track_path=crop_track_path,
                 )
         except Exception as e:
             # Fallback to OpenCV if MediaPipe fails
@@ -4864,6 +5066,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     output_path,
                     progress_callback,
                     tracking_mode="opencv",
+                    crop_track_path=crop_track_path,
                 )
             else:
                 raise
@@ -4874,6 +5077,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         output_path: str,
         progress_callback,
         tracking_mode: str | None = None,
+        crop_track_path: str | None = None,
     ):
         """Convert landscape to 9:16 portrait with speaker tracking and progress (OpenCV)"""
         mode = self._normalize_tracking_mode(tracking_mode)
@@ -4909,28 +5113,54 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         crop_h = orig_h
         out_w, out_h = 1080, 1920
 
-        # First pass: analyze frames (0-40%)
-        print("[DEBUG] Pass 1: Analyzing frames...")
-        sys.stdout.flush()
-
-        crop_positions = self._analyze_opencv_crop_positions(
-            cap,
-            orig_w,
-            crop_w,
+        crop_positions = self._load_cached_crop_track(
+            crop_track_path,
+            tracking_mode=mode,
+            analysis_backend="opencv",
+            orig_w=orig_w,
+            orig_h=orig_h,
+            crop_w=crop_w,
+            crop_h=crop_h,
+            fps=fps,
             total_frames=total_frames,
-            progress_callback=progress_callback,
-            progress_scale=0.4,
         )
+        if crop_positions is None:
+            # First pass: analyze frames (0-40%)
+            print("[DEBUG] Pass 1: Analyzing frames...")
+            sys.stdout.flush()
 
-        print(f"[DEBUG] Analyzed {len(crop_positions)} frames")
+            crop_positions = self._analyze_opencv_crop_positions(
+                cap,
+                orig_w,
+                crop_w,
+                total_frames=total_frames,
+                progress_callback=progress_callback,
+                progress_scale=0.4,
+            )
 
-        # Stabilize positions
-        if mode == "smooth_follow":
-            crop_positions = self._smooth_follow_positions(
-                crop_positions, orig_w - crop_w, fps
+            print(f"[DEBUG] Analyzed {len(crop_positions)} frames")
+
+            # Stabilize positions
+            if mode == "smooth_follow":
+                crop_positions = self._smooth_follow_positions(
+                    crop_positions, orig_w - crop_w, fps
+                )
+            else:
+                crop_positions = self.stabilize_positions(crop_positions)
+            self._write_crop_track_artifact(
+                crop_track_path,
+                tracking_mode=mode,
+                analysis_backend="opencv",
+                orig_w=orig_w,
+                orig_h=orig_h,
+                crop_w=crop_w,
+                crop_h=crop_h,
+                fps=fps,
+                total_frames=total_frames,
+                positions=crop_positions,
             )
         else:
-            crop_positions = self.stabilize_positions(crop_positions)
+            progress_callback(0.4)
         progress_callback(0.45)
 
         # Second pass: create video (45-85%)
@@ -5085,7 +5315,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             sys.stdout.flush()
 
     def convert_to_portrait_mediapipe_with_progress(
-        self, input_path: str, output_path: str, progress_callback
+        self,
+        input_path: str,
+        output_path: str,
+        progress_callback,
+        crop_track_path: str | None = None,
     ):
         """Convert landscape to 9:16 portrait with active speaker detection and progress (MediaPipe)"""
 
@@ -5121,114 +5355,142 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         crop_h = orig_h
         out_w, out_h = 1080, 1920
 
+        crop_positions = self._load_cached_crop_track(
+            crop_track_path,
+            tracking_mode="mediapipe",
+            analysis_backend="mediapipe",
+            orig_w=orig_w,
+            orig_h=orig_h,
+            crop_w=crop_w,
+            crop_h=crop_h,
+            fps=fps,
+            total_frames=total_frames,
+        )
+
         # MediaPipe settings
         lip_threshold = self.mediapipe_settings.get("lip_activity_threshold", 0.15)
         switch_threshold = self.mediapipe_settings.get("switch_threshold", 0.3)
         min_shot_duration = self.mediapipe_settings.get("min_shot_duration", 90)
         center_weight = self.mediapipe_settings.get("center_weight", 0.3)
 
-        # First pass: analyze frames with MediaPipe (0-40%)
-        print("[DEBUG] Pass 1: Analyzing lip movements with MediaPipe...")
-        sys.stdout.flush()
+        if crop_positions is None:
+            # First pass: analyze frames with MediaPipe (0-40%)
+            print("[DEBUG] Pass 1: Analyzing lip movements with MediaPipe...")
+            sys.stdout.flush()
 
-        crop_positions = []
-        face_activities = []
-        frame_count = 0
-        last_log_time = 0
-        import time
+            crop_positions = []
+            face_activities = []
+            frame_count = 0
+            last_log_time = 0
 
-        with self.mp_face_mesh.FaceMesh(
-            static_image_mode=False,
-            max_num_faces=3,
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
-        ) as face_mesh:
-            prev_lip_distances = {}
+            with self.mp_face_mesh.FaceMesh(
+                static_image_mode=False,
+                max_num_faces=3,
+                refine_landmarks=True,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+            ) as face_mesh:
+                prev_lip_distances = {}
 
-            while True:
-                if self.is_cancelled():
-                    cap.release()
-                    raise Exception("Cancelled by user")
+                while True:
+                    if self.is_cancelled():
+                        cap.release()
+                        raise Exception("Cancelled by user")
 
-                ret, frame = cap.read()
-                if not ret:
-                    break
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
 
-                # Convert to RGB for MediaPipe
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results = face_mesh.process(rgb_frame)
+                    # Convert to RGB for MediaPipe
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    results = face_mesh.process(rgb_frame)
 
-                best_face_x = orig_w / 2
-                max_activity = 0
+                    best_face_x = orig_w / 2
+                    max_activity = 0
 
-                if results.multi_face_landmarks:
-                    faces_data = []
+                    if results.multi_face_landmarks:
+                        faces_data = []
 
-                    for face_id, face_landmarks in enumerate(
-                        results.multi_face_landmarks
-                    ):
-                        # Calculate lip activity
-                        activity = self._calculate_lip_activity(
-                            face_landmarks,
-                            orig_w,
-                            orig_h,
-                            prev_lip_distances.get(face_id, None),
+                        for face_id, face_landmarks in enumerate(
+                            results.multi_face_landmarks
+                        ):
+                            # Calculate lip activity
+                            activity = self._calculate_lip_activity(
+                                face_landmarks,
+                                orig_w,
+                                orig_h,
+                                prev_lip_distances.get(face_id, None),
+                            )
+
+                            # Get face center position
+                            face_x = face_landmarks.landmark[1].x * orig_w
+
+                            # Combined score
+                            center_score = 1.0 - abs(face_x - orig_w / 2) / (orig_w / 2)
+                            combined_score = (activity * (1 - center_weight)) + (
+                                center_score * center_weight
+                            )
+
+                            faces_data.append(
+                                {
+                                    "x": face_x,
+                                    "activity": activity,
+                                    "combined_score": combined_score,
+                                }
+                            )
+
+                            # Update previous lip distance
+                            upper_lip = face_landmarks.landmark[13]
+                            lower_lip = face_landmarks.landmark[14]
+                            lip_distance = abs(upper_lip.y - lower_lip.y)
+                            prev_lip_distances[face_id] = lip_distance
+
+                        if faces_data:
+                            best_face = max(
+                                faces_data, key=lambda f: f["combined_score"]
+                            )
+                            best_face_x = best_face["x"]
+                            max_activity = best_face["activity"]
+
+                    crop_x = int(best_face_x - crop_w / 2)
+                    crop_x = max(0, min(crop_x, orig_w - crop_w))
+                    crop_positions.append(crop_x)
+                    face_activities.append(max_activity)
+
+                    frame_count += 1
+
+                    current_time = time.time()
+                    if frame_count % 30 == 0 or (current_time - last_log_time) > 2:
+                        progress = (frame_count / total_frames) * 0.4
+                        print(
+                            f"[DEBUG] Pass 1 progress: {progress * 100:.1f}% ({frame_count}/{total_frames} frames)"
                         )
+                        sys.stdout.flush()
+                        progress_callback(progress)
+                        last_log_time = current_time
 
-                        # Get face center position
-                        face_x = face_landmarks.landmark[1].x * orig_w
+            print(f"[DEBUG] Analyzed {frame_count} frames with MediaPipe")
+            sys.stdout.flush()
 
-                        # Combined score
-                        center_score = 1.0 - abs(face_x - orig_w / 2) / (orig_w / 2)
-                        combined_score = (activity * (1 - center_weight)) + (
-                            center_score * center_weight
-                        )
-
-                        faces_data.append(
-                            {
-                                "x": face_x,
-                                "activity": activity,
-                                "combined_score": combined_score,
-                            }
-                        )
-
-                        # Update previous lip distance
-                        upper_lip = face_landmarks.landmark[13]
-                        lower_lip = face_landmarks.landmark[14]
-                        lip_distance = abs(upper_lip.y - lower_lip.y)
-                        prev_lip_distances[face_id] = lip_distance
-
-                    if faces_data:
-                        best_face = max(faces_data, key=lambda f: f["combined_score"])
-                        best_face_x = best_face["x"]
-                        max_activity = best_face["activity"]
-
-                crop_x = int(best_face_x - crop_w / 2)
-                crop_x = max(0, min(crop_x, orig_w - crop_w))
-                crop_positions.append(crop_x)
-                face_activities.append(max_activity)
-
-                frame_count += 1
-
-                current_time = time.time()
-                if frame_count % 30 == 0 or (current_time - last_log_time) > 2:
-                    progress = (frame_count / total_frames) * 0.4
-                    print(
-                        f"[DEBUG] Pass 1 progress: {progress * 100:.1f}% ({frame_count}/{total_frames} frames)"
-                    )
-                    sys.stdout.flush()
-                    progress_callback(progress)
-                    last_log_time = current_time
-
-        print(f"[DEBUG] Analyzed {frame_count} frames with MediaPipe")
-        sys.stdout.flush()
-
-        # Stabilize positions (40-45%)
-        progress_callback(0.4)
-        crop_positions = self._stabilize_positions_with_activity(
-            crop_positions, face_activities, min_shot_duration, switch_threshold
-        )
+            # Stabilize positions (40-45%)
+            progress_callback(0.4)
+            crop_positions = self._stabilize_positions_with_activity(
+                crop_positions, face_activities, min_shot_duration, switch_threshold
+            )
+            self._write_crop_track_artifact(
+                crop_track_path,
+                tracking_mode="mediapipe",
+                analysis_backend="mediapipe",
+                orig_w=orig_w,
+                orig_h=orig_h,
+                crop_w=crop_w,
+                crop_h=crop_h,
+                fps=fps,
+                total_frames=total_frames,
+                positions=crop_positions,
+            )
+        else:
+            progress_callback(0.4)
         progress_callback(0.45)
 
         # Second pass: create video (45-85%)
@@ -6344,15 +6606,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
                 clip_root_dir.mkdir(parents=True, exist_ok=True)
                 stable_artifacts_dir = clip_root_dir / "artifacts"
+                stable_source_dir = clip_root_dir / "source"
                 stable_master_path = clip_root_dir / "master.mp4"
                 stable_data_path = clip_root_dir / "data.json"
                 stable_thumb_path = clip_root_dir / "thumb.jpg"
 
                 working_artifacts_dir = working_dir / "artifacts"
+                working_source_dir = working_dir / "source"
                 if working_artifacts_dir.exists():
                     if stable_artifacts_dir.exists():
                         shutil.rmtree(stable_artifacts_dir, ignore_errors=True)
                     shutil.copytree(working_artifacts_dir, stable_artifacts_dir)
+                if working_source_dir.exists():
+                    if stable_source_dir.exists():
+                        shutil.rmtree(stable_source_dir, ignore_errors=True)
+                    shutil.copytree(working_source_dir, stable_source_dir)
 
                 shutil.copy2(render_result["master_path"], stable_master_path)
 
