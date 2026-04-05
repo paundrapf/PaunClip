@@ -344,8 +344,8 @@ class CampaignDetailPage(ctk.CTkFrame):
 
         ctk.CTkButton(
             action_row,
-            text="Open Session",
-            width=110,
+            text="Resume Editing",
+            width=126,
             height=32,
             fg_color=("#27AE60", "#1E874B"),
             command=lambda vid=video_id: self.on_open_session(vid),

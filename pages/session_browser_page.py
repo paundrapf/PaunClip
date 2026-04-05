@@ -232,6 +232,7 @@ class SessionBrowserPage(ctk.CTkFrame):
             # Check if clips exist
             clips_dir = session_record["clips_dir"]
             has_clips = session_record["has_clips"] and any(clips_dir.iterdir())
+            can_retry_rendering = self.can_retry_rendering(data)
 
             resume_enabled_statuses = {
                 "highlights_found",
@@ -256,6 +257,19 @@ class SessionBrowserPage(ctk.CTkFrame):
                     state="normal" if status in resume_enabled_statuses else "disabled",
                 )
                 view_session_btn.pack(side="left", padx=(0, 5))
+
+            retry_btn = ctk.CTkButton(
+                action_row,
+                text="🔁 Retry Rendering",
+                height=32,
+                width=140,
+                font=ctk.CTkFont(size=11),
+                fg_color=("#8E3B46", "#6D2E36"),
+                hover_color=("#A54552", "#813742"),
+                command=lambda d=data: self.retry_rendering(d),
+                state="normal" if can_retry_rendering else "disabled",
+            )
+            retry_btn.pack(side="left", padx=(0, 5))
 
             # Open output button (if clips exist)
             if has_clips:
@@ -295,15 +309,64 @@ class SessionBrowserPage(ctk.CTkFrame):
             )
             delete_btn.pack(side="left")
 
+    def _prepare_session_payload(self, session_data: dict) -> dict:
+        """Copy a discovered session record into the payload shape app callbacks expect."""
+        payload = dict(session_data or {})
+
+        session_dir = payload.get("session_dir")
+        if session_dir:
+            payload["session_dir"] = Path(session_dir)
+
+        return payload
+
+    def can_retry_rendering(self, session_data: dict) -> bool:
+        """Return whether persisted clip jobs indicate a rerenderable session."""
+        return bool(self.get_retryable_highlight_ids(session_data))
+
+    def get_retryable_highlight_ids(self, session_data: dict) -> list[str]:
+        """Return highlight ids whose stored clip jobs still need a rerender."""
+        retryable_statuses = {"failed", "partial", "dirty_needs_rerender"}
+        retryable_highlight_ids = []
+        for clip_job in session_data.get("clip_jobs", []):
+            if not isinstance(clip_job, dict):
+                continue
+            highlight_id = clip_job.get("highlight_id")
+            if not highlight_id:
+                continue
+            status = str(clip_job.get("status") or "").lower()
+            if status in retryable_statuses:
+                retryable_highlight_ids.append(highlight_id)
+        return retryable_highlight_ids
+
     def resume_session(self, session_data: dict):
         """Resume a session"""
-        # Convert paths back to Path objects
-        session_data["session_dir"] = Path(session_data["session_dir"])
-        session_data["video_path"] = session_data["video_path"]
-        session_data["srt_path"] = session_data["srt_path"]
-
         # Call resume callback
-        self.on_resume(session_data, origin="session_browser")
+        self.on_resume(
+            self._prepare_session_payload(session_data), origin="session_browser"
+        )
+
+    def retry_rendering(self, session_data: dict):
+        """Resume the session and immediately retry rerenderable clip jobs."""
+        if not self.can_retry_rendering(session_data):
+            messagebox.showinfo(
+                "Retry Rendering",
+                "This session does not have failed or dirty clip jobs to rerender.",
+            )
+            return
+
+        workspace_state = (session_data or {}).get("workspace_state") or {}
+        add_captions = bool(workspace_state.get("add_captions", True))
+        add_hook = bool(workspace_state.get("add_hook", True))
+        retryable_highlight_ids = self.get_retryable_highlight_ids(session_data)
+
+        self.resume_session(session_data)
+
+        if self.app and hasattr(self.app, "render_workspace_selected"):
+            self.app.render_workspace_selected(
+                retryable_highlight_ids,
+                add_captions,
+                add_hook,
+            )
 
     def view_clips(self, clips_dir: Path):
         """View clips in results page UI"""

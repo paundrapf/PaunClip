@@ -77,7 +77,7 @@ class ResultsPage(ctk.CTkFrame):
         self.back_btn.pack(side="left", fill="x", expand=True, padx=(0, 5))
         ctk.CTkButton(
             btn_frame,
-            text="📂 Open Output",
+            text="📂 Open Folder",
             height=45,
             command=self.open_results_output,
         ).pack(side="left", fill="x", expand=True, padx=(5, 5))
@@ -320,7 +320,7 @@ class ResultsPage(ctk.CTkFrame):
         ).pack(side="left", padx=2)
         ctk.CTkButton(
             action_row,
-            text="📂 Open Output",
+            text="📂 Open Folder",
             width=110,
             height=30,
             fg_color="gray",
@@ -328,8 +328,8 @@ class ResultsPage(ctk.CTkFrame):
         ).pack(side="left", padx=2)
         ctk.CTkButton(
             action_row,
-            text="🧰 Open Parent",
-            width=110,
+            text="🧰 Resume Editing",
+            width=124,
             height=30,
             fg_color=("#3a3a3a", "#2a2a2a"),
             command=lambda c=clip: self.open_parent_session_for_clip(c),

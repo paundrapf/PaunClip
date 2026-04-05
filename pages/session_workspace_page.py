@@ -3,6 +3,7 @@ Session Workspace shell for unified source/highlight/edit/render/output flow.
 """
 
 import customtkinter as ctk
+from tkinter import messagebox
 
 
 class SessionWorkspacePage(ctk.CTkFrame):
@@ -511,7 +512,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
 
         self.retry_failed_btn = ctk.CTkButton(
             actions_card,
-            text="Retry Failed Clips",
+            text="Retry Rendering",
             height=36,
             fg_color=("#8E3B46", "#6D2E36"),
             hover_color=("#A54552", "#813742"),
@@ -550,7 +551,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
 
         self.results_btn = ctk.CTkButton(
             output_actions,
-            text="Results View",
+            text="Open Output",
             height=34,
             command=self.on_open_results,
         )
@@ -558,7 +559,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
 
         self.output_btn = ctk.CTkButton(
             output_actions,
-            text="Open Output Folder",
+            text="Open Folder",
             height=34,
             command=self.on_open_output,
         )
@@ -1195,9 +1196,28 @@ class SessionWorkspacePage(ctk.CTkFrame):
         )
 
     def handle_retry_failed(self):
-        """Retry failed clip jobs for this session."""
+        """Retry persisted rerender-worthy clip jobs for this session."""
         self.capture_active_draft()
-        self.on_retry_failed(self.add_captions_var.get(), self.add_hook_var.get())
+        retryable_statuses = {"failed", "partial", "dirty_needs_rerender"}
+        retryable_highlight_ids = [
+            highlight.get("highlight_id")
+            for highlight in self.highlights
+            if highlight.get("highlight_id")
+            and str(highlight.get("clip_status") or "").lower() in retryable_statuses
+        ]
+
+        if not retryable_highlight_ids:
+            messagebox.showinfo(
+                "Session Workspace",
+                "There are no failed or dirty clip jobs to rerender in this shell yet.",
+            )
+            return
+
+        self.on_render_selected(
+            retryable_highlight_ids,
+            self.add_captions_var.get(),
+            self.add_hook_var.get(),
+        )
 
     def handle_open_legacy(self):
         """Open the legacy highlight selection surface if available."""
@@ -1217,7 +1237,12 @@ class SessionWorkspacePage(ctk.CTkFrame):
             state="normal" if self.active_highlight_id else "disabled"
         )
         self.retry_failed_btn.configure(
-            state="normal" if int(queue_summary.get("failed") or 0) > 0 else "disabled"
+            state=(
+                "normal"
+                if int(queue_summary.get("failed") or 0) > 0
+                or int(queue_summary.get("dirty") or 0) > 0
+                else "disabled"
+            )
         )
         self.results_btn.configure(state="normal" if has_output else "disabled")
         self.output_btn.configure(state="normal" if has_session else "disabled")

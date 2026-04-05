@@ -135,7 +135,7 @@ class BrowsePage(ctk.CTkFrame):
 
         self.folder_btn = ctk.CTkButton(
             btn_frame,
-            text="📂 Open Output Folder",
+            text="📂 Open Folder",
             height=45,
             font=ctk.CTkFont(size=13),
             fg_color="gray",
@@ -298,7 +298,7 @@ class BrowsePage(ctk.CTkFrame):
 
             output_btn = ctk.CTkButton(
                 btn_row,
-                text="📂 Open Output",
+                text="📂 Open Folder",
                 height=32,
                 width=110,
                 font=ctk.CTkFont(size=11),
@@ -309,9 +309,9 @@ class BrowsePage(ctk.CTkFrame):
 
             parent_btn = ctk.CTkButton(
                 btn_row,
-                text="🧰 Open Parent",
+                text="🧰 Resume Editing",
                 height=32,
-                width=110,
+                width=124,
                 font=ctk.CTkFont(size=11),
                 fg_color=("#3a3a3a", "#2a2a2a"),
                 command=lambda c=clip: self.open_parent_session_for_clip(c),
