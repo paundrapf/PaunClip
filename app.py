@@ -1,4 +1,4 @@
-"""
+﻿"""
 YT Short Clipper Desktop App
 """
 
@@ -276,7 +276,7 @@ class YTShortClipperApp(ctk.CTk):
 
         ctk.CTkButton(
             manual_context_row,
-            text="← Campaigns",
+            text="ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ãƒâ€šÃ‚Â Campaigns",
             width=112,
             height=30,
             fg_color=("#2b2b2b", "#1a1a1a"),
@@ -375,7 +375,7 @@ class YTShortClipperApp(ctk.CTk):
 
         self.paste_btn = ctk.CTkButton(
             url_input_container,
-            text="📋 Paste",
+            text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹ Paste",
             width=65,
             height=32,
             fg_color=("#3a3a3a", "#2a2a2a"),
@@ -415,7 +415,7 @@ class YTShortClipperApp(ctk.CTk):
 
         self.subtitle_loading = ctk.CTkLabel(
             self.subtitle_frame,
-            text="⏳ Loading...",
+            text="ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Â³ Loading...",
             font=ctk.CTkFont(size=10),
             text_color="gray",
         )
@@ -445,7 +445,7 @@ class YTShortClipperApp(ctk.CTk):
 
         ctk.CTkButton(
             local_video_row,
-            text="📁 Select Video",
+            text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â Select Video",
             height=32,
             fg_color=("#3a3a3a", "#2a2a2a"),
             hover_color=("#4a4a4a", "#3a3a3a"),
@@ -478,7 +478,7 @@ class YTShortClipperApp(ctk.CTk):
 
         ctk.CTkButton(
             local_srt_buttons,
-            text="📄 Select Subtitle",
+            text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾ Select Subtitle",
             height=32,
             fg_color=("#3a3a3a", "#2a2a2a"),
             hover_color=("#4a4a4a", "#3a3a3a"),
@@ -487,7 +487,7 @@ class YTShortClipperApp(ctk.CTk):
         ).pack(side="left", fill="x", expand=True, padx=(0, 4))
         ctk.CTkButton(
             local_srt_buttons,
-            text="✕ Clear",
+            text="ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Clear",
             width=70,
             height=32,
             fg_color=("#4a2525", "#3a1f1f"),
@@ -568,7 +568,7 @@ class YTShortClipperApp(ctk.CTk):
 
         self.cookies_status_label = ctk.CTkLabel(
             self.cookies_frame,
-            text="🍪 No cookies",
+            text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Âª No cookies",
             font=ctk.CTkFont(size=10),
             anchor="w",
             text_color="gray",
@@ -577,7 +577,7 @@ class YTShortClipperApp(ctk.CTk):
 
         upload_cookies_btn = ctk.CTkButton(
             self.cookies_frame,
-            text="📁 Upload",
+            text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â Upload",
             height=28,
             fg_color=("#3a3a3a", "#2a2a2a"),
             hover_color=("#4a4a4a", "#3a3a3a"),
@@ -607,7 +607,7 @@ class YTShortClipperApp(ctk.CTk):
 
         sessions_link = ctk.CTkLabel(
             bottom_section,
-            text="📋 Browse Sessions",
+            text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹ Browse Sessions",
             font=ctk.CTkFont(size=10),
             text_color=("#3B8ED0", "#1F6AA5"),
             cursor="hand2",
@@ -638,7 +638,7 @@ class YTShortClipperApp(ctk.CTk):
         footer = PageFooter(page, self)
         footer.pack(fill="x", padx=20, pady=(5, 8), side="bottom")
 
-    def create_preview_placeholder(self, text="📺 Video thumbnail will appear here"):
+    def create_preview_placeholder(self, text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Âº Video thumbnail will appear here"):
         """Create placeholder content for video preview"""
         # Clear existing content
         for widget in self.thumb_frame.winfo_children():
@@ -676,10 +676,10 @@ class YTShortClipperApp(ctk.CTk):
             if self.local_video_var.get().strip():
                 local_name = Path(self.local_video_var.get()).name
                 self.create_preview_placeholder(
-                    f"📁 Local video selected\n{local_name}"
+                    f"ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â Local video selected\n{local_name}"
                 )
             else:
-                self.create_preview_placeholder("📁 Select a local video to begin")
+                self.create_preview_placeholder("ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â Select a local video to begin")
         else:
             self.local_source_frame.pack_forget()
             self.youtube_source_frame.pack(
@@ -716,7 +716,7 @@ class YTShortClipperApp(ctk.CTk):
         )
         self.current_thumbnail = None
         self.create_preview_placeholder(
-            f"📁 Local video selected\n{Path(file_path).name}"
+            f"ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â Local video selected\n{Path(file_path).name}"
         )
         self.update_start_button_state()
 
@@ -789,7 +789,7 @@ class YTShortClipperApp(ctk.CTk):
         # Warning message
         ctk.CTkLabel(
             content_frame,
-            text="⚠️ Please upload YouTube cookies first!",
+            text="ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Please upload YouTube cookies first!",
             font=ctk.CTkFont(size=14, weight="bold"),
             text_color=("#e74c3c", "#e74c3c"),
         ).pack(pady=(0, 15))
@@ -807,7 +807,7 @@ class YTShortClipperApp(ctk.CTk):
         # English guide button
         english_btn = ctk.CTkButton(
             buttons_frame,
-            text="📖 English Guide",
+            text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ English Guide",
             width=140,
             height=35,
             font=ctk.CTkFont(size=12),
@@ -825,7 +825,7 @@ class YTShortClipperApp(ctk.CTk):
         # Indonesian guide button
         indonesian_btn = ctk.CTkButton(
             buttons_frame,
-            text="📖 Bahasa Indonesia",
+            text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ Bahasa Indonesia",
             width=140,
             height=35,
             font=ctk.CTkFont(size=12),
@@ -884,7 +884,7 @@ class YTShortClipperApp(ctk.CTk):
         """Check if cookies.txt exists and update UI"""
         if self.cookies_path.exists():
             self.cookies_status_label.configure(
-                text="✅ cookies.txt loaded",
+                text="ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ cookies.txt loaded",
                 text_color=("#27ae60", "#2ecc71"),  # Green
             )
             # Update start button state when cookies status changes
@@ -892,7 +892,7 @@ class YTShortClipperApp(ctk.CTk):
             return True
         else:
             self.cookies_status_label.configure(
-                text="🍪 No cookies.txt found", text_color="gray"
+                text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Âª No cookies.txt found", text_color="gray"
             )
             # Update start button state when cookies status changes
             self.update_start_button_state()
@@ -924,7 +924,7 @@ class YTShortClipperApp(ctk.CTk):
         """Create highlight selection page as embedded frame"""
         self.pages["highlight_selection"] = HighlightSelectionPage(
             self.container,
-            lambda: self.show_page("home"),  # Back to home
+            self.go_back_from_highlight_selection,  # Back to prior workspace/manual flow
             self.process_selected_highlights,  # Process callback
         )
 
@@ -1074,13 +1074,13 @@ class YTShortClipperApp(ctk.CTk):
             self.manual_context_label.configure(
                 text=(
                     f"Campaign selected: {self.active_campaign_name} "
-                    "• Campaign Detail handles queued videos, while this page is the manual one-off flow"
+                    "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ Campaign Detail handles queued videos, while this page is the manual one-off flow"
                 ),
                 text_color=("#3B8ED0", "#74B9FF"),
             )
         else:
             self.manual_context_label.configure(
-                text="Manual one-off session • not linked to a campaign",
+                text="Manual one-off session ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ not linked to a campaign",
                 text_color="gray",
             )
 
@@ -1446,9 +1446,9 @@ class YTShortClipperApp(ctk.CTk):
         if isinstance(value, bool):
             return "Yes" if value else "No"
         if value is None:
-            return "—"
+            return "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â"
         text = str(value).strip()
-        return text or "—"
+        return text or "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â"
 
     def _describe_session_source(self, session_data: dict) -> str:
         """Return a human-readable label for session source type."""
@@ -1479,7 +1479,7 @@ class YTShortClipperApp(ctk.CTk):
         mode = str(highlight_runtime.get("mode") or "").replace("_", " ").title()
         model = highlight_runtime.get("model") or "Unknown model"
         if mode:
-            return f"Highlight provider: {mode} • {model}"
+            return f"Highlight provider: {mode} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ {model}"
         return f"Highlight provider: {model}"
 
     def _get_workspace_editor_defaults(self, session_data: dict | None = None) -> dict:
@@ -1519,8 +1519,8 @@ class YTShortClipperApp(ctk.CTk):
         watermark_state = "on" if bool((watermark or {}).get("enabled")) else "off"
         source_state = "on" if defaults.get("source_credit_enabled", True) else "off"
         return (
-            f"TTS default: {defaults.get('tts_voice', 'nova')}   •   "
-            f"Brand watermark settings default: {watermark_state}   •   "
+            f"TTS default: {defaults.get('tts_voice', 'nova')}   ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢   "
+            f"Brand watermark settings default: {watermark_state}   ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢   "
             f"Auto Source Video default: {source_state}"
         )
 
@@ -1603,7 +1603,7 @@ class YTShortClipperApp(ctk.CTk):
             return {
                 "session": None,
                 "origin_label": None,
-                "back_label": "← Back",
+                "back_label": "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ãƒâ€šÃ‚Â Back",
                 "source_rows": [],
                 "provider_summary": None,
                 "highlights": [],
@@ -1650,7 +1650,7 @@ class YTShortClipperApp(ctk.CTk):
                 {
                     **highlight,
                     "time_range": (
-                        f"{start_time} → {end_time}" if start_time or end_time else ""
+                        f"{start_time} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ {end_time}" if start_time or end_time else ""
                     ),
                     "clip_status": clip_status_lookup.get(
                         highlight.get("highlight_id")
@@ -1717,9 +1717,9 @@ class YTShortClipperApp(ctk.CTk):
             "home": "Manual Intake",
         }
         back_labels = {
-            "campaign_detail": "← Back to Campaign",
-            "session_browser": "← Back to Sessions",
-            "home": "← Back to Manual Intake",
+            "campaign_detail": "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ãƒâ€šÃ‚Â Back to Campaign",
+            "session_browser": "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ãƒâ€šÃ‚Â Back to Sessions",
+            "home": "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ãƒâ€šÃ‚Â Back to Manual Intake",
         }
 
         return {
@@ -1727,7 +1727,7 @@ class YTShortClipperApp(ctk.CTk):
             "origin_label": origin_labels.get(
                 self.session_workspace_origin, "Session Flow"
             ),
-            "back_label": back_labels.get(self.session_workspace_origin, "← Back"),
+            "back_label": back_labels.get(self.session_workspace_origin, "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ãƒâ€šÃ‚Â Back"),
             "workspace_state": session_data.get("workspace_state") or {},
             "source_rows": source_rows,
             "provider_summary": self._build_workspace_provider_summary(session_data),
@@ -1826,6 +1826,13 @@ class YTShortClipperApp(ctk.CTk):
             Path(self.session_data.get("session_dir", "")),
         )
         self.show_page("highlight_selection")
+
+    def go_back_from_highlight_selection(self):
+        """Return from Legacy Select to the most relevant prior screen."""
+        if self.session_data:
+            self.show_page("session_workspace")
+            return
+        self.show_page("home")
 
     def render_workspace_selected(
         self, highlight_ids: list[str], add_captions: bool, add_hook: bool
@@ -2464,7 +2471,7 @@ class YTShortClipperApp(ctk.CTk):
             deno_color = "#4ade80" if deno_ok else "#f87171"
             ctk.CTkLabel(
                 status_row,
-                text=f"Deno {'✓' if deno_ok else '✗'}",
+                text=f"Deno {'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ' if deno_ok else 'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â'}",
                 font=ctk.CTkFont(size=10),
                 text_color=deno_color,
             ).pack(side="left", padx=(0, 8))
@@ -2473,7 +2480,7 @@ class YTShortClipperApp(ctk.CTk):
             ytdlp_color = "#4ade80" if ytdlp_ok else "#f87171"
             ctk.CTkLabel(
                 status_row,
-                text=f"YT-DLP {'✓' if ytdlp_ok else '✗'}",
+                text=f"YT-DLP {'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ' if ytdlp_ok else 'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â'}",
                 font=ctk.CTkFont(size=10),
                 text_color=ytdlp_color,
             ).pack(side="left", padx=(0, 8))
@@ -2482,7 +2489,7 @@ class YTShortClipperApp(ctk.CTk):
             ffmpeg_color = "#4ade80" if ffmpeg_ok else "#f87171"
             ctk.CTkLabel(
                 status_row,
-                text=f"FFmpeg {'✓' if ffmpeg_ok else '✗'}",
+                text=f"FFmpeg {'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ' if ffmpeg_ok else 'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â'}",
                 font=ctk.CTkFont(size=10),
                 text_color=ffmpeg_color,
             ).pack(side="left", padx=(0, 8))
@@ -2556,7 +2563,7 @@ class YTShortClipperApp(ctk.CTk):
                 debug_log(f"Total subtitles found: {len(all_subs)}")
 
                 if not all_subs:
-                    # No subtitles — allow proceeding with AI transcription fallback
+                    # No subtitles ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â allow proceeding with AI transcription fallback
                     self.after(0, lambda: self.show_no_subtitle_fallback())
                     return
 
@@ -2711,7 +2718,7 @@ class YTShortClipperApp(ctk.CTk):
 
         self.thumb_label = ctk.CTkLabel(
             preview_container,
-            text="⚠️ Could not load thumbnail\nPlease check the URL",
+            text="ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Could not load thumbnail\nPlease check the URL",
             font=ctk.CTkFont(size=13),
             text_color="gray",
             justify="center",
@@ -2776,7 +2783,7 @@ class YTShortClipperApp(ctk.CTk):
                         message = (
                             "Highlight Finder API is not configured!\n\n"
                             + "This is required to find viral moments in videos.\n\n"
-                            + "Please configure it in Settings → AI API Settings → Highlight Finder"
+                            + "Please configure it in Settings ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ AI API Settings ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Highlight Finder"
                         )
                     self.after(
                         0,
@@ -2799,7 +2806,7 @@ class YTShortClipperApp(ctk.CTk):
                                 lambda: self._on_validation_failed(
                                     f"Highlight Finder model '{hf_model}' is not available!\n\n"
                                     + "Please check your configuration in:\n"
-                                    + "Settings → AI API Settings → Highlight Finder"
+                                    + "Settings ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ AI API Settings ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Highlight Finder"
                                 ),
                             )
                             return
@@ -2813,7 +2820,7 @@ class YTShortClipperApp(ctk.CTk):
                             f"Highlight Finder API validation failed!\n\n"
                             + f"Error: {str(e)[:100]}\n\n"
                             + "Please check your configuration in:\n"
-                            + "Settings → AI API Settings → Highlight Finder"
+                            + "Settings ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ AI API Settings ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Highlight Finder"
                         ),
                     )
                     return
@@ -2844,7 +2851,7 @@ class YTShortClipperApp(ctk.CTk):
 
         if not self.client and not self._hydrate_provider_runtime(update_ui=True):
             messagebox.showerror(
-                "Error", "Configure API settings first!\nClick ⚙️ button."
+                "Error", "Configure API settings first!\nClick ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â button."
             )
             return
 
@@ -2892,7 +2899,7 @@ class YTShortClipperApp(ctk.CTk):
                 "Caption Maker is not configured!\n\n"
                 "AI transcription requires Caption Maker (Whisper API).\n\n"
                 "Please set it up in:\n"
-                "Settings → AI API Settings → Caption Maker",
+                "Settings ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ AI API Settings ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Caption Maker",
             )
             return
 
@@ -3179,7 +3186,7 @@ class YTShortClipperApp(ctk.CTk):
                     return
 
                 if subtitle_lang == "none":
-                    # User already chose AI transcription from home page — skip dialog
+                    # User already chose AI transcription from home page ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â skip dialog
                     self._run_whisper_transcription(
                         core, snf.video_path, snf.video_info, num_clips, snf.session_dir
                     )
@@ -3293,7 +3300,7 @@ class YTShortClipperApp(ctk.CTk):
                 "You can use AI transcription (Whisper API) as a fallback,\n"
                 "but Caption Maker is not configured yet.\n\n"
                 "Please set it up in:\n"
-                "Settings → AI API Settings → Caption Maker"
+                "Settings ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ AI API Settings ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Caption Maker"
             )
             return
 
@@ -3510,7 +3517,7 @@ class YTShortClipperApp(ctk.CTk):
             )
             if not highlights:
                 raise Exception(
-                    "❌ No valid highlights found!\n\n"
+                    "ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ No valid highlights found!\n\n"
                     "Possible causes:\n"
                     "1. AI model failed to generate highlights\n"
                     "2. Video transcript too short or not suitable\n"
@@ -3791,7 +3798,7 @@ class YTShortClipperApp(ctk.CTk):
             command=lambda: self.show_page("session_workspace")
         )
         self.pages["clipping"].results_btn.configure(
-            text="🧰 Return to Workspace",
+            text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚Â§Ãƒâ€šÃ‚Â° Return to Workspace",
             command=lambda: self.show_page("session_workspace"),
         )
         self.show_page("clipping")
@@ -3960,10 +3967,10 @@ class YTShortClipperApp(ctk.CTk):
             self.cancelled = True
             # Update both pages
             if "processing" in self.pages:
-                self.pages["processing"].update_status("⚠️ Cancelling... please wait")
+                self.pages["processing"].update_status("ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Cancelling... please wait")
                 self.pages["processing"].cancel_btn.configure(state="disabled")
             if "clipping" in self.pages:
-                self.pages["clipping"].update_status("⚠️ Cancelling... please wait")
+                self.pages["clipping"].update_status("ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Cancelling... please wait")
                 self.pages["clipping"].cancel_btn.configure(state="disabled")
 
     def on_cancelled(self):

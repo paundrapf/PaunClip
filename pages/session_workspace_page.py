@@ -92,7 +92,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
 
         self.back_btn = ctk.CTkButton(
             left_header,
-            text="← Back",
+            text="Ã¢â€ Â Back",
             width=128,
             height=34,
             fg_color=("#2b2b2b", "#1a1a1a"),
@@ -199,12 +199,12 @@ class SessionWorkspacePage(ctk.CTkFrame):
         left_col.pack(side="left", fill="both", padx=(0, 10))
         left_col.pack_propagate(False)
 
+        right_col = ctk.CTkFrame(body, fg_color="transparent", width=220)
+        right_col.pack(side="right", fill="both", padx=(10, 0))
+        right_col.pack_propagate(False)
+
         center_col = ctk.CTkFrame(body, fg_color="transparent")
         center_col.pack(side="left", fill="both", expand=True)
-
-        right_col = ctk.CTkFrame(body, fg_color="transparent", width=220)
-        right_col.pack(side="left", fill="both", padx=(10, 0))
-        right_col.pack_propagate(False)
 
         self.source_card = ctk.CTkFrame(
             left_col, fg_color=("#202020", "#141414"), corner_radius=12
@@ -567,7 +567,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
 
         self.results_btn = ctk.CTkButton(
             output_actions,
-            text="Open Output",
+            text="View Results",
             height=34,
             command=self.on_open_results,
         )
@@ -575,7 +575,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
 
         self.output_btn = ctk.CTkButton(
             output_actions,
-            text="Open Folder",
+            text="Open Output Folder",
             height=34,
             command=self.on_open_output,
         )
@@ -672,9 +672,9 @@ class SessionWorkspacePage(ctk.CTkFrame):
             meta_parts.append(f"Campaign {session['campaign_label']}")
         if self.state.get("provider_summary"):
             meta_parts.append(self.state["provider_summary"])
-        self.session_meta_label.configure(text="   •   ".join(meta_parts) or "")
+        self.session_meta_label.configure(text="   Ã¢â‚¬Â¢   ".join(meta_parts) or "")
 
-        self.back_btn.configure(text=self.state.get("back_label") or "← Back")
+        self.back_btn.configure(text=self.state.get("back_label") or "Ã¢â€ Â Back")
         self.legacy_btn.configure(
             state="normal"
             if callable(self.on_open_legacy) and bool(session)
@@ -798,7 +798,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
 
             ctk.CTkLabel(
                 card,
-                text="   •   ".join(details) or "No duration metadata",
+                text="   Ã¢â‚¬Â¢   ".join(details) or "No duration metadata",
                 font=ctk.CTkFont(size=9),
                 text_color="gray",
                 anchor="w",
@@ -871,7 +871,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
 
             ctk.CTkLabel(
                 card,
-                text="   •   ".join(detail_bits),
+                text="   Ã¢â‚¬Â¢   ".join(detail_bits),
                 font=ctk.CTkFont(size=9),
                 text_color="gray",
                 anchor="w",
@@ -909,8 +909,8 @@ class SessionWorkspacePage(ctk.CTkFrame):
             text=(
                 f"Selected highlights: {selected}\n"
                 f"Tracked clip jobs: {total}\n"
-                f"Queued {queued} • Rendering {rendering}\n"
-                f"Completed {completed} • Dirty {dirty} • Failed {failed}"
+                f"Queued {queued} Ã¢â‚¬Â¢ Rendering {rendering}\n"
+                f"Completed {completed} Ã¢â‚¬Â¢ Dirty {dirty} Ã¢â‚¬Â¢ Failed {failed}"
             )
         )
 
@@ -1064,8 +1064,8 @@ class SessionWorkspacePage(ctk.CTkFrame):
             )
             self.active_highlight_meta.configure(
                 text=(
-                    f"{highlight.get('time_range') or 'Unknown time range'}   •   "
-                    f"{float(highlight.get('duration_seconds') or 0):.0f}s   •   "
+                    f"{highlight.get('time_range') or 'Unknown time range'}   Ã¢â‚¬Â¢   "
+                    f"{float(highlight.get('duration_seconds') or 0):.0f}s   Ã¢â‚¬Â¢   "
                     f"Virality {highlight.get('virality_score') or 0}/10"
                 )
             )

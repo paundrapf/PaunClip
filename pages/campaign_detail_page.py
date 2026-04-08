@@ -1,4 +1,4 @@
-"""
+﻿"""
 Campaign detail page with channel fetch controls and queued video actions.
 """
 
@@ -64,7 +64,7 @@ class CampaignDetailPage(ctk.CTkFrame):
 
         ctk.CTkButton(
             left_header,
-            text="←",
+            text="ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â",
             width=40,
             fg_color="transparent",
             hover_color=("gray75", "gray25"),
@@ -212,7 +212,7 @@ class CampaignDetailPage(ctk.CTkFrame):
         self.queue_all_btn.configure(state="normal" if queueable_count else "disabled")
         self.summary_badge.configure(
             text=(
-                f"{len(videos)} fetched • {queueable_count} new • "
+                f"{len(videos)} fetched ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ {queueable_count} new ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ "
                 f"{sum(1 for video in videos if video.get('session_id'))} linked sessions"
             )
             if videos
@@ -238,7 +238,7 @@ class CampaignDetailPage(ctk.CTkFrame):
             ).pack(pady=(26, 6))
             ctk.CTkLabel(
                 card,
-                text="Use Fetch Latest Videos to populate the queue snapshot stored in channel_fetch.json.",
+                text="Add or edit the channel URL above, then click Fetch Latest Videos to populate the queue snapshot stored in channel_fetch.json.",
                 font=ctk.CTkFont(size=11),
                 text_color="gray",
                 wraplength=680,
@@ -279,8 +279,8 @@ class CampaignDetailPage(ctk.CTkFrame):
         ).pack(side="right", padx=(12, 0))
 
         info_text = (
-            f"ID: {video.get('video_id') or 'unknown'}   •   "
-            f"Published: {self._format_datetime(video.get('published_at'))}   •   "
+            f"ID: {video.get('video_id') or 'unknown'}   |   "
+            f"Published: {self._format_datetime(video.get('published_at'))}   |   "
             f"Duration: {self._format_duration(video.get('duration_seconds'))}"
         )
         ctk.CTkLabel(
@@ -326,7 +326,7 @@ class CampaignDetailPage(ctk.CTkFrame):
             width=86,
             height=32,
             command=lambda vid=video_id: self.on_queue_video(vid),
-            state="normal" if status in {"new", "failed", "skipped"} else "disabled",
+            state="normal" if status == "new" else "disabled",
         ).pack(side="left", padx=(0, 5))
 
         ctk.CTkButton(
@@ -337,7 +337,7 @@ class CampaignDetailPage(ctk.CTkFrame):
             fg_color=("#3B8ED0", "#1F6AA5"),
             command=lambda vid=video_id: self.on_process_video(vid),
             state="normal"
-            if status != "downloading" and status != "transcribing"
+            if status not in {"downloading", "transcribing"} and not has_session
             else "disabled",
         ).pack(side="left", padx=(0, 5))
 
@@ -353,8 +353,8 @@ class CampaignDetailPage(ctk.CTkFrame):
 
         ctk.CTkButton(
             action_row,
-            text="Retry",
-            width=80,
+            text="Process Now",
+            width=96,
             height=32,
             fg_color=("#8E3B46", "#6D2E36"),
             command=lambda vid=video_id: self.on_retry_video(vid),
@@ -378,7 +378,7 @@ class CampaignDetailPage(ctk.CTkFrame):
         formatted = self._format_datetime(fetched_at)
         last_error = snapshot.get("last_error")
         if last_error:
-            return f"{formatted} • last fetch error: {last_error[:80]}"
+            return f"{formatted} ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ last fetch error: {last_error[:80]}"
         return formatted
 
     def _format_datetime(self, value: str | None) -> str:
