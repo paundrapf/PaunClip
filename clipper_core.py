@@ -3792,6 +3792,8 @@ Candidates:
             hook_text = highlight.get("hook_text", highlight["title"])
             if hook_artifact_file.exists() and "hook" not in effective_dirty_stage_set:
                 hook_duration = float(stable_metadata.get("hook_duration_seconds") or 0)
+                if hook_duration == 0 and hook_artifact_file.exists():
+                    hook_duration = self._probe_media_duration(str(hook_artifact_file))
                 current_output = hook_artifact_file
                 self.log("  ↺ Reused hook artifact")
                 clip_progress("Adding hook...", current_step, 1.0)
@@ -3942,6 +3944,8 @@ Candidates:
             "has_hook": add_hook,
             "has_captions": add_captions,
             "hook_duration_seconds": hook_duration,
+            "caption_time_offset_seconds": hook_duration,
+            "caption_language": self._resolve_whisper_language() or "auto",
             "has_watermark": self.watermark_settings.get("enabled", False),
             "has_credit": self.credit_watermark_settings.get("enabled", False),
             "channel_name": self.channel_name,
@@ -4928,11 +4932,7 @@ Candidates:
         try:
             with open(audio_file, "rb") as f:
                 transcript = self.caption_client.audio.transcriptions.create(
-                    model=self.whisper_model,
-                    file=f,
-                    language="id",
-                    response_format="verbose_json",
-                    timestamp_granularities=["word"],
+                    **self._build_caption_transcription_kwargs(f)
                 )
         except Exception as e:
             self.log(f"  Warning: Whisper API error: {e}")
@@ -5081,6 +5081,46 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         ts = ts.replace(",", ".")
         parts = ts.split(":")
         return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+
+    def _probe_media_duration(self, media_path: str) -> float:
+        """Probe media duration using ffmpeg stderr output."""
+        try:
+            result = subprocess.run(
+                [self.ffmpeg_path, "-i", media_path, "-f", "null", "-"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                creationflags=SUBPROCESS_FLAGS,
+            )
+            duration_match = re.search(
+                r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", result.stderr
+            )
+            if duration_match:
+                h, m, s = duration_match.groups()
+                return int(h) * 3600 + int(m) * 60 + float(s)
+        except Exception:
+            pass
+        return 0.0
+
+    def _resolve_whisper_language(self) -> str | None:
+        """Resolve the configured Whisper language, or None for auto-detection."""
+        language = str(self.subtitle_language or "").strip().lower()
+        if language in {"", "none", "auto"}:
+            return None
+        return language
+
+    def _build_caption_transcription_kwargs(self, file_obj) -> dict:
+        """Build a stable Whisper transcription request payload."""
+        kwargs = {
+            "model": self.whisper_model,
+            "file": file_obj,
+            "response_format": "verbose_json",
+            "timestamp_granularities": ["word"],
+        }
+        whisper_lang = self._resolve_whisper_language()
+        if whisper_lang:
+            kwargs["language"] = whisper_lang
+        return kwargs
 
     def cleanup(self):
         """Clean up temp files"""
@@ -6221,15 +6261,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             return
 
         # Get audio duration for token reporting
-        probe_cmd = [self.ffmpeg_path, "-i", audio_file, "-f", "null", "-"]
-        result = subprocess.run(
-            probe_cmd, capture_output=True, text=True, creationflags=SUBPROCESS_FLAGS
-        )
-        duration_match = re.search(r"Duration: (\d+):(\d+):(\d+\.\d+)", result.stderr)
-        audio_duration = 0
-        if duration_match:
-            h, m, s = duration_match.groups()
-            audio_duration = int(h) * 3600 + int(m) * 60 + float(s)
+        audio_duration = self._probe_media_duration(audio_file)
+        if audio_duration:
             self.report_tokens(0, 0, audio_duration, 0)
 
         if progress_callback:
@@ -6239,11 +6272,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         try:
             with open(audio_file, "rb") as f:
                 transcript = self.caption_client.audio.transcriptions.create(
-                    model=self.whisper_model,
-                    file=f,
-                    language="id",
-                    response_format="verbose_json",
-                    timestamp_granularities=["word"],
+                    **self._build_caption_transcription_kwargs(f)
                 )
         except Exception as e:
             self.log(f"  Warning: Whisper API error: {e}")
