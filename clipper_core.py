@@ -4626,35 +4626,7 @@ Candidates:
         # Create hook video: freeze first frame + TTS audio + text overlay
         hook_video = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
 
-        # Build drawtext filter for each line
-        # Style: Yellow/gold text on white background box
-        drawtext_filters = []
-        line_height = 85  # pixels between lines
-        font_size = 58
-        total_text_height = len(lines) * line_height
-        start_y = (height // 3) - (total_text_height // 2)  # Position at upper third
-
-        for i, line in enumerate(lines):
-            # Escape special characters for FFmpeg drawtext
-            escaped_line = (
-                line.replace("'", "'\\''").replace(":", "\\:").replace("\\", "\\\\")
-            )
-            y_pos = start_y + (i * line_height)
-
-            # Yellow/gold text with white box background
-            drawtext_filters.append(
-                f"drawtext=text='{escaped_line}':"
-                f"fontfile='C\\:/Windows/Fonts/arialbd.ttf':"
-                f"fontsize={font_size}:"
-                f"fontcolor=#FFD700:"  # Golden yellow
-                f"box=1:"
-                f"boxcolor=white@0.95:"  # White background
-                f"boxborderw=12:"  # Padding around text
-                f"x=(w-text_w)/2:"
-                f"y={y_pos}"
-            )
-
-        filter_chain = ",".join(drawtext_filters)
+        filter_chain = self._build_hook_drawtext_filter(lines, height=height)
 
         # Get encoder args
         encoder_args = self.get_video_encoder_args()
@@ -5121,6 +5093,92 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if whisper_lang:
             kwargs["language"] = whisper_lang
         return kwargs
+
+    def _resolve_drawtext_font_file(
+        self, preferred_fonts: list[str] | None = None
+    ) -> str | None:
+        """Find a usable cross-platform font path for FFmpeg drawtext."""
+        candidates = []
+        if preferred_fonts:
+            candidates.extend(preferred_fonts)
+
+        if sys.platform == "win32":
+            candidates.extend(
+                [
+                    "C:/Windows/Fonts/arialbd.ttf",
+                    "C:/Windows/Fonts/Arialbd.ttf",
+                    "C:/Windows/Fonts/arial.ttf",
+                    "C:/Windows/Fonts/segoeuib.ttf",
+                    "C:/Windows/Fonts/segoeui.ttf",
+                ]
+            )
+        elif sys.platform == "darwin":
+            candidates.extend(
+                [
+                    "/Library/Fonts/Arial Bold.ttf",
+                    "/System/Library/Fonts/Helvetica.ttc",
+                    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+                    "/System/Library/Fonts/Supplemental/Arial.ttf",
+                ]
+            )
+        else:
+            candidates.extend(
+                [
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                    "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+                    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+                    "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+                ]
+            )
+
+        seen = set()
+        for candidate in candidates:
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            path = Path(candidate)
+            if path.exists():
+                normalized = path.as_posix()
+                if sys.platform == "win32":
+                    normalized = normalized.replace(":", "\\:")
+                return normalized
+
+        return None
+
+    def _escape_drawtext_text(self, text: str) -> str:
+        """Escape FFmpeg drawtext text payload safely enough for single-quoted filters."""
+        return str(text).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+    def _build_hook_drawtext_filter(
+        self,
+        lines: list[str],
+        *,
+        height: int,
+        font_size: int = 58,
+        line_height: int = 85,
+    ) -> str:
+        """Build a professional top-safe-zone drawtext chain for hook overlays."""
+        font_file = self._resolve_drawtext_font_file()
+        drawtext_filters = []
+        start_y = int(height * 0.08)
+
+        for index, line in enumerate(lines):
+            escaped_line = self._escape_drawtext_text(line)
+            y_pos = start_y + (index * line_height)
+            font_arg = f"fontfile='{font_file}':" if font_file else ""
+            drawtext_filters.append(
+                f"drawtext={font_arg}"
+                f"text='{escaped_line}':"
+                f"fontsize={font_size}:"
+                f"fontcolor=#FFD700:"
+                f"box=1:"
+                f"boxcolor=white@0.95:"
+                f"boxborderw=12:"
+                f"x=(w-text_w)/2:"
+                f"y={y_pos}"
+            )
+
+        return ",".join(drawtext_filters)
 
     def cleanup(self):
         """Clean up temp files"""
@@ -5868,17 +5926,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         # Create hook video in our temp directory
         hook_video = str(self.temp_dir / f"hook_{int(time.time() * 1000)}.mp4")
 
-        # Create text file for drawtext filter (avoid escaping issues)
-        text_file = str(self.temp_dir / f"hook_text_{int(time.time() * 1000)}.txt")
-
-        # Write text lines to file
-        text_content = "\n".join(lines)
-        with open(text_file, "w", encoding="utf-8") as f:
-            f.write(text_content)
-
-        # Use a simpler approach: create static image with text, then combine with audio
-        # This avoids complex FFmpeg filter escaping issues
-
         # First, create a simple background video from first frame using GPU/CPU encoder
         bg_video = str(self.temp_dir / f"hook_bg_{int(time.time() * 1000)}.mp4")
 
@@ -5916,154 +5963,45 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if not os.path.exists(bg_video) or os.path.getsize(bg_video) < 1000:
             raise Exception("Background video was not created properly")
 
-        # Copy font to temp dir to avoid Windows path colon issues in FFmpeg filter
-        import shutil
-
-        temp_font = str(self.temp_dir / "arial_bold.ttf")
-        if not os.path.exists(temp_font):
-            shutil.copy2("C:/Windows/Fonts/arialbd.ttf", temp_font)
-
-        # Now add text overlays one by one
-        current_video = bg_video
-        line_height = 85
-        font_size = 58
-        total_text_height = len(lines) * line_height
-        start_y = (height // 3) - (total_text_height // 2)
-
-        for i, line in enumerate(lines):
-            # Normalize unicode characters
-            normalized_line = line.encode("ascii", "ignore").decode("ascii")
-            if not normalized_line.strip():
-                normalized_line = (
-                    line.replace("\u2026", "...")
-                    .replace("\u2013", "-")
-                    .replace("\u2018", "'")
-                    .replace("\u2019", "'")
-                    .replace("\u201c", '"')
-                    .replace("\u201d", '"')
-                )
-
-            y_pos = start_y + (i * line_height)
-
-            next_video = str(
-                self.temp_dir / f"hook_text_{int(time.time() * 1000)}_{i}.mp4"
-            )
-
-            # Use OpenCV to add text overlay instead of FFmpeg drawtext
-            # This avoids all Windows path escaping issues
-            self.log(f"Adding text overlay with OpenCV: {normalized_line}")
-
-            # Read input video
-            cap = cv2.VideoCapture(current_video)
-            fps = int(cap.get(cv2.CAP_PROP_FPS))
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-            # Setup video writer
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            out = cv2.VideoWriter(next_video, fourcc, fps, (width, height))
-
-            # Process each frame
-            frame_count = 0
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-
-                # Add text overlay using cv2.putText
-                # Calculate text size for centering
-                font = cv2.FONT_HERSHEY_SIMPLEX  # Fixed: use SIMPLEX instead of BOLD
-                font_scale = 2.0
-                thickness = 4
-
-                # Get text size
-                (text_width, text_height), baseline = cv2.getTextSize(
-                    normalized_line, font, font_scale, thickness
-                )
-
-                # Calculate position (centered horizontally, at y_pos vertically)
-                text_x = (width - text_width) // 2
-                text_y = y_pos + text_height
-
-                # Draw white background box
-                box_padding = 12
-                box_x1 = text_x - box_padding
-                box_y1 = text_y - text_height - box_padding
-                box_x2 = text_x + text_width + box_padding
-                box_y2 = text_y + baseline + box_padding
-
-                # Draw semi-transparent white box
-                overlay = frame.copy()
-                cv2.rectangle(
-                    overlay, (box_x1, box_y1), (box_x2, box_y2), (255, 255, 255), -1
-                )
-                cv2.addWeighted(overlay, 0.95, frame, 0.05, 0, frame)
-
-                # Draw yellow/gold text (#FFD700 = RGB(255, 215, 0))
-                cv2.putText(
-                    frame,
-                    normalized_line,
-                    (text_x, text_y),
-                    font,
-                    font_scale,
-                    (0, 215, 255),
-                    thickness,
-                    cv2.LINE_AA,
-                )
-
-                out.write(frame)
-                frame_count += 1
-
-            cap.release()
-            out.release()
-
-            self.log(f"Processed {frame_count} frames with text overlay")
-
-            # Verify output was created
-            if not os.path.exists(next_video) or os.path.getsize(next_video) < 1000:
-                raise Exception(f"Text overlay video {i} was not created properly")
-
-            # Clean up previous temp file
-            if current_video != bg_video:
-                try:
-                    os.unlink(current_video)
-                except:
-                    pass
-
-            current_video = next_video
-
-        # Re-encode OpenCV output to proper H.264 before adding audio using GPU/CPU encoder
-        # OpenCV mp4v codec is not compatible with copy codec
-        reencoded_video = str(
-            self.temp_dir / f"hook_reenc_{int(time.time() * 1000)}.mp4"
+        text_overlay_video = str(
+            self.temp_dir / f"hook_text_overlay_{int(time.time() * 1000)}.mp4"
         )
+        filter_chain = self._build_hook_drawtext_filter(lines, height=height)
         encoder_args = self.get_video_encoder_args()
-        reencode_cmd = [
+        text_overlay_cmd = [
             self.ffmpeg_path,
             "-y",
             "-i",
-            current_video,
+            bg_video,
+            "-vf",
+            filter_chain,
             *encoder_args,
             "-pix_fmt",
             "yuv420p",
-            "-an",  # No audio yet
-            reencoded_video,
+            "-an",
+            text_overlay_video,
         ]
         result = self._run_ffmpeg_command(
-            reencode_cmd,
+            text_overlay_cmd,
             encoder_args=encoder_args,
-            description="Re-encode Hook Text Overlay",
+            description="Render Hook Text Overlay",
         )
         if result.returncode != 0:
-            self.log(f"Failed to re-encode OpenCV output: {result.stderr}")
-            raise Exception("Failed to re-encode text overlay video")
+            self.log(f"Failed to render hook text overlay: {result.stderr}")
+            raise Exception("Failed to render hook text overlay video")
+
+        if (
+            not os.path.exists(text_overlay_video)
+            or os.path.getsize(text_overlay_video) < 1000
+        ):
+            raise Exception("Hook text overlay video was not created properly")
 
         # Finally, add audio to re-encoded video
         cmd = [
             self.ffmpeg_path,
             "-y",
             "-i",
-            reencoded_video,
+            text_overlay_video,
             "-i",
             tts_file,
             "-c:v",
@@ -6196,9 +6134,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             os.unlink(hook_video)
             os.unlink(main_reencoded)
             os.unlink(concat_list)
-            os.unlink(text_file)
             os.unlink(bg_video)
-            os.unlink(current_video)
+            os.unlink(text_overlay_video)
         except:
             pass
 
