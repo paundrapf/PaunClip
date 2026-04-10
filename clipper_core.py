@@ -277,13 +277,15 @@ class AutoClipperCore:
         """Map canonical V2 reframing modes onto the currently implemented engine paths."""
         canonical = self._normalize_tracking_mode(mode)
 
+        if canonical == "center_crop":
+            return "center_crop"
         if canonical == "podcast_smart":
-            return "smooth_follow"
+            return "podcast_smart"
         if canonical == "split_screen":
-            return "smooth_follow"
+            return "split_screen"
         if canonical == "sports_beta":
             return "opencv"
-        return "opencv"
+        return "center_crop"
 
     def _resolve_tracking_mode(
         self, highlight: dict | None = None, tracking_mode: str | None = None
@@ -3640,6 +3642,10 @@ Candidates:
         start = highlight["start_time"].replace(",", ".")
         end = highlight["end_time"].replace(",", ".")
         tracking_mode = self._resolve_tracking_mode(highlight)
+        caption_settings = self._resolve_caption_render_settings(highlight)
+        effective_add_captions = bool(
+            add_captions and caption_settings["caption_mode"] != "off"
+        )
 
         self.log(f"\n[Clip {index}] {highlight['title']}")
 
@@ -3647,7 +3653,7 @@ Candidates:
         total_steps = 2  # Cut + Portrait (always)
         if add_hook:
             total_steps += 1
-        if add_captions:
+        if effective_add_captions:
             total_steps += 1
 
         # Helper to report sub-progress with percentage
@@ -3819,7 +3825,7 @@ Candidates:
 
         # Step 4: Add captions (optional)
         final_file = clip_dir / "master.mp4"
-        if add_captions:
+        if effective_add_captions:
             if self.is_cancelled():
                 return
             clip_progress("Adding captions...", current_step, 0)
@@ -3835,13 +3841,26 @@ Candidates:
                 self.log("  ↺ Reused captions artifact")
                 clip_progress("Adding captions...", current_step, 1.0)
             else:
-                self.add_captions_api_with_progress(
-                    str(current_output),
-                    str(captions_artifact_file),
-                    audio_source,
-                    hook_duration,
-                    lambda p: clip_progress("Adding captions...", current_step, p),
+                previous_caption_settings = getattr(
+                    self, "_active_caption_render_settings", None
                 )
+                self._active_caption_render_settings = caption_settings
+                try:
+                    self.add_captions_api_with_progress(
+                        str(current_output),
+                        str(captions_artifact_file),
+                        audio_source,
+                        hook_duration,
+                        lambda p: clip_progress("Adding captions...", current_step, p),
+                    )
+                finally:
+                    if previous_caption_settings is None:
+                        try:
+                            delattr(self, "_active_caption_render_settings")
+                        except AttributeError:
+                            pass
+                    else:
+                        self._active_caption_render_settings = previous_caption_settings
 
                 if not captions_artifact_file.exists():
                     raise Exception(
@@ -3852,7 +3871,10 @@ Candidates:
                 self.log("  ✓ Added captions")
             current_step += 1
         else:
-            self.log("  ⊘ Skipped captions (disabled)")
+            if add_captions and caption_settings["caption_mode"] == "off":
+                self.log("  ⊘ Skipped captions (caption mode off)")
+            else:
+                self.log("  ⊘ Skipped captions (disabled)")
 
         # Step 5: Add watermark (if enabled)
         if self.watermark_settings.get("enabled"):
@@ -3860,7 +3882,7 @@ Candidates:
                 return
 
             # Check if we need to add watermark step to progress
-            if not add_captions:
+            if not effective_add_captions:
                 # Watermark is a new step
                 total_steps += 1
 
@@ -3881,7 +3903,7 @@ Candidates:
             self.log("  ✓ Added watermark")
             current_output = final_file
             current_step += 1
-        elif not add_captions:
+        elif not effective_add_captions:
             # No captions and no watermark, just copy current output to final
             shutil.copy(str(current_output), str(final_file))
             current_output = final_file
@@ -3942,16 +3964,20 @@ Candidates:
             "duration_seconds": highlight["duration_seconds"],
             "status": "completed",
             "has_hook": add_hook,
-            "has_captions": add_captions,
+            "has_captions": effective_add_captions,
             "hook_duration_seconds": hook_duration,
             "caption_time_offset_seconds": hook_duration,
             "caption_language": self._resolve_whisper_language() or "auto",
+            "caption_mode": caption_settings["caption_mode"],
+            "caption_override": caption_settings["caption_override"],
             "has_watermark": self.watermark_settings.get("enabled", False),
             "has_credit": self.credit_watermark_settings.get("enabled", False),
             "channel_name": self.channel_name,
             "render_inputs": {
                 "hook_enabled": add_hook,
-                "captions_enabled": add_captions,
+                "captions_enabled": effective_add_captions,
+                "caption_mode": caption_settings["caption_mode"],
+                "caption_override": caption_settings["caption_override"],
                 "watermark_enabled": self.watermark_settings.get("enabled", False),
                 "source_credit_enabled": self.credit_watermark_settings.get(
                     "enabled", False
@@ -4003,6 +4029,33 @@ Candidates:
                     output_path,
                     crop_track_path=crop_track_path,
                 )
+            if backend_mode == "center_crop":
+                self.log(
+                    f"  Using {mode.replace('_', ' ').title()} (FFmpeg center crop backend)"
+                )
+                return self.convert_to_portrait_center_crop(
+                    input_path,
+                    output_path,
+                    crop_track_path=crop_track_path,
+                )
+            if backend_mode == "split_screen":
+                self.log(
+                    f"  Using {mode.replace('_', ' ').title()} (FFmpeg split-screen backend)"
+                )
+                return self.convert_to_portrait_split_screen(
+                    input_path,
+                    output_path,
+                    crop_track_path=crop_track_path,
+                )
+            if backend_mode == "podcast_smart":
+                self.log(
+                    f"  Using {mode.replace('_', ' ').title()} (adaptive podcast backend)"
+                )
+                return self.convert_to_portrait_podcast_smart(
+                    input_path,
+                    output_path,
+                    crop_track_path=crop_track_path,
+                )
             if backend_mode == "smooth_follow":
                 self.log(
                     f"  Using {mode.replace('_', ' ').title()} (Smooth Follow backend)"
@@ -4024,9 +4077,8 @@ Candidates:
                     crop_track_path=crop_track_path,
                 )
         except Exception as e:
-            # Fallback to OpenCV if MediaPipe fails
             if backend_mode == "mediapipe":
-                self.log(f"  ⚠ MediaPipe failed: {e}")
+                self.log(f"  ? MediaPipe failed: {e}")
                 self.log("  Falling back to OpenCV mode...")
                 return self.convert_to_portrait_opencv(
                     input_path,
@@ -4034,8 +4086,495 @@ Candidates:
                     tracking_mode="opencv",
                     crop_track_path=crop_track_path,
                 )
-            else:
-                raise
+            if backend_mode in {"podcast_smart", "split_screen"}:
+                self.log(f"  ? {mode.replace('_', ' ').title()} failed: {e}")
+                self.log("  Falling back to Center Crop mode...")
+                return self.convert_to_portrait_center_crop(
+                    input_path,
+                    output_path,
+                    crop_track_path=crop_track_path,
+                )
+            raise
+
+    def _load_video_stream_metadata(self, input_path: str) -> dict:
+        """Read stable stream metadata needed by the portrait backends."""
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            raise Exception(f"Failed to open video: {input_path}")
+
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        cap.release()
+
+        if width <= 0 or height <= 0:
+            raise Exception(f"Invalid video dimensions: {width}x{height}")
+
+        duration = self._probe_media_duration(input_path)
+        if duration <= 0 and fps > 0 and total_frames > 0:
+            duration = total_frames / fps
+        if duration <= 0:
+            duration = 1.0
+
+        return {
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "total_frames": total_frames,
+            "duration": duration,
+        }
+
+    def _build_center_crop_geometry(
+        self, orig_w: int, orig_h: int
+    ) -> tuple[int, int, int, int]:
+        """Calculate a deterministic centered 9:16 crop window."""
+        target_ratio = 9 / 16
+        source_ratio = (orig_w / orig_h) if orig_h else target_ratio
+
+        if source_ratio >= target_ratio:
+            crop_h = orig_h
+            crop_w = int(round(orig_h * target_ratio))
+        else:
+            crop_w = orig_w
+            crop_h = int(round(orig_w / target_ratio))
+
+        crop_w = max(2, min(orig_w, crop_w - (crop_w % 2)))
+        crop_h = max(2, min(orig_h, crop_h - (crop_h % 2)))
+        crop_x = max(0, min((orig_w - crop_w) // 2, orig_w - crop_w))
+        crop_y = max(0, min((orig_h - crop_h) // 2, orig_h - crop_h))
+        return crop_w, crop_h, crop_x, crop_y
+
+    def _write_center_crop_track_artifact(
+        self,
+        crop_track_path: str | None,
+        *,
+        orig_w: int,
+        orig_h: int,
+        crop_w: int,
+        crop_h: int,
+        crop_x: int,
+        fps: float,
+        total_frames: int,
+    ):
+        """Persist a deterministic center-crop track for reuse/debugging."""
+        if not crop_track_path:
+            return
+
+        positions = [crop_x] * max(int(total_frames or 0), 1)
+        self._write_crop_track_artifact(
+            crop_track_path,
+            tracking_mode="center_crop",
+            analysis_backend="center_crop",
+            orig_w=orig_w,
+            orig_h=orig_h,
+            crop_w=crop_w,
+            crop_h=crop_h,
+            fps=fps,
+            total_frames=total_frames,
+            positions=positions,
+        )
+
+    def convert_to_portrait_center_crop(
+        self,
+        input_path: str,
+        output_path: str,
+        crop_track_path: str | None = None,
+    ):
+        """Convert to portrait through a deterministic FFmpeg-native center crop."""
+        stream = self._load_video_stream_metadata(input_path)
+        crop_w, crop_h, crop_x, crop_y = self._build_center_crop_geometry(
+            stream["width"],
+            stream["height"],
+        )
+        self._write_center_crop_track_artifact(
+            crop_track_path,
+            orig_w=stream["width"],
+            orig_h=stream["height"],
+            crop_w=crop_w,
+            crop_h=crop_h,
+            crop_x=crop_x,
+            fps=stream["fps"],
+            total_frames=stream["total_frames"],
+        )
+
+        filter_chain = (
+            f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale=1080:1920:flags=lanczos"
+        )
+        encoder_args = self.get_video_encoder_args()
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i",
+            input_path,
+            "-vf",
+            filter_chain,
+            *encoder_args,
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            output_path,
+        ]
+        result = self._run_ffmpeg_command(
+            cmd,
+            encoder_args=encoder_args,
+            description="Portrait Center Crop (FFmpeg)",
+        )
+        if result.returncode != 0:
+            raise Exception("Center crop portrait conversion failed")
+
+    def convert_to_portrait_center_crop_with_progress(
+        self,
+        input_path: str,
+        output_path: str,
+        progress_callback,
+        crop_track_path: str | None = None,
+    ):
+        """Convert to portrait through a deterministic FFmpeg-native center crop with progress."""
+        stream = self._load_video_stream_metadata(input_path)
+        crop_w, crop_h, crop_x, crop_y = self._build_center_crop_geometry(
+            stream["width"],
+            stream["height"],
+        )
+        self._write_center_crop_track_artifact(
+            crop_track_path,
+            orig_w=stream["width"],
+            orig_h=stream["height"],
+            crop_w=crop_w,
+            crop_h=crop_h,
+            crop_x=crop_x,
+            fps=stream["fps"],
+            total_frames=stream["total_frames"],
+        )
+
+        filter_chain = (
+            f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale=1080:1920:flags=lanczos"
+        )
+        encoder_args = self.get_video_encoder_args()
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i",
+            input_path,
+            "-vf",
+            filter_chain,
+            *encoder_args,
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-progress",
+            "pipe:1",
+            output_path,
+        ]
+        run_progress = progress_callback or (lambda _progress: None)
+        run_progress(0.05)
+        self.run_ffmpeg_with_progress(
+            cmd,
+            stream["duration"],
+            lambda progress: run_progress(0.05 + (progress * 0.95)),
+        )
+
+    def _build_split_screen_geometry(self, orig_w: int, orig_h: int) -> tuple[int, int, int, int]:
+        """Calculate stable left/right panel crops for vertical split-screen output."""
+        panel_ratio = 9 / 8
+        crop_h = orig_h
+        crop_w = int(round(orig_h * panel_ratio))
+        crop_w = max(2, min(orig_w, crop_w - (crop_w % 2)))
+
+        max_x = max(orig_w - crop_w, 0)
+        left_focus = int(orig_w * 0.28)
+        right_focus = int(orig_w * 0.72)
+        left_x = max(0, min(left_focus - crop_w // 2, max_x))
+        right_x = max(0, min(right_focus - crop_w // 2, max_x))
+        return crop_w, crop_h, left_x, right_x
+
+    def _write_split_screen_track_artifact(
+        self,
+        crop_track_path: str | None,
+        *,
+        orig_w: int,
+        orig_h: int,
+        crop_w: int,
+        crop_h: int,
+        left_x: int,
+        right_x: int,
+        fps: float,
+        total_frames: int,
+    ):
+        """Persist a split-screen crop-track artifact using the midpoint between panels."""
+        if not crop_track_path:
+            return
+
+        midpoint_x = max(0, min(int((left_x + right_x) / 2), max(orig_w - crop_w, 0)))
+        positions = [midpoint_x] * max(int(total_frames or 0), 1)
+        self._write_crop_track_artifact(
+            crop_track_path,
+            tracking_mode="split_screen",
+            analysis_backend="split_screen",
+            orig_w=orig_w,
+            orig_h=orig_h,
+            crop_w=crop_w,
+            crop_h=crop_h,
+            fps=fps,
+            total_frames=total_frames,
+            positions=positions,
+        )
+
+    def _analyze_podcast_smart_scene(self, input_path: str) -> dict:
+        """Sample the clip to decide between smooth follow, split-screen, and center-crop fallback."""
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            raise Exception(f"Failed to open video: {input_path}")
+
+        orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        sample_indices = self._build_sparse_analysis_indices(total_frames, fps)
+        if not sample_indices:
+            sample_indices = [0]
+
+        face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+        detected_samples = 0
+        multi_face_samples = 0
+        split_candidate_samples = 0
+        separations = []
+
+        for frame_idx in sample_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_idx))
+            ret, frame = cap.read()
+            if not ret:
+                continue
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(50, 50))
+            if len(faces) <= 0:
+                continue
+
+            detected_samples += 1
+            if len(faces) >= 2:
+                multi_face_samples += 1
+                sorted_faces = sorted(faces, key=lambda face: face[2] * face[3], reverse=True)[:2]
+                centers = sorted(face[0] + (face[2] / 2.0) for face in sorted_faces)
+                if orig_w > 0:
+                    separation = (centers[1] - centers[0]) / orig_w
+                    separations.append(separation)
+                    if separation >= 0.22:
+                        split_candidate_samples += 1
+
+        cap.release()
+        sample_count = max(len(sample_indices), 1)
+        detected_ratio = detected_samples / sample_count
+        multi_face_ratio = multi_face_samples / max(detected_samples, 1)
+        split_ratio = split_candidate_samples / sample_count
+        average_separation = sum(separations) / len(separations) if separations else 0.0
+        return {
+            "sample_count": sample_count,
+            "detected_ratio": detected_ratio,
+            "multi_face_ratio": multi_face_ratio,
+            "split_ratio": split_ratio,
+            "average_separation": average_separation,
+        }
+
+    def _choose_podcast_smart_strategy(self, input_path: str) -> str:
+        """Choose the best podcast framing strategy for the current clip."""
+        metrics = self._analyze_podcast_smart_scene(input_path)
+        self.log(
+            "  Podcast Smart analysis: "
+            f"detected={metrics['detected_ratio']:.0%}, "
+            f"multi={metrics['multi_face_ratio']:.0%}, "
+            f"split={metrics['split_ratio']:.0%}, "
+            f"separation={metrics['average_separation']:.2f}"
+        )
+        if metrics["detected_ratio"] < 0.25:
+            return "center_crop"
+        if metrics["split_ratio"] >= 0.35 or (
+            metrics["multi_face_ratio"] >= 0.45
+            and metrics["average_separation"] >= 0.24
+        ):
+            return "split_screen"
+        return "smooth_follow"
+
+    def convert_to_portrait_split_screen(
+        self,
+        input_path: str,
+        output_path: str,
+        crop_track_path: str | None = None,
+    ):
+        """Render a stable two-speaker split-screen portrait layout with FFmpeg."""
+        stream = self._load_video_stream_metadata(input_path)
+        crop_w, crop_h, left_x, right_x = self._build_split_screen_geometry(
+            stream["width"],
+            stream["height"],
+        )
+        self._write_split_screen_track_artifact(
+            crop_track_path,
+            orig_w=stream["width"],
+            orig_h=stream["height"],
+            crop_w=crop_w,
+            crop_h=crop_h,
+            left_x=left_x,
+            right_x=right_x,
+            fps=stream["fps"],
+            total_frames=stream["total_frames"],
+        )
+        filter_complex = (
+            f"[0:v]crop={crop_w}:{crop_h}:{left_x}:0,scale=1080:960:flags=lanczos[top];"
+            f"[0:v]crop={crop_w}:{crop_h}:{right_x}:0,scale=1080:960:flags=lanczos[bottom];"
+            "[top][bottom]vstack=inputs=2[v]"
+        )
+        encoder_args = self.get_video_encoder_args()
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i",
+            input_path,
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[v]",
+            "-map",
+            "0:a?",
+            *encoder_args,
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            output_path,
+        ]
+        result = self._run_ffmpeg_command(
+            cmd,
+            encoder_args=encoder_args,
+            description="Portrait Split Screen (FFmpeg)",
+        )
+        if result.returncode != 0:
+            raise Exception("Split-screen portrait conversion failed")
+
+    def convert_to_portrait_split_screen_with_progress(
+        self,
+        input_path: str,
+        output_path: str,
+        progress_callback,
+        crop_track_path: str | None = None,
+    ):
+        """Render a stable split-screen portrait layout with FFmpeg and progress."""
+        stream = self._load_video_stream_metadata(input_path)
+        crop_w, crop_h, left_x, right_x = self._build_split_screen_geometry(
+            stream["width"],
+            stream["height"],
+        )
+        self._write_split_screen_track_artifact(
+            crop_track_path,
+            orig_w=stream["width"],
+            orig_h=stream["height"],
+            crop_w=crop_w,
+            crop_h=crop_h,
+            left_x=left_x,
+            right_x=right_x,
+            fps=stream["fps"],
+            total_frames=stream["total_frames"],
+        )
+        filter_complex = (
+            f"[0:v]crop={crop_w}:{crop_h}:{left_x}:0,scale=1080:960:flags=lanczos[top];"
+            f"[0:v]crop={crop_w}:{crop_h}:{right_x}:0,scale=1080:960:flags=lanczos[bottom];"
+            "[top][bottom]vstack=inputs=2[v]"
+        )
+        encoder_args = self.get_video_encoder_args()
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i",
+            input_path,
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[v]",
+            "-map",
+            "0:a?",
+            *encoder_args,
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            "-progress",
+            "pipe:1",
+            output_path,
+        ]
+        run_progress = progress_callback or (lambda _progress: None)
+        run_progress(0.05)
+        self.run_ffmpeg_with_progress(
+            cmd,
+            stream["duration"],
+            lambda progress: run_progress(0.05 + (progress * 0.95)),
+        )
+
+    def convert_to_portrait_podcast_smart(
+        self,
+        input_path: str,
+        output_path: str,
+        crop_track_path: str | None = None,
+    ):
+        """Choose the best podcast portrait strategy for the current clip."""
+        strategy = self._choose_podcast_smart_strategy(input_path)
+        if strategy == "split_screen":
+            self.log("  Podcast Smart selected split-screen fallback")
+            return self.convert_to_portrait_split_screen(
+                input_path,
+                output_path,
+                crop_track_path=crop_track_path,
+            )
+        if strategy == "center_crop":
+            self.log("  Podcast Smart confidence weak; falling back to center crop")
+            return self.convert_to_portrait_center_crop(
+                input_path,
+                output_path,
+                crop_track_path=crop_track_path,
+            )
+        self.log("  Podcast Smart selected smooth follow")
+        return self.convert_to_portrait_opencv(
+            input_path,
+            output_path,
+            tracking_mode="smooth_follow",
+            crop_track_path=crop_track_path,
+        )
+
+    def convert_to_portrait_podcast_smart_with_progress(
+        self,
+        input_path: str,
+        output_path: str,
+        progress_callback,
+        crop_track_path: str | None = None,
+    ):
+        """Choose the best podcast portrait strategy with progress reporting."""
+        strategy = self._choose_podcast_smart_strategy(input_path)
+        if strategy == "split_screen":
+            self.log("  Podcast Smart selected split-screen fallback")
+            return self.convert_to_portrait_split_screen_with_progress(
+                input_path,
+                output_path,
+                progress_callback,
+                crop_track_path=crop_track_path,
+            )
+        if strategy == "center_crop":
+            self.log("  Podcast Smart confidence weak; falling back to center crop")
+            return self.convert_to_portrait_center_crop_with_progress(
+                input_path,
+                output_path,
+                progress_callback,
+                crop_track_path=crop_track_path,
+            )
+        self.log("  Podcast Smart selected smooth follow")
+        return self.convert_to_portrait_opencv_with_progress(
+            input_path,
+            output_path,
+            progress_callback,
+            tracking_mode="smooth_follow",
+            crop_track_path=crop_track_path,
+        )
 
     def convert_to_portrait_opencv(
         self,
@@ -4848,6 +5387,24 @@ Candidates:
             time_offset: Offset to add to all timestamps (hook duration)
         """
 
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        caption_settings = self._resolve_caption_render_settings()
+        if caption_settings["caption_mode"] == "off":
+            shutil.copy(input_path, output_path)
+            self._write_caption_sidecar_artifacts(
+                output_path,
+                {
+                    "caption_mode": "off",
+                    "caption_override": caption_settings["caption_override"],
+                    "time_offset": float(time_offset or 0),
+                    "style": "Minimal",
+                    "words": [],
+                    "segments": [],
+                    "events": [],
+                },
+            )
+            return
+
         # Use audio_source if provided, otherwise use input_path
         transcribe_source = audio_source if audio_source else input_path
 
@@ -4873,16 +5430,12 @@ Candidates:
 
         if result.returncode != 0:
             self.log(f"  Warning: Audio extraction failed")
-            import shutil
-
             shutil.copy(input_path, output_path)
             return
 
         # Check if audio file exists and has content
         if not os.path.exists(audio_file) or os.path.getsize(audio_file) < 1000:
             self.log(f"  Warning: Audio file too small or missing")
-            import shutil
-
             shutil.copy(input_path, output_path)
             if os.path.exists(audio_file):
                 os.unlink(audio_file)
@@ -4908,8 +5461,6 @@ Candidates:
                 )
         except Exception as e:
             self.log(f"  Warning: Whisper API error: {e}")
-            import shutil
-
             shutil.copy(input_path, output_path)
             os.unlink(audio_file)
             return
@@ -4917,10 +5468,12 @@ Candidates:
         os.unlink(audio_file)
 
         # Create ASS subtitle file with time offset for hook
+        caption_bundle = self._build_caption_render_bundle(transcript, time_offset)
         ass_file = tempfile.NamedTemporaryFile(
             mode="w", suffix=".ass", delete=False, encoding="utf-8"
         ).name
-        self.create_ass_subtitle_capcut(transcript, ass_file, time_offset)
+        self._write_caption_ass_file(ass_file, caption_bundle)
+        self._write_caption_sidecar_artifacts(output_path, caption_bundle)
 
         # Burn subtitles into video using GPU/CPU encoder
         # Escape path for FFmpeg on Windows
@@ -4949,96 +5502,14 @@ Candidates:
 
         if result.returncode != 0:
             self.log(f"  Warning: Caption burn failed, copying without captions")
-            import shutil
-
             shutil.copy(input_path, output_path)
 
     def create_ass_subtitle_capcut(
         self, transcript, output_path: str, time_offset: float = 0
     ):
         """Create ASS subtitle file with CapCut-style word-by-word highlighting"""
-
-        # ASS header - CapCut style: white text, yellow highlight, black outline
-        ass_content = """[Script Info]
-Title: Auto-generated captions
-ScriptType: v4.00+
-WrapStyle: 0
-PlayResX: 1080
-PlayResY: 1920
-ScaledBorderAndShadow: yes
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial Black,65,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,50,50,400,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-
-        events = []
-
-        # Check if we have word-level timestamps
-        if hasattr(transcript, "words") and transcript.words:
-            words = transcript.words
-
-            # Group words into chunks (3-4 words per line for readability)
-            chunk_size = 4
-
-            for i in range(0, len(words), chunk_size):
-                chunk = words[i : i + chunk_size]
-                if not chunk:
-                    continue
-
-                # For each word in the chunk, create a subtitle event with that word highlighted
-                for j, current_word in enumerate(chunk):
-                    # Add time_offset to account for hook duration
-                    word_start = current_word.start + time_offset
-                    word_end = current_word.end + time_offset
-
-                    # Build text with current word highlighted in yellow
-                    text_parts = []
-                    for k, w in enumerate(chunk):
-                        word_text = w.word.strip().upper()
-                        if k == j:
-                            # Highlight current word (yellow: &H00FFFF in BGR)
-                            text_parts.append(
-                                f"{{\\c&H00FFFF&}}{word_text}{{\\c&HFFFFFF&}}"
-                            )
-                        else:
-                            text_parts.append(word_text)
-
-                    text = " ".join(text_parts)
-
-                    events.append(
-                        {
-                            "start": self.format_time(word_start),
-                            "end": self.format_time(word_end),
-                            "text": text,
-                        }
-                    )
-
-        # Fallback: use segment-level timestamps if no word timestamps
-        elif hasattr(transcript, "segments") and transcript.segments:
-            for segment in transcript.segments:
-                start = segment.get("start", 0) + time_offset
-                end = segment.get("end", 0) + time_offset
-                text = segment.get("text", "").strip().upper()
-
-                if text:
-                    events.append(
-                        {
-                            "start": self.format_time(start),
-                            "end": self.format_time(end),
-                            "text": text,
-                        }
-                    )
-
-        # Write events to ASS file
-        for event in events:
-            ass_content += f"Dialogue: 0,{event['start']},{event['end']},Default,,0,0,0,,{event['text']}\n"
-
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(ass_content)
+        caption_bundle = self._build_caption_render_bundle(transcript, time_offset)
+        self._write_caption_ass_file(output_path, caption_bundle)
 
     def format_time(self, seconds: float) -> str:
         """Convert seconds to ASS time format"""
@@ -5148,6 +5619,561 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     def _escape_drawtext_text(self, text: str) -> str:
         """Escape FFmpeg drawtext text payload safely enough for single-quoted filters."""
         return str(text).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+    def _resolve_caption_render_settings(self, highlight: dict | None = None) -> dict:
+        """Resolve caption mode/override from the active highlight or staged render state."""
+        editor = {}
+        if isinstance(highlight, dict) and isinstance(highlight.get("editor"), dict):
+            editor = highlight.get("editor") or {}
+
+        active_settings = getattr(self, "_active_caption_render_settings", None)
+        if not isinstance(active_settings, dict):
+            active_settings = {}
+
+        caption_mode = (
+            str(
+                editor.get("caption_mode")
+                or active_settings.get("caption_mode")
+                or "auto"
+            )
+            .strip()
+            .lower()
+        )
+        if caption_mode not in {
+            "auto",
+            "karaoke_bold",
+            "clean_lower_third",
+            "minimal",
+            "podcast_heavy",
+            "manual_override",
+            "off",
+        }:
+            caption_mode = "auto"
+
+        caption_override = str(
+            editor.get("caption_override")
+            or active_settings.get("caption_override")
+            or ""
+        )
+        caption_override = re.sub(r"\s+", " ", caption_override).strip()
+
+        return {
+            "caption_mode": caption_mode,
+            "caption_override": caption_override,
+        }
+
+    def _resolve_caption_style_name(self, caption_mode: str) -> str:
+        """Map caption mode values onto concrete ASS style presets."""
+        style_map = {
+            "auto": "KaraokeBold",
+            "karaoke_bold": "KaraokeBold",
+            "clean_lower_third": "CleanLowerThird",
+            "minimal": "Minimal",
+            "podcast_heavy": "PodcastHeavy",
+            "manual_override": "CleanLowerThird",
+            "off": "Minimal",
+        }
+        return style_map.get(str(caption_mode or "auto").strip().lower(), "KaraokeBold")
+
+    def _caption_render_enabled(self, caption_settings: dict | None) -> bool:
+        """Determine whether the current caption settings should render visible captions."""
+        settings = caption_settings if isinstance(caption_settings, dict) else {}
+        caption_mode = str(settings.get("caption_mode") or "auto").strip().lower()
+        caption_override = str(settings.get("caption_override") or "").strip()
+        if caption_mode == "off":
+            return False
+        if caption_mode == "manual_override" and not caption_override:
+            return False
+        return True
+
+    def _build_empty_caption_bundle(
+        self, caption_settings: dict | None = None, time_offset: float = 0
+    ) -> dict:
+        """Build an empty caption artifact payload for disabled or failed caption renders."""
+        settings = caption_settings if isinstance(caption_settings, dict) else {}
+        return {
+            "caption_mode": str(settings.get("caption_mode") or "off"),
+            "caption_override": str(settings.get("caption_override") or ""),
+            "time_offset": float(time_offset or 0),
+            "style": self._resolve_caption_style_name(
+                settings.get("caption_mode") or "off"
+            ),
+            "words": [],
+            "segments": [],
+            "events": [],
+            "rendered": False,
+        }
+
+    def _clear_caption_artifacts(self, artifact_dir: Path):
+        """Remove stale caption artifacts from a working artifact directory."""
+        for artifact_name in (
+            "captions.mp4",
+            "caption_words.json",
+            "caption_segments.json",
+            "captions.ass",
+        ):
+            artifact_path = artifact_dir / artifact_name
+            try:
+                if artifact_path.exists():
+                    artifact_path.unlink()
+            except Exception:
+                pass
+
+    def _get_transcript_item_value(self, item, *keys, default=None):
+        """Read transcript values from dict-like or object-like API responses."""
+        if isinstance(item, dict):
+            for key in keys:
+                if key in item and item.get(key) is not None:
+                    return item.get(key)
+
+        for key in keys:
+            if hasattr(item, key):
+                value = getattr(item, key)
+                if value is not None:
+                    return value
+
+        return default
+
+    def _coerce_caption_seconds(self, value, fallback: float = 0.0) -> float:
+        """Convert transcript timing values into stable positive floats."""
+        try:
+            return max(float(value), 0.0)
+        except (TypeError, ValueError):
+            return fallback
+
+    def _normalize_caption_words(self, transcript) -> list[dict]:
+        """Normalize transcript word timing into a stable sequential list."""
+        raw_words = (
+            self._get_transcript_item_value(transcript, "words", default=[]) or []
+        )
+        words = []
+
+        for raw_word in raw_words:
+            word_text = str(
+                self._get_transcript_item_value(raw_word, "word", "text", default="")
+            )
+            word_text = re.sub(r"\s+", " ", word_text).strip()
+            if not word_text:
+                continue
+
+            start = self._coerce_caption_seconds(
+                self._get_transcript_item_value(raw_word, "start"),
+                fallback=words[-1]["start"] if words else 0.0,
+            )
+            if words:
+                start = max(start, words[-1]["start"] + 0.03)
+
+            end = self._coerce_caption_seconds(
+                self._get_transcript_item_value(raw_word, "end"),
+                fallback=start,
+            )
+            end = max(end, start + 0.05)
+
+            words.append({"word": word_text, "start": start, "end": end})
+
+        return words
+
+    def _normalize_caption_segments(self, transcript) -> list[dict]:
+        """Normalize transcript segments for non-word fallback caption rendering."""
+        raw_segments = (
+            self._get_transcript_item_value(transcript, "segments", default=[]) or []
+        )
+        segments = []
+
+        for raw_segment in raw_segments:
+            text = str(self._get_transcript_item_value(raw_segment, "text", default=""))
+            text = re.sub(r"\s+", " ", text).strip()
+            if not text:
+                continue
+
+            start = self._coerce_caption_seconds(
+                self._get_transcript_item_value(raw_segment, "start"),
+                fallback=segments[-1]["end"] if segments else 0.0,
+            )
+            end = self._coerce_caption_seconds(
+                self._get_transcript_item_value(raw_segment, "end"),
+                fallback=start,
+            )
+            end = max(end, start + 0.15)
+            segments.append({"start": start, "end": end, "text": text})
+
+        return segments
+
+    def _segment_caption_words(self, words: list[dict]) -> list[list[dict]]:
+        """Split caption words by punctuation, pause, and readable length."""
+        if not words:
+            return []
+
+        segments = []
+        current_segment = []
+
+        for word in words:
+            if not current_segment:
+                current_segment = [word]
+                continue
+
+            previous_word = current_segment[-1]
+            gap = max(0.0, word["start"] - previous_word["end"])
+            candidate_words = current_segment + [word]
+            candidate_text = " ".join(item["word"] for item in candidate_words).strip()
+            candidate_duration = max(word["end"] - current_segment[0]["start"], 0.0)
+
+            hard_punctuation_break = bool(
+                re.search(r"[.!?…]+[\"')\]]*$", previous_word["word"])
+            )
+            soft_punctuation_break = bool(
+                re.search(r"[,;:]+[\"')\]]*$", previous_word["word"])
+            )
+            should_break = (
+                gap >= 0.45
+                or (hard_punctuation_break and len(current_segment) >= 2)
+                or (
+                    soft_punctuation_break and (gap >= 0.2 or len(current_segment) >= 3)
+                )
+                or len(current_segment) >= 6
+                or (len(candidate_text) > 36 and len(current_segment) >= 2)
+                or (candidate_duration > 4.0 and len(current_segment) >= 2)
+            )
+
+            if should_break:
+                segments.append(current_segment)
+                current_segment = [word]
+            else:
+                current_segment.append(word)
+
+        if current_segment:
+            segments.append(current_segment)
+
+        return segments
+
+    def _escape_ass_text(self, text: str) -> str:
+        """Escape text payload for ASS dialogue lines."""
+        return (
+            str(text)
+            .replace("\\", r"\\")
+            .replace("{", "(")
+            .replace("}", ")")
+            .replace("\r\n", r"\N")
+            .replace("\n", r"\N")
+        )
+
+    def _wrap_caption_override_text(
+        self,
+        text: str,
+        max_chars: int = 34,
+        max_lines: int = 3,
+        style_name: str = "CleanLowerThird",
+    ) -> str:
+        """Wrap caption text into a few centered readable lines."""
+        words = [part for part in re.split(r"\s+", str(text).strip()) if part]
+        if not words:
+            return ""
+
+        lines = []
+        current_line = []
+        remaining = list(words)
+
+        while remaining:
+            word = remaining.pop(0)
+            candidate = " ".join(current_line + [word]).strip()
+            if (
+                current_line
+                and len(candidate) > max_chars
+                and len(lines) < max_lines - 1
+            ):
+                lines.append(" ".join(current_line))
+                current_line = [word]
+                continue
+            current_line.append(word)
+
+        if current_line:
+            lines.append(" ".join(current_line))
+
+        if len(lines) > max_lines:
+            lines = lines[: max_lines - 1] + [" ".join(lines[max_lines - 1 :])]
+
+        return r"\N".join(
+            self._render_caption_text_for_style(line, style_name)
+            for line in lines
+            if line
+        )
+
+    def _render_caption_text_for_style(self, text: str, style_name: str) -> str:
+        """Normalize caption casing and escaping for the active style preset."""
+        normalized = re.sub(r"\s+", " ", str(text).strip())
+        if style_name in {"KaraokeBold", "PodcastHeavy"}:
+            normalized = normalized.upper()
+        return self._escape_ass_text(normalized)
+
+    def _build_caption_render_bundle(self, transcript, time_offset: float = 0) -> dict:
+        """Build normalized caption words, segments, and ASS events for rendering."""
+        settings = self._resolve_caption_render_settings()
+        words = self._normalize_caption_words(transcript)
+        segments = self._segment_caption_words(words)
+        fallback_segments = self._normalize_caption_segments(transcript)
+
+        bundle = {
+            "caption_mode": settings["caption_mode"],
+            "caption_override": settings["caption_override"],
+            "time_offset": float(time_offset or 0),
+            "style": self._resolve_caption_style_name(settings["caption_mode"]),
+            "words": [copy.deepcopy(word) for word in words],
+            "segments": [],
+            "events": [],
+            "rendered": False,
+        }
+
+        if not self._caption_render_enabled(settings):
+            return self._build_empty_caption_bundle(settings, time_offset)
+
+        if (
+            settings["caption_mode"] == "manual_override"
+            and settings["caption_override"]
+        ):
+            bundle["style"] = self._resolve_caption_style_name("manual_override")
+
+            if words:
+                start = words[0]["start"] + bundle["time_offset"]
+                end = words[-1]["end"] + bundle["time_offset"]
+            elif fallback_segments:
+                start = fallback_segments[0]["start"] + bundle["time_offset"]
+                end = fallback_segments[-1]["end"] + bundle["time_offset"]
+            else:
+                start = bundle["time_offset"]
+                end = start + 4.0
+
+            end = max(end, start + 0.3)
+            rendered_text = self._wrap_caption_override_text(
+                settings["caption_override"],
+                style_name=bundle["style"],
+            )
+            if rendered_text:
+                bundle["segments"].append(
+                    {
+                        "index": 0,
+                        "start": round(start, 3),
+                        "end": round(end, 3),
+                        "text": settings["caption_override"],
+                        "rendered_text": rendered_text,
+                        "style": bundle["style"],
+                        "mode": settings["caption_mode"],
+                        "word_count": len(words),
+                    }
+                )
+                bundle["events"].append(
+                    {
+                        "start": start,
+                        "end": end,
+                        "style": bundle["style"],
+                        "text": rendered_text,
+                    }
+                )
+                bundle["rendered"] = True
+            return bundle
+
+        if segments:
+            for segment_index, segment_words in enumerate(segments):
+                next_segment_start = None
+                if segment_index + 1 < len(segments):
+                    next_segment_start = (
+                        segments[segment_index + 1][0]["start"] + bundle["time_offset"]
+                    )
+
+                segment_start = segment_words[0]["start"] + bundle["time_offset"]
+                segment_end = segment_words[-1]["end"] + bundle["time_offset"]
+                if next_segment_start is not None:
+                    segment_end = min(segment_end, next_segment_start)
+                segment_end = max(segment_end, segment_start + 0.05)
+
+                rendered_plain_text = self._render_caption_text_for_style(
+                    " ".join(word["word"] for word in segment_words),
+                    bundle["style"],
+                )
+                bundle["segments"].append(
+                    {
+                        "index": segment_index,
+                        "start": round(segment_start, 3),
+                        "end": round(segment_end, 3),
+                        "text": " ".join(
+                            word["word"] for word in segment_words
+                        ).strip(),
+                        "rendered_text": rendered_plain_text,
+                        "style": bundle["style"],
+                        "mode": settings["caption_mode"],
+                        "word_count": len(segment_words),
+                    }
+                )
+
+                if bundle["style"] == "KaraokeBold":
+                    previous_event_end = segment_start
+                    for word_index, current_word in enumerate(segment_words):
+                        event_start = max(
+                            current_word["start"] + bundle["time_offset"],
+                            previous_event_end,
+                        )
+                        if word_index + 1 < len(segment_words):
+                            event_end = (
+                                segment_words[word_index + 1]["start"]
+                                + bundle["time_offset"]
+                            )
+                        else:
+                            event_end = segment_end
+
+                        event_end = min(event_end, segment_end)
+                        if event_end <= event_start:
+                            event_start = max(segment_start, segment_end - 0.03)
+                            event_end = segment_end
+                        else:
+                            event_end = max(event_end, event_start + 0.03)
+                            event_end = min(event_end, segment_end)
+
+                        text_parts = []
+                        for index, word in enumerate(segment_words):
+                            word_text = self._render_caption_text_for_style(
+                                word["word"],
+                                bundle["style"],
+                            )
+                            if index == word_index:
+                                text_parts.append(
+                                    f"{{\\c&H00FFFF&}}{word_text}{{\\c&HFFFFFF&}}"
+                                )
+                            else:
+                                text_parts.append(word_text)
+
+                        bundle["events"].append(
+                            {
+                                "start": event_start,
+                                "end": event_end,
+                                "style": bundle["style"],
+                                "text": " ".join(text_parts),
+                            }
+                        )
+                        previous_event_end = event_end
+                else:
+                    bundle["events"].append(
+                        {
+                            "start": segment_start,
+                            "end": segment_end,
+                            "style": bundle["style"],
+                            "text": rendered_plain_text,
+                        }
+                    )
+
+                bundle["rendered"] = True
+
+            return bundle
+
+        if bundle["style"] == "KaraokeBold":
+            bundle["style"] = "Minimal"
+        for index, segment in enumerate(fallback_segments):
+            rendered_text = self._wrap_caption_override_text(
+                segment["text"],
+                max_chars=32,
+                style_name=bundle["style"],
+            )
+            bundle["segments"].append(
+                {
+                    "index": index,
+                    "start": round(segment["start"] + bundle["time_offset"], 3),
+                    "end": round(segment["end"] + bundle["time_offset"], 3),
+                    "text": segment["text"],
+                    "rendered_text": rendered_text,
+                    "style": bundle["style"],
+                    "mode": settings["caption_mode"],
+                    "word_count": len(segment["text"].split()),
+                }
+            )
+            bundle["events"].append(
+                {
+                    "start": segment["start"] + bundle["time_offset"],
+                    "end": max(
+                        segment["end"] + bundle["time_offset"],
+                        segment["start"] + bundle["time_offset"] + 0.15,
+                    ),
+                    "style": bundle["style"],
+                    "text": rendered_text,
+                }
+            )
+            bundle["rendered"] = True
+
+        return bundle
+
+    def _render_caption_ass_content(self, caption_bundle: dict) -> str:
+        """Render ASS subtitle text from a normalized caption bundle."""
+        ass_content = """[Script Info]
+Title: Auto-generated captions
+ScriptType: v4.00+
+WrapStyle: 0
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial Black,62,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,50,50,260,1
+Style: KaraokeBold,Arial Black,62,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,50,50,260,1
+Style: CleanLowerThird,Arial,54,&H00FFFFFF,&H0000FFFF,&H00000000,&H55000000,-1,0,0,0,100,100,0,0,1,3,1,2,90,90,170,1
+Style: Minimal,Arial,48,&H00FFFFFF,&H0000FFFF,&H00000000,&H33000000,0,0,0,0,100,100,0,0,1,2,0,2,100,100,220,1
+Style: PodcastHeavy,Arial Black,58,&H00FFFFFF,&H0000FFFF,&H00000000,&H66000000,-1,0,0,0,100,100,0,0,1,5,2,2,60,60,210,1
+Style: PodcastHeavy,Arial Black,68,&H00FFFFFF,&H0000FFFF,&H00000000,&H66000000,-1,0,0,0,100,100,0,0,1,5,2,2,60,60,300,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+        for event in caption_bundle.get("events", []):
+            start = self.format_time(event["start"])
+            end = self.format_time(event["end"])
+            style = event.get("style") or "Default"
+            ass_content += (
+                f"Dialogue: 0,{start},{end},{style},,0,0,0,,{event['text']}\n"
+            )
+
+        return ass_content
+
+    def _write_caption_ass_file(self, output_path: str | Path, caption_bundle: dict):
+        """Persist ASS subtitle text to disk."""
+        ass_content = self._render_caption_ass_content(caption_bundle)
+        with open(output_path, "w", encoding="utf-8") as file_obj:
+            file_obj.write(ass_content)
+
+    def _write_caption_sidecar_artifacts(self, output_path: str, caption_bundle: dict):
+        """Write additive caption artifacts next to the rendered captions video."""
+        try:
+            artifact_dir = Path(output_path).parent
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+
+            words_payload = {
+                "caption_mode": caption_bundle.get("caption_mode", "auto"),
+                "caption_override": caption_bundle.get("caption_override", ""),
+                "rendered": bool(caption_bundle.get("rendered")),
+                "time_offset_seconds": round(
+                    float(caption_bundle.get("time_offset") or 0), 3
+                ),
+                "words": caption_bundle.get("words", []),
+            }
+            segments_payload = {
+                "caption_mode": caption_bundle.get("caption_mode", "auto"),
+                "caption_override": caption_bundle.get("caption_override", ""),
+                "style": caption_bundle.get("style", "Default"),
+                "rendered": bool(caption_bundle.get("rendered")),
+                "time_offset_seconds": round(
+                    float(caption_bundle.get("time_offset") or 0), 3
+                ),
+                "segments": caption_bundle.get("segments", []),
+            }
+
+            with open(artifact_dir / "caption_words.json", "w", encoding="utf-8") as f:
+                json.dump(words_payload, f, ensure_ascii=False, indent=2)
+
+            with open(
+                artifact_dir / "caption_segments.json", "w", encoding="utf-8"
+            ) as f:
+                json.dump(segments_payload, f, ensure_ascii=False, indent=2)
+
+            self._write_caption_ass_file(artifact_dir / "captions.ass", caption_bundle)
+        except Exception as error:
+            self.log(f"  Warning: Could not write caption sidecar artifacts: {error}")
 
     def _build_hook_drawtext_filter(
         self,
@@ -5271,6 +6297,36 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     progress_callback,
                     crop_track_path=crop_track_path,
                 )
+            if backend_mode == "center_crop":
+                self.log(
+                    f"  Using {mode.replace('_', ' ').title()} (FFmpeg center crop backend)"
+                )
+                return self.convert_to_portrait_center_crop_with_progress(
+                    input_path,
+                    output_path,
+                    progress_callback,
+                    crop_track_path=crop_track_path,
+                )
+            if backend_mode == "split_screen":
+                self.log(
+                    f"  Using {mode.replace('_', ' ').title()} (FFmpeg split-screen backend)"
+                )
+                return self.convert_to_portrait_split_screen_with_progress(
+                    input_path,
+                    output_path,
+                    progress_callback,
+                    crop_track_path=crop_track_path,
+                )
+            if backend_mode == "podcast_smart":
+                self.log(
+                    f"  Using {mode.replace('_', ' ').title()} (adaptive podcast backend)"
+                )
+                return self.convert_to_portrait_podcast_smart_with_progress(
+                    input_path,
+                    output_path,
+                    progress_callback,
+                    crop_track_path=crop_track_path,
+                )
             if backend_mode == "smooth_follow":
                 self.log(
                     f"  Using {mode.replace('_', ' ').title()} (Smooth Follow backend)"
@@ -5294,9 +6350,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     crop_track_path=crop_track_path,
                 )
         except Exception as e:
-            # Fallback to OpenCV if MediaPipe fails
             if backend_mode == "mediapipe":
-                self.log(f"  ⚠ MediaPipe failed: {e}")
+                self.log(f"  ? MediaPipe failed: {e}")
                 self.log("  Falling back to OpenCV mode...")
                 return self.convert_to_portrait_opencv_with_progress(
                     input_path,
@@ -5305,8 +6360,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     tracking_mode="opencv",
                     crop_track_path=crop_track_path,
                 )
-            else:
-                raise
+            if backend_mode in {"podcast_smart", "split_screen"}:
+                self.log(f"  ? {mode.replace('_', ' ').title()} failed: {e}")
+                self.log("  Falling back to Center Crop mode...")
+                return self.convert_to_portrait_center_crop_with_progress(
+                    input_path,
+                    output_path,
+                    progress_callback,
+                    crop_track_path=crop_track_path,
+                )
+            raise
 
     def convert_to_portrait_opencv_with_progress(
         self,
@@ -6151,6 +7214,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     ):
         """Add CapCut-style captions using OpenAI Whisper API with progress"""
 
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        caption_settings = self._resolve_caption_render_settings()
+        if caption_settings["caption_mode"] == "off":
+            if progress_callback:
+                progress_callback(0.1)
+            shutil.copy(input_path, output_path)
+            self._write_caption_sidecar_artifacts(
+                output_path,
+                {
+                    "caption_mode": "off",
+                    "caption_override": caption_settings["caption_override"],
+                    "time_offset": float(time_offset or 0),
+                    "style": "Minimal",
+                    "words": [],
+                    "segments": [],
+                    "events": [],
+                },
+            )
+            if progress_callback:
+                progress_callback(1.0)
+            return
+
         if progress_callback:
             progress_callback(0.1)
 
@@ -6179,8 +7264,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         if result.returncode != 0:
             self.log(f"  Warning: Audio extraction failed")
-            import shutil
-
             shutil.copy(input_path, output_path)
             return
 
@@ -6190,8 +7273,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         # Check if audio file exists
         if not os.path.exists(audio_file) or os.path.getsize(audio_file) < 1000:
             self.log(f"  Warning: Audio file too small or missing")
-            import shutil
-
             shutil.copy(input_path, output_path)
             if os.path.exists(audio_file):
                 os.unlink(audio_file)
@@ -6213,8 +7294,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 )
         except Exception as e:
             self.log(f"  Warning: Whisper API error: {e}")
-            import shutil
-
             shutil.copy(input_path, output_path)
             os.unlink(audio_file)
             return
@@ -6225,10 +7304,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             progress_callback(0.5)
 
         # Create ASS subtitle file
+        caption_bundle = self._build_caption_render_bundle(transcript, time_offset)
         ass_file = tempfile.NamedTemporaryFile(
             mode="w", suffix=".ass", delete=False, encoding="utf-8"
         ).name
-        self.create_ass_subtitle_capcut(transcript, ass_file, time_offset)
+        self._write_caption_ass_file(ass_file, caption_bundle)
+        self._write_caption_sidecar_artifacts(output_path, caption_bundle)
 
         if progress_callback:
             progress_callback(0.6)
