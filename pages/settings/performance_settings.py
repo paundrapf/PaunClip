@@ -61,6 +61,28 @@ class PerformanceSettingsSubPage(BaseSettingsSubPage):
             text="GPU encoding is 3-5x faster than CPU. Requires compatible hardware.",
             font=ctk.CTkFont(size=10), text_color="gray", anchor="w", justify="left").pack(fill="x")
         
+        self.optimized_ingestion_var = ctk.BooleanVar(value=False)
+        self.optimized_ingestion_switch = ctk.CTkSwitch(
+            accel_frame,
+            text="Enable Optimized Ingestion (audio-first)",
+            variable=self.optimized_ingestion_var,
+            font=ctk.CTkFont(size=12),
+        )
+        self.optimized_ingestion_switch.pack(anchor="w", pady=(12, 6))
+
+        ctk.CTkLabel(
+            accel_frame,
+            text=(
+                "Phase 1 downloads audio plus transcript inputs first, then Phase 2 "
+                "downloads only buffered video segments for the selected clips."
+            ),
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+            anchor="w",
+            justify="left",
+            wraplength=520,
+        ).pack(fill="x")
+        
         # Technical Details Section
         details_section = self.create_section("Technical Details")
         
@@ -162,7 +184,9 @@ class PerformanceSettingsSubPage(BaseSettingsSubPage):
             config_dict = self.config
             
         gpu_config = config_dict.get("gpu_acceleration", {})
+        optimized_ingestion = config_dict.get("optimized_ingestion", {})
         self.gpu_enabled_var.set(gpu_config.get("enabled", False))
+        self.optimized_ingestion_var.set(optimized_ingestion.get("enabled", False))
     
     def save_settings(self):
         """Save settings"""
@@ -174,6 +198,14 @@ class PerformanceSettingsSubPage(BaseSettingsSubPage):
         
         config_dict["gpu_acceleration"] = {
             "enabled": self.gpu_enabled_var.get()
+        }
+        config_dict["optimized_ingestion"] = {
+            "enabled": self.optimized_ingestion_var.get(),
+            "segment_buffer_seconds": float(
+                (config_dict.get("optimized_ingestion") or {}).get(
+                    "segment_buffer_seconds", 3.0
+                )
+            ),
         }
         
         if self.on_save_callback:

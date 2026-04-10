@@ -155,29 +155,28 @@ class OutputSettingsSubPage(BaseSettingsSubPage):
 
         split_screen_radio = ctk.CTkRadioButton(
             split_screen_frame,
-            text="Split Screen (Coming Soon)",
+            text="Split Screen",
             variable=self.face_tracking_var,
             value="split_screen",
             font=ctk.CTkFont(size=13, weight="bold"),
-            state="disabled",
         )
         split_screen_radio.pack(anchor="w", padx=15, pady=(10, 5))
 
         ctk.CTkLabel(
             split_screen_frame,
-            text="• Reserved V2 mode for two-speaker podcast scenes",
+            text="- Keeps both speakers visible in a stable two-panel portrait layout",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=35)
         ctk.CTkLabel(
             split_screen_frame,
-            text="• Disabled until the dedicated layout engine lands",
+            text="- Good fallback for interviews when Podcast Smart sees two strong faces",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=35)
         ctk.CTkLabel(
             split_screen_frame,
-            text="⚠ Not yet available as an active rendering mode",
+            text="- Best for two-speaker scenes; single-speaker clips usually look better in Podcast Smart",
             font=ctk.CTkFont(size=11),
             text_color="orange",
         ).pack(anchor="w", padx=35, pady=(0, 10))
@@ -245,19 +244,24 @@ class OutputSettingsSubPage(BaseSettingsSubPage):
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open folder: {str(e)}")
 
+
+    def _get_config_dict(self) -> dict:
+        """Return the mutable config mapping behind this settings page."""
+        config_source = getattr(self, "config", None)
+        nested_config = getattr(config_source, "config", None)
+        if isinstance(nested_config, dict):
+            return nested_config
+        if isinstance(config_source, dict):
+            return config_source
+        return {}
+
     def load_config(self):
         """Load config into UI"""
-        # Handle both ConfigManager and dict
-        if hasattr(self.config, "config"):
-            config_dict = self.config.config
-        else:
-            config_dict = self.config
+        config_dict = self._get_config_dict()
 
-        # Output directory
-        output_dir = config_dict.get("output_dir", str(self.output_dir))
+        output_dir = str(config_dict.get("output_dir", str(self.output_dir)))
         self.output_var.set(output_dir)
 
-        # Reframing mode
         face_tracking = normalize_reframe_mode(
             config_dict.get("face_tracking_mode", "center_crop")
         )
@@ -271,20 +275,13 @@ class OutputSettingsSubPage(BaseSettingsSubPage):
             messagebox.showerror("Error", "Output directory is required")
             return
 
-        # Create directory if it doesn't exist
         try:
             Path(output_dir).mkdir(parents=True, exist_ok=True)
         except Exception as e:
             messagebox.showerror("Error", f"Cannot create directory:\n{str(e)}")
             return
 
-        # Handle both ConfigManager and dict
-        if hasattr(self.config, "config"):
-            config_dict = self.config.config
-        else:
-            config_dict = self.config
-
-        # Update config
+        config_dict = self._get_config_dict()
         config_dict["output_dir"] = output_dir
         config_dict["face_tracking_mode"] = self.face_tracking_var.get()
 

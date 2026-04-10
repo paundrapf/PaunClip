@@ -90,6 +90,12 @@ class ConfigManager:
                 if "gpu_acceleration" not in config:
                     config["gpu_acceleration"] = {"enabled": False}
 
+                if "optimized_ingestion" not in config:
+                    config["optimized_ingestion"] = {
+                        "enabled": False,
+                        "segment_buffer_seconds": 3.0,
+                    }
+
                 # Add campaign catalog defaults if not exists
                 if "campaigns" not in config or not isinstance(
                     config["campaigns"], list
@@ -129,6 +135,10 @@ class ConfigManager:
             },
             "repliz": {"access_key": "", "secret_key": ""},
             "gpu_acceleration": {"enabled": False},
+            "optimized_ingestion": {
+                "enabled": False,
+                "segment_buffer_seconds": 3.0,
+            },
             "campaigns": [],
         }
         self.save_config(config)

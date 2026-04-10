@@ -77,6 +77,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
         self.auto_source_video_var = ctk.BooleanVar(value=True)
         self.tts_voice_menu = None
         self.tts_voice_hint_label = None
+        self.caption_override_text = None
 
         self.create_ui()
 
@@ -387,10 +388,28 @@ class SessionWorkspacePage(ctk.CTkFrame):
         self.caption_mode_menu = ctk.CTkOptionMenu(
             caption_row,
             variable=self.caption_mode_var,
-            values=["auto", "off", "manual_override"],
+            values=[
+                "auto",
+                "karaoke_bold",
+                "clean_lower_third",
+                "minimal",
+                "podcast_heavy",
+                "manual_override",
+                "off",
+            ],
             command=self.on_editor_option_changed,
         )
         self.caption_mode_menu.pack(side="left", fill="x", expand=True)
+
+        ctk.CTkLabel(
+            clip_overrides_card,
+            text="Caption Override",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(0, 3))
+
+        self.caption_override_text = ctk.CTkTextbox(clip_overrides_card, height=72)
+        self.caption_override_text.pack(fill="x", padx=12, pady=(0, 8))
 
         watermark_row = ctk.CTkFrame(clip_overrides_card, fg_color="transparent")
         watermark_row.pack(fill="x", padx=12, pady=(0, 8))
@@ -584,6 +603,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
         self.title_entry.bind("<KeyRelease>", self.on_editor_changed)
         self.description_text.bind("<KeyRelease>", self.on_editor_changed)
         self.hook_text.bind("<KeyRelease>", self.on_editor_changed)
+        self.caption_override_text.bind("<KeyRelease>", self.on_editor_changed)
 
     def on_page_shown(self):
         """Refresh workspace whenever it becomes visible."""
@@ -954,6 +974,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
             "hook_text": "",
             "tts_voice": defaults["tts_voice"],
             "caption_mode": defaults["caption_mode"],
+            "caption_override": "",
             "watermark_preset": defaults["watermark_preset"],
             "source_credit_enabled": defaults["source_credit_enabled"],
         }
@@ -1096,10 +1117,26 @@ class SessionWorkspacePage(ctk.CTkFrame):
         self.caption_mode_menu.configure(
             values=self.build_option_values(
                 caption_mode,
-                ["auto", "off", "manual_override"],
+                [
+                    "auto",
+                    "karaoke_bold",
+                    "clean_lower_third",
+                    "minimal",
+                    "podcast_heavy",
+                    "manual_override",
+                    "off",
+                ],
             )
         )
         self.caption_mode_var.set(caption_mode)
+
+        caption_override_widget = self.caption_override_text
+        if caption_override_widget is not None:
+            caption_override_widget.delete("1.0", "end")
+            caption_override_widget.insert(
+                "1.0",
+                str(payload.get("caption_override") or ""),
+            )
 
         watermark_preset = str(
             payload.get("watermark_preset")
@@ -1135,6 +1172,7 @@ class SessionWorkspacePage(ctk.CTkFrame):
                 or defaults.get("caption_mode")
                 or "auto"
             ),
+            "caption_override": str(editor_state.get("caption_override") or ""),
             "watermark_preset": str(
                 editor_state.get("watermark_preset")
                 or defaults.get("watermark_preset")
@@ -1156,6 +1194,11 @@ class SessionWorkspacePage(ctk.CTkFrame):
             "hook_text": self.hook_text.get("1.0", "end").strip(),
             "tts_voice": self.tts_voice_var.get().strip().lower(),
             "caption_mode": self.caption_mode_var.get().strip(),
+            "caption_override": (
+                self.caption_override_text.get("1.0", "end").strip()
+                if self.caption_override_text is not None
+                else ""
+            ),
             "watermark_preset": self.watermark_preset_var.get().strip(),
             "source_credit_enabled": self.auto_source_video_var.get(),
         }

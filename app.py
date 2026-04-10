@@ -1378,6 +1378,12 @@ class YTShortClipperApp(ctk.CTk):
                     or editor_defaults.get("caption_mode", "auto"),
                 )
             ).strip().lower() or editor_defaults.get("caption_mode", "auto")
+            editor_state["caption_override"] = str(
+                updates.get(
+                    "caption_override",
+                    editor_state.get("caption_override", ""),
+                )
+            ).strip()
             editor_state["source_credit_enabled"] = bool(
                 updates.get(
                     "source_credit_enabled",
@@ -3021,6 +3027,10 @@ class YTShortClipperApp(ctk.CTk):
                 provider_router=self.provider_router,
                 provider_snapshot=self.provider_snapshot,
                 subtitle_language=subtitle_lang,
+                optimized_ingestion_settings=self.config.get(
+                    "optimized_ingestion",
+                    {"enabled": False, "segment_buffer_seconds": 3.0},
+                ),
                 log_callback=log_with_debug,
                 progress_callback=lambda s, p: self.after(
                     0, lambda: self.update_progress(s, p)
@@ -3166,6 +3176,10 @@ class YTShortClipperApp(ctk.CTk):
                 provider_router=self.provider_router,
                 provider_snapshot=self.provider_snapshot,
                 subtitle_language=subtitle_lang,
+                optimized_ingestion_settings=self.config.get(
+                    "optimized_ingestion",
+                    {"enabled": False, "segment_buffer_seconds": 3.0},
+                ),
                 log_callback=log_with_debug,
                 progress_callback=lambda s, p: self.after(
                     0, lambda: self.update_progress(s, p)
@@ -3252,6 +3266,10 @@ class YTShortClipperApp(ctk.CTk):
                 provider_router=self.provider_router,
                 provider_snapshot=self.provider_snapshot,
                 subtitle_language="none",
+                optimized_ingestion_settings=self.config.get(
+                    "optimized_ingestion",
+                    {"enabled": False, "segment_buffer_seconds": 3.0},
+                ),
                 log_callback=log_with_debug,
                 progress_callback=lambda s, p: self.after(
                     0, lambda: self.update_progress(s, p)
@@ -3401,6 +3419,10 @@ class YTShortClipperApp(ctk.CTk):
                 provider_router=self.provider_router,
                 provider_snapshot=self.provider_snapshot,
                 subtitle_language="id",
+                optimized_ingestion_settings=self.config.get(
+                    "optimized_ingestion",
+                    {"enabled": False, "segment_buffer_seconds": 3.0},
+                ),
                 log_callback=log_with_debug,
                 progress_callback=lambda s, p: self.after(
                     0, lambda: self.update_progress(s, p)
@@ -3892,6 +3914,10 @@ class YTShortClipperApp(ctk.CTk):
                 provider_router=self.provider_router,
                 provider_snapshot=self.provider_snapshot,
                 subtitle_language="id",  # Already downloaded
+                optimized_ingestion_settings=self.config.get(
+                    "optimized_ingestion",
+                    {"enabled": False, "segment_buffer_seconds": 3.0},
+                ),
                 log_callback=log_with_debug,
                 progress_callback=lambda s, p: self.after(
                     0, lambda: self.update_clipping_progress(s, p)

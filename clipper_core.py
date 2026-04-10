@@ -133,6 +133,7 @@ class AutoClipperCore:
         progress_callback=None,
         token_callback=None,
         cancel_check=None,
+        optimized_ingestion_settings: dict = None,
     ):
         # Multi-provider support
         self.ai_providers = ai_providers or {}
@@ -223,6 +224,12 @@ class AutoClipperCore:
         self.set_progress = progress_callback or (lambda s, p: None)
         self.report_tokens = token_callback or (lambda gi, go, w, t: None)
         self.is_cancelled = cancel_check or (lambda: False)
+        self.optimized_ingestion_settings = (
+            copy.deepcopy(optimized_ingestion_settings)
+            if isinstance(optimized_ingestion_settings, dict)
+            else {"enabled": False, "segment_buffer_seconds": 3.0}
+        )
+        self._current_ingestion_manifest = {}
 
         # GPU acceleration settings
         self.gpu_enabled = False
@@ -711,6 +718,11 @@ class AutoClipperCore:
 
         if extra_fields:
             manifest.update(extra_fields)
+
+        if self._current_ingestion_manifest and "optimized_ingestion" not in manifest:
+            manifest["optimized_ingestion"] = copy.deepcopy(
+                self._current_ingestion_manifest
+            )
 
         return normalize_session_manifest(manifest, session_path)
 
@@ -1370,6 +1382,11 @@ Transcript:
         """Download video and subtitle with progress using yt-dlp module or executable"""
         self.log("[1/4] Downloading video & subtitle...")
 
+        if self._is_optimized_ingestion_enabled(url):
+            return self._download_video_audio_first(url)
+
+        self._current_ingestion_manifest = {}
+
         # Check if using yt-dlp module
         use_module = YTDLP_MODULE_AVAILABLE and self.ytdlp_path == "yt_dlp_module"
 
@@ -1377,6 +1394,222 @@ Transcript:
             return self._download_video_module(url)
         else:
             return self._download_video_subprocess(url)
+
+    def _is_optimized_ingestion_enabled(self, url: str | None = None) -> bool:
+        """Return whether audio-first ingestion should be used for this source."""
+        if not isinstance(self.optimized_ingestion_settings, dict):
+            return False
+        if not bool(self.optimized_ingestion_settings.get("enabled", False)):
+            return False
+        if self.ytdlp_path == "yt_dlp_module":
+            return False
+        if url is None:
+            return True
+        return str(url or "").startswith(("http://", "https://"))
+
+    def _get_optimized_segment_buffer_seconds(self) -> float:
+        """Return the configured optimized segment buffer with a safe default."""
+        try:
+            return max(float(self.optimized_ingestion_settings.get("segment_buffer_seconds", 3.0)), 0.5)
+        except (TypeError, ValueError, AttributeError):
+            return 3.0
+
+    def _resolve_cookiefile_path(self) -> str | None:
+        """Locate a cookies.txt file for yt-dlp auth flows when available."""
+        from utils.helpers import get_app_dir
+
+        candidates = [Path("cookies.txt"), get_app_dir() / "cookies.txt"]
+        for candidate in candidates:
+            if Path(candidate).exists():
+                return str(candidate)
+        return None
+
+    def _download_video_audio_first(self, url: str) -> tuple:
+        """Download audio-first analysis inputs while deferring video download until render time."""
+        self.log("  Optimized ingestion enabled: downloading audio-first analysis payload")
+
+        meta_cmd = [self.ytdlp_path, "--dump-json", "--no-download", url]
+        result = subprocess.run(
+            meta_cmd,
+            capture_output=True,
+            text=True,
+            creationflags=SUBPROCESS_FLAGS,
+            timeout=30,
+        )
+        video_info = {}
+        if result.returncode == 0:
+            try:
+                yt_data = json.loads(result.stdout)
+                video_info = {
+                    "title": yt_data.get("title", ""),
+                    "description": (yt_data.get("description", "") or "")[:2000],
+                    "channel": yt_data.get("channel", ""),
+                }
+            except json.JSONDecodeError:
+                video_info = {}
+
+        outtmpl = str(self.temp_dir / "source_audio.%(ext)s")
+        cmd = [
+            self.ytdlp_path,
+            "-f",
+            "bestaudio/best",
+            "--newline",
+            "--socket-timeout",
+            "30",
+            "--retries",
+            "10",
+            "--extractor-retries",
+            "3",
+            "-o",
+            outtmpl,
+        ]
+        if self.subtitle_language and self.subtitle_language != "none":
+            cmd.extend(
+                [
+                    "--write-sub",
+                    "--write-auto-sub",
+                    "--sub-lang",
+                    self.subtitle_language,
+                    "--convert-subs",
+                    "srt",
+                ]
+            )
+        cookiefile = self._resolve_cookiefile_path()
+        if cookiefile:
+            cmd.extend(["--cookies", cookiefile])
+        cmd.append(url)
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            creationflags=SUBPROCESS_FLAGS,
+            timeout=120000,
+        )
+        if result.returncode != 0:
+            raise Exception(
+                "Optimized audio-first download failed\n"
+                f"{result.stderr or result.stdout or 'Unknown yt-dlp error'}"
+            )
+
+        audio_candidates = [
+            path
+            for path in self.temp_dir.glob("source_audio.*")
+            if path.suffix.lower() not in {".srt", ".vtt", ".json", ".part"}
+        ]
+        if not audio_candidates:
+            raise Exception("Optimized audio-first download did not produce an audio file")
+        audio_path = audio_candidates[0]
+
+        srt_path = None
+        subtitle_candidates = list(self.temp_dir.glob("source_audio.*.srt"))
+        if subtitle_candidates:
+            srt_path = subtitle_candidates[0]
+
+        self._current_ingestion_manifest = {
+            "enabled": True,
+            "mode": "audio_first",
+            "source_url": url,
+            "analysis_audio_path": str(audio_path),
+            "segment_buffer_seconds": self._get_optimized_segment_buffer_seconds(),
+        }
+        return str(audio_path), str(srt_path) if srt_path else None, video_info
+
+    def _download_video_segment(
+        self,
+        url: str,
+        start_seconds: float,
+        end_seconds: float,
+        output_stem: Path,
+    ) -> str:
+        """Download only the buffered render segment needed for one highlight."""
+        output_stem.parent.mkdir(parents=True, exist_ok=True)
+        for stale_path in output_stem.parent.glob(f"{output_stem.name}.*"):
+            if stale_path.is_file():
+                stale_path.unlink()
+
+        format_selector = (
+            "bestvideo[height>=720][height<=2160]+bestaudio/"
+            "best[height>=720][height<=2160]/bestvideo+bestaudio/best"
+        )
+        cmd = [
+            self.ytdlp_path,
+            "-f",
+            format_selector,
+            "--merge-output-format",
+            "mp4",
+            "--download-sections",
+            f"*{start_seconds:.3f}-{end_seconds:.3f}",
+            "-o",
+            str(output_stem) + ".%(ext)s",
+            url,
+        ]
+        cookiefile = self._resolve_cookiefile_path()
+        if cookiefile:
+            cmd[1:1] = ["--cookies", cookiefile]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            creationflags=SUBPROCESS_FLAGS,
+            timeout=120000,
+        )
+        if result.returncode != 0:
+            raise Exception(
+                "Optimized segment download failed\n"
+                f"{result.stderr or result.stdout or 'Unknown yt-dlp error'}"
+            )
+
+        segment_candidates = [
+            path
+            for path in output_stem.parent.glob(f"{output_stem.name}.*")
+            if path.suffix.lower() not in {".srt", ".vtt", ".json", ".part"}
+        ]
+        if not segment_candidates:
+            raise Exception("Optimized segment download did not produce a video file")
+        return str(segment_candidates[0])
+
+    def _prepare_optimized_render_source(
+        self,
+        optimized_ingestion: dict,
+        highlight: dict,
+        working_dir: Path,
+    ) -> tuple[str, dict, dict]:
+        """Resolve one buffered render segment and remap highlight timings to it."""
+        source_url = str(optimized_ingestion.get("source_url") or "").strip()
+        if not source_url:
+            raise Exception("Optimized ingestion metadata is missing source_url")
+
+        start_seconds = self.parse_timestamp(str(highlight["start_time"]).replace(",", "."))
+        end_seconds = self.parse_timestamp(str(highlight["end_time"]).replace(",", "."))
+        buffer_seconds = self._get_optimized_segment_buffer_seconds()
+        segment_start = max(0.0, start_seconds - buffer_seconds)
+        segment_end = max(end_seconds + buffer_seconds, segment_start + 1.0)
+        source_dir = Path(working_dir) / "source"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        segment_path = self._download_video_segment(
+            source_url,
+            segment_start,
+            segment_end,
+            source_dir / "optimized_segment",
+        )
+
+        adjusted_highlight = copy.deepcopy(highlight)
+        adjusted_start = max(0.0, start_seconds - segment_start)
+        adjusted_end = max(adjusted_start + 0.05, end_seconds - segment_start)
+        adjusted_highlight["start_time"] = self._seconds_to_srt_timestamp(adjusted_start)
+        adjusted_highlight["end_time"] = self._seconds_to_srt_timestamp(adjusted_end)
+        adjusted_highlight["duration_seconds"] = max(adjusted_end - adjusted_start, 0.05)
+
+        segment_metadata = {
+            "mode": "audio_first_segment_download",
+            "source_url": source_url,
+            "segment_start_seconds": round(segment_start, 3),
+            "segment_end_seconds": round(segment_end, 3),
+            "buffer_seconds": round(buffer_seconds, 3),
+        }
+        return segment_path, adjusted_highlight, segment_metadata
 
     def _download_video_module(self, url: str) -> tuple:
         """Download video using yt-dlp Python module API"""
@@ -4078,7 +4311,7 @@ Candidates:
                 )
         except Exception as e:
             if backend_mode == "mediapipe":
-                self.log(f"  ? MediaPipe failed: {e}")
+                self.log(f"  Warning: MediaPipe failed: {e}")
                 self.log("  Falling back to OpenCV mode...")
                 return self.convert_to_portrait_opencv(
                     input_path,
@@ -4087,7 +4320,7 @@ Candidates:
                     crop_track_path=crop_track_path,
                 )
             if backend_mode in {"podcast_smart", "split_screen"}:
-                self.log(f"  ? {mode.replace('_', ' ').title()} failed: {e}")
+                self.log(f"  Warning: {mode.replace('_', ' ').title()} failed: {e}")
                 self.log("  Falling back to Center Crop mode...")
                 return self.convert_to_portrait_center_crop(
                     input_path,
@@ -6351,7 +6584,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 )
         except Exception as e:
             if backend_mode == "mediapipe":
-                self.log(f"  ? MediaPipe failed: {e}")
+                self.log(f"  Warning: MediaPipe failed: {e}")
                 self.log("  Falling back to OpenCV mode...")
                 return self.convert_to_portrait_opencv_with_progress(
                     input_path,
@@ -6361,7 +6594,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     crop_track_path=crop_track_path,
                 )
             if backend_mode in {"podcast_smart", "split_screen"}:
-                self.log(f"  ? {mode.replace('_', ' ').title()} failed: {e}")
+                self.log(f"  Warning: {mode.replace('_', ' ').title()} failed: {e}")
                 self.log("  Falling back to Center Crop mode...")
                 return self.convert_to_portrait_center_crop_with_progress(
                     input_path,
@@ -7728,6 +7961,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         session_data["updated_at"] = utc_now_iso()
 
         sync_selected_highlight_ids(session_data)
+        optimized_ingestion = session_data.get("optimized_ingestion") or {}
         clip_jobs = ensure_clip_jobs(session_data)
         clip_job_lookup = {
             clip_job.get("highlight_id"): clip_job
@@ -7774,9 +8008,27 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             self._save_session_manifest(session_dir, session_data)
 
             try:
+                render_video_path = video_path
+                render_highlight = copy.deepcopy(highlight)
+                optimized_render_source = None
+                if (
+                    isinstance(optimized_ingestion, dict)
+                    and optimized_ingestion.get("mode") == "audio_first"
+                    and optimized_ingestion.get("source_url")
+                ):
+                    (
+                        render_video_path,
+                        render_highlight,
+                        optimized_render_source,
+                    ) = self._prepare_optimized_render_source(
+                        optimized_ingestion,
+                        highlight,
+                        working_dir,
+                    )
+
                 render_result = self.process_clip(
-                    video_path,
-                    highlight,
+                    render_video_path,
+                    render_highlight,
                     i,
                     total_clips,
                     add_captions=add_captions,
@@ -7811,6 +8063,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 shutil.copy2(render_result["master_path"], stable_master_path)
 
                 metadata = copy.deepcopy(render_result["metadata"])
+                if optimized_render_source:
+                    metadata["start_time"] = highlight["start_time"]
+                    metadata["end_time"] = highlight["end_time"]
+                    metadata["duration_seconds"] = highlight["duration_seconds"]
+                    metadata["optimized_ingestion"] = optimized_render_source
                 if stable_data_path.exists():
                     try:
                         with open(
