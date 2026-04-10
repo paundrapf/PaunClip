@@ -92,6 +92,8 @@ But the current flow still has real pain points:
   - detailed component map for the future session workspace UI
 - `14-full-workflow-application.md`
   - mermaid + ASCII full user flow with button visibility and back-navigation logic
+- `15-paunclip-engine-v2-design.md`
+  - formal design for the output-quality engine that should be fixed before web migration
 
 ## Core design principles
 
