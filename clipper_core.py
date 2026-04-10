@@ -27,6 +27,7 @@ from utils.storage import (
     ensure_session_highlights,
     infer_campaign_id_from_session_dir,
     load_session_manifest,
+    normalize_reframe_mode,
     normalize_session_manifest,
     sync_selected_highlight_ids,
     utc_now_iso,
@@ -269,19 +270,25 @@ class AutoClipperCore:
         return ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
 
     def _normalize_tracking_mode(self, tracking_mode: str | None = None) -> str:
-        """Normalize tracking mode names to supported runtime values."""
-        mode = str(tracking_mode or "").strip().lower()
+        """Normalize tracking mode names into canonical V2 reframing values."""
+        return normalize_reframe_mode(tracking_mode)
 
-        if mode in {"mediapipe", "media_pipe"}:
-            return "mediapipe"
-        if mode in {"smooth_follow", "smooth", "follow", "fluid"}:
+    def _resolve_tracking_backend_mode(self, mode: str) -> str:
+        """Map canonical V2 reframing modes onto the currently implemented engine paths."""
+        canonical = self._normalize_tracking_mode(mode)
+
+        if canonical == "podcast_smart":
             return "smooth_follow"
+        if canonical == "split_screen":
+            return "smooth_follow"
+        if canonical == "sports_beta":
+            return "opencv"
         return "opencv"
 
     def _resolve_tracking_mode(
         self, highlight: dict | None = None, tracking_mode: str | None = None
     ) -> str:
-        """Resolve the effective tracking mode for one portrait render."""
+        """Resolve the effective canonical V2 tracking mode for one portrait render."""
         if tracking_mode:
             return self._normalize_tracking_mode(tracking_mode)
 
@@ -3981,33 +3988,40 @@ Candidates:
     ):
         """Convert landscape to 9:16 portrait with speaker tracking (router method)"""
         mode = self._resolve_tracking_mode(tracking_mode=tracking_mode)
+        backend_mode = self._resolve_tracking_backend_mode(mode)
         try:
-            if mode == "mediapipe":
-                self.log("  Using MediaPipe (Active Speaker Detection)")
+            if backend_mode == "mediapipe":
+                self.log(
+                    f"  Using {mode.replace('_', ' ').title()} (MediaPipe backend)"
+                )
                 return self.convert_to_portrait_mediapipe(
                     input_path,
                     output_path,
                     crop_track_path=crop_track_path,
                 )
-            if mode == "smooth_follow":
-                self.log("  Using Smooth Follow (Fluid OpenCV)")
+            if backend_mode == "smooth_follow":
+                self.log(
+                    f"  Using {mode.replace('_', ' ').title()} (Smooth Follow backend)"
+                )
                 return self.convert_to_portrait_opencv(
                     input_path,
                     output_path,
-                    tracking_mode=mode,
+                    tracking_mode=backend_mode,
                     crop_track_path=crop_track_path,
                 )
             else:
-                self.log("  Using OpenCV (Fast Mode)")
+                self.log(
+                    f"  Using {mode.replace('_', ' ').title()} (Center Crop/OpenCV compatibility backend)"
+                )
                 return self.convert_to_portrait_opencv(
                     input_path,
                     output_path,
-                    tracking_mode=mode,
+                    tracking_mode=backend_mode,
                     crop_track_path=crop_track_path,
                 )
         except Exception as e:
             # Fallback to OpenCV if MediaPipe fails
-            if mode == "mediapipe":
+            if backend_mode == "mediapipe":
                 self.log(f"  ⚠ MediaPipe failed: {e}")
                 self.log("  Falling back to OpenCV mode...")
                 return self.convert_to_portrait_opencv(
@@ -5147,36 +5161,43 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     ):
         """Convert landscape to 9:16 portrait with speaker tracking and progress (router method)"""
         mode = self._resolve_tracking_mode(tracking_mode=tracking_mode)
+        backend_mode = self._resolve_tracking_backend_mode(mode)
         try:
-            if mode == "mediapipe":
-                self.log("  Using MediaPipe (Active Speaker Detection)")
+            if backend_mode == "mediapipe":
+                self.log(
+                    f"  Using {mode.replace('_', ' ').title()} (MediaPipe backend)"
+                )
                 return self.convert_to_portrait_mediapipe_with_progress(
                     input_path,
                     output_path,
                     progress_callback,
                     crop_track_path=crop_track_path,
                 )
-            if mode == "smooth_follow":
-                self.log("  Using Smooth Follow (Fluid OpenCV)")
+            if backend_mode == "smooth_follow":
+                self.log(
+                    f"  Using {mode.replace('_', ' ').title()} (Smooth Follow backend)"
+                )
                 return self.convert_to_portrait_opencv_with_progress(
                     input_path,
                     output_path,
                     progress_callback,
-                    tracking_mode=mode,
+                    tracking_mode=backend_mode,
                     crop_track_path=crop_track_path,
                 )
             else:
-                self.log("  Using OpenCV (Fast Mode)")
+                self.log(
+                    f"  Using {mode.replace('_', ' ').title()} (Center Crop/OpenCV compatibility backend)"
+                )
                 return self.convert_to_portrait_opencv_with_progress(
                     input_path,
                     output_path,
                     progress_callback,
-                    tracking_mode=mode,
+                    tracking_mode=backend_mode,
                     crop_track_path=crop_track_path,
                 )
         except Exception as e:
             # Fallback to OpenCV if MediaPipe fails
-            if mode == "mediapipe":
+            if backend_mode == "mediapipe":
                 self.log(f"  ⚠ MediaPipe failed: {e}")
                 self.log("  Falling back to OpenCV mode...")
                 return self.convert_to_portrait_opencv_with_progress(

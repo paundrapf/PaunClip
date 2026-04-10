@@ -56,6 +56,44 @@ KNOWN_SESSION_STAGES = {
     "unknown",
 }
 
+VALID_REFRAME_MODES = (
+    "center_crop",
+    "podcast_smart",
+    "split_screen",
+    "sports_beta",
+)
+
+
+def normalize_reframe_mode(mode: str | None = None) -> str:
+    """Normalize legacy and V2 reframing names into the canonical V2 vocabulary."""
+    value = str(mode or "").strip().lower()
+
+    if value in {"center_crop", "center", "center_lock", "static", "default"}:
+        return "center_crop"
+
+    if value in {
+        "podcast_smart",
+        "smooth_follow",
+        "smooth",
+        "follow",
+        "fluid",
+        "speaker_lock",
+        "mediapipe",
+        "media_pipe",
+    }:
+        return "podcast_smart"
+
+    if value in {"split_screen", "split", "two_up", "two-speaker", "two_speaker"}:
+        return "split_screen"
+
+    if value in {"sports_beta", "sports", "object_follow", "ball_follow"}:
+        return "sports_beta"
+
+    if value in {"opencv", "face", "fast"}:
+        return "center_crop"
+
+    return "center_crop"
+
 
 def utc_now_iso() -> str:
     """Return a local ISO timestamp for manifest updates."""
@@ -104,7 +142,7 @@ def build_default_highlight_editor(editor_state: dict | None = None) -> dict:
         "captions_enabled": bool(raw.get("captions_enabled", True)),
         "caption_mode": str(raw.get("caption_mode") or "auto"),
         "caption_override": str(raw.get("caption_override") or ""),
-        "tracking_mode": str(raw.get("tracking_mode") or "smooth_follow"),
+        "tracking_mode": normalize_reframe_mode(raw.get("tracking_mode")),
         "trim_start_offset_ms": int(raw.get("trim_start_offset_ms") or 0),
         "trim_end_offset_ms": int(raw.get("trim_end_offset_ms") or 0),
         "tts_voice": str(raw.get("tts_voice") or "autumn"),

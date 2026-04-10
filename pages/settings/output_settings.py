@@ -7,6 +7,7 @@ from tkinter import filedialog, messagebox
 from pathlib import Path
 
 from pages.settings.base_dialog import BaseSettingsSubPage
+from utils.storage import normalize_reframe_mode
 
 
 class OutputSettingsSubPage(BaseSettingsSubPage):
@@ -63,119 +64,154 @@ class OutputSettingsSubPage(BaseSettingsSubPage):
             command=self.open_output_folder,
         ).pack(fill="x", pady=(10, 0))
 
-        # Face Tracking Mode Section
-        tracking_section = self.create_section("Face Tracking Mode")
+        # Reframing Mode Section
+        tracking_section = self.create_section("Reframing Mode")
 
         tracking_frame = ctk.CTkFrame(tracking_section, fg_color="transparent")
         tracking_frame.pack(fill="x", padx=15, pady=(0, 12))
 
         ctk.CTkLabel(
             tracking_frame,
-            text="Choose how the video crops to speakers",
+            text="Choose how PaunClip reframes the video for portrait output",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", pady=(0, 10))
 
-        self.face_tracking_var = ctk.StringVar(value="opencv")
+        self.face_tracking_var = ctk.StringVar(value="center_crop")
 
-        # Smooth Follow option
-        smooth_follow_frame = ctk.CTkFrame(
+        # Center Crop option
+        center_crop_frame = ctk.CTkFrame(
             tracking_frame, fg_color=("gray85", "gray20"), corner_radius=8
         )
-        smooth_follow_frame.pack(fill="x", pady=(0, 10))
+        center_crop_frame.pack(fill="x", pady=(0, 10))
 
-        smooth_follow_radio = ctk.CTkRadioButton(
-            smooth_follow_frame,
-            text="Smooth Follow (Recommended)",
+        center_crop_radio = ctk.CTkRadioButton(
+            center_crop_frame,
+            text="Center Crop (Recommended Default)",
             variable=self.face_tracking_var,
-            value="smooth_follow",
+            value="center_crop",
             font=ctk.CTkFont(size=13, weight="bold"),
         )
-        smooth_follow_radio.pack(anchor="w", padx=15, pady=(10, 5))
+        center_crop_radio.pack(anchor="w", padx=15, pady=(10, 5))
 
         ctk.CTkLabel(
-            smooth_follow_frame,
-            text="• Fluid face-following without hard crop locks",
+            center_crop_frame,
+            text="• Fastest and most stable baseline mode",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=35)
         ctk.CTkLabel(
-            smooth_follow_frame,
-            text="• Better motion continuity for portrait clips",
+            center_crop_frame,
+            text="• Best fallback when tracking confidence is weak",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=35)
         ctk.CTkLabel(
-            smooth_follow_frame,
-            text="• Keeps OpenCV speed profile",
+            center_crop_frame,
+            text="• Uses the current compatibility backend until Engine V2 center crop ships fully",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=35, pady=(0, 10))
 
-        # OpenCV option
-        opencv_frame = ctk.CTkFrame(
+        # Podcast Smart option
+        podcast_smart_frame = ctk.CTkFrame(
             tracking_frame, fg_color=("gray85", "gray20"), corner_radius=8
         )
-        opencv_frame.pack(fill="x", pady=(0, 10))
+        podcast_smart_frame.pack(fill="x", pady=(0, 10))
 
-        opencv_radio = ctk.CTkRadioButton(
-            opencv_frame,
-            text="OpenCV (Fast)",
+        podcast_smart_radio = ctk.CTkRadioButton(
+            podcast_smart_frame,
+            text="Podcast Smart",
             variable=self.face_tracking_var,
-            value="opencv",
+            value="podcast_smart",
             font=ctk.CTkFont(size=13, weight="bold"),
         )
-        opencv_radio.pack(anchor="w", padx=15, pady=(10, 5))
+        podcast_smart_radio.pack(anchor="w", padx=15, pady=(10, 5))
 
         ctk.CTkLabel(
-            opencv_frame,
-            text="• Crop to largest face",
+            podcast_smart_frame,
+            text="• Current smart follow path for podcasts and interviews",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=35)
         ctk.CTkLabel(
-            opencv_frame,
-            text="• Faster processing",
+            podcast_smart_frame,
+            text="• Uses smooth-follow style behavior until the full V2 policy engine lands",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=35)
         ctk.CTkLabel(
-            opencv_frame,
-            text="• Recommended for most users",
+            podcast_smart_frame,
+            text="• Better fit for speaker-led content than raw legacy tracking labels",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=35, pady=(0, 10))
 
-        # MediaPipe option
-        mediapipe_frame = ctk.CTkFrame(
+        # Split Screen preview option
+        split_screen_frame = ctk.CTkFrame(
             tracking_frame, fg_color=("gray85", "gray20"), corner_radius=8
         )
-        mediapipe_frame.pack(fill="x")
+        split_screen_frame.pack(fill="x", pady=(0, 10))
 
-        mediapipe_radio = ctk.CTkRadioButton(
-            mediapipe_frame,
-            text="MediaPipe (Smart)",
+        split_screen_radio = ctk.CTkRadioButton(
+            split_screen_frame,
+            text="Split Screen (Coming Soon)",
             variable=self.face_tracking_var,
-            value="mediapipe",
+            value="split_screen",
             font=ctk.CTkFont(size=13, weight="bold"),
+            state="disabled",
         )
-        mediapipe_radio.pack(anchor="w", padx=15, pady=(10, 5))
+        split_screen_radio.pack(anchor="w", padx=15, pady=(10, 5))
 
         ctk.CTkLabel(
-            mediapipe_frame,
-            text="• Crop to active speaker (lip movement)",
+            split_screen_frame,
+            text="• Reserved V2 mode for two-speaker podcast scenes",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=35)
         ctk.CTkLabel(
-            mediapipe_frame,
-            text="• More accurate speaker tracking",
+            split_screen_frame,
+            text="• Disabled until the dedicated layout engine lands",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=35)
         ctk.CTkLabel(
-            mediapipe_frame,
-            text="⚠ Slower processing (2-3x)",
+            split_screen_frame,
+            text="⚠ Not yet available as an active rendering mode",
+            font=ctk.CTkFont(size=11),
+            text_color="orange",
+        ).pack(anchor="w", padx=35, pady=(0, 10))
+
+        sports_frame = ctk.CTkFrame(
+            tracking_frame, fg_color=("gray85", "gray20"), corner_radius=8
+        )
+        sports_frame.pack(fill="x")
+
+        sports_radio = ctk.CTkRadioButton(
+            sports_frame,
+            text="Sports Beta (Coming Soon)",
+            variable=self.face_tracking_var,
+            value="sports_beta",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            state="disabled",
+        )
+        sports_radio.pack(anchor="w", padx=15, pady=(10, 5))
+
+        ctk.CTkLabel(
+            sports_frame,
+            text="• Reserved V2 mode for object / ball-following experiments",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+        ).pack(anchor="w", padx=35)
+        ctk.CTkLabel(
+            sports_frame,
+            text="• Not part of the default professional path yet",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+        ).pack(anchor="w", padx=35)
+        ctk.CTkLabel(
+            sports_frame,
+            text="⚠ Experimental scope only",
             font=ctk.CTkFont(size=11),
             text_color="orange",
         ).pack(anchor="w", padx=35, pady=(0, 10))
@@ -221,10 +257,10 @@ class OutputSettingsSubPage(BaseSettingsSubPage):
         output_dir = config_dict.get("output_dir", str(self.output_dir))
         self.output_var.set(output_dir)
 
-        # Face tracking mode
-        face_tracking = config_dict.get("face_tracking_mode", "opencv")
-        if face_tracking not in {"opencv", "mediapipe", "smooth_follow"}:
-            face_tracking = "opencv"
+        # Reframing mode
+        face_tracking = normalize_reframe_mode(
+            config_dict.get("face_tracking_mode", "center_crop")
+        )
         self.face_tracking_var.set(face_tracking)
 
     def save_settings(self):

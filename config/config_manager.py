@@ -11,6 +11,7 @@ from utils.storage import (
     get_campaign_manifest_path,
     get_campaigns_dir,
     get_session_manifest_path,
+    normalize_reframe_mode,
 )
 
 
@@ -58,7 +59,11 @@ class ConfigManager:
                     }
                 # Add default face tracking mode if not exists
                 if "face_tracking_mode" not in config:
-                    config["face_tracking_mode"] = "opencv"  # "opencv" or "mediapipe"
+                    config["face_tracking_mode"] = "center_crop"
+                else:
+                    config["face_tracking_mode"] = normalize_reframe_mode(
+                        config.get("face_tracking_mode")
+                    )
                 # Add default MediaPipe settings if not exists
                 if "mediapipe_settings" not in config:
                     config["mediapipe_settings"] = {
@@ -115,7 +120,7 @@ class ConfigManager:
                 "opacity": 0.8,
                 "scale": 0.15,
             },
-            "face_tracking_mode": "opencv",
+            "face_tracking_mode": "center_crop",
             "mediapipe_settings": {
                 "lip_activity_threshold": 0.15,
                 "switch_threshold": 0.3,
