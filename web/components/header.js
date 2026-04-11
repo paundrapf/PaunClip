@@ -31,21 +31,33 @@ window.Components.Header = function () {
   const nav = document.createElement('div');
   nav.className = 'nav';
 
-  const aiBtn = document.createElement('button');
-  aiBtn.className = 'nav-btn';
-  aiBtn.dataset.view = 'ai-settings';
-  aiBtn.textContent = 'AI Settings';
-
   const homeBtn = document.createElement('button');
   homeBtn.className = 'nav-btn';
   homeBtn.dataset.view = 'home';
   homeBtn.textContent = 'Home';
 
-  nav.appendChild(aiBtn);
+  const sessionsBtn = document.createElement('button');
+  sessionsBtn.className = 'nav-btn';
+  sessionsBtn.dataset.view = 'sessions';
+  sessionsBtn.textContent = 'Sessions';
+
+  const outputsBtn = document.createElement('button');
+  outputsBtn.className = 'nav-btn';
+  outputsBtn.dataset.view = 'outputs';
+  outputsBtn.textContent = 'Outputs';
+
+  const aiBtn = document.createElement('button');
+  aiBtn.className = 'nav-btn';
+  aiBtn.dataset.view = 'ai-settings';
+  aiBtn.textContent = 'AI Settings';
+
   nav.appendChild(homeBtn);
+  nav.appendChild(sessionsBtn);
+  nav.appendChild(outputsBtn);
+  nav.appendChild(aiBtn);
 
   header.appendChild(brand);
   header.appendChild(nav);
 
-  return { element: header, icon, buttons: [aiBtn, homeBtn] };
+  return { element: header, icon, buttons: [homeBtn, sessionsBtn, outputsBtn, aiBtn] };
 };
