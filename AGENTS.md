@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Scope and repo root
-- Real project root is `yt-short-clipper/`.
+- Real project root is `PaunClip/`.
 - The outer workspace folder is only a wrapper and is not the app repo.
 - This repository is a Python desktop app with two shells:
   - `app.py` = CustomTkinter desktop shell

@@ -1,6 +1,6 @@
 # YouTube Cookies Guide
 
-This guide explains how to export and use cookies.txt for YT Short Clipper.
+This guide explains how to export and use cookies.txt for PaunClip.
 
 ---
 
@@ -36,7 +36,7 @@ Your cookies.txt must contain these YouTube authentication cookies:
 
 5. Save the file as `cookies.txt`
 
-6. Upload the file in YT Short Clipper home page
+6. Upload the file in the PaunClip home page
 
 ### Troubleshooting
 
@@ -119,7 +119,7 @@ File cookies.txt harus berisi cookies autentikasi YouTube berikut:
 
 5. Simpan file sebagai `cookies.txt`
 
-6. Upload file di halaman utama YT Short Clipper
+6. Upload file di halaman utama PaunClip
 
 ### Troubleshooting
 

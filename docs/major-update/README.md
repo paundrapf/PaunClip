@@ -1,6 +1,6 @@
 # Major Update Blueprint
 
-This folder contains the design package for the next major evolution of **YT Short Clipper**.
+This folder contains the design package for the next major evolution of **PaunClip**.
 
 The direction is to evolve the current app from a mostly linear, per-video workflow into a persistent workspace built around:
 
@@ -94,6 +94,8 @@ But the current flow still has real pain points:
   - mermaid + ASCII full user flow with button visibility and back-navigation logic
 - `15-paunclip-engine-v2-design.md`
   - formal design for the output-quality engine that should be fixed before web migration
+- `16-paunclip-web-api-migration.md`
+  - contract-first web/API migration design that preserves session/output artifacts and starts with Session Workspace on web
 
 ## Core design principles
 

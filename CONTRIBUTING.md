@@ -1,4 +1,4 @@
-# Contributing to YT-Short-Clipper
+# Contributing to PaunClip
 
 Thank you for your interest in contributing! 🎉
 
@@ -119,32 +119,32 @@ Then add to GitHub:
 
 ### Step 1: Fork Repository
 
-1. Go to repo page: `https://github.com/jipraks/yt-short-clipper`
+1. Go to repo page: `https://github.com/paundrapf/PaunClip`
 2. Click the **"Fork"** button in the top right
 3. Select your account as destination
 4. Wait for fork process to complete
 
-Now you have a copy at `https://github.com/YOUR-USERNAME/yt-short-clipper`
+Now you have a copy at `https://github.com/YOUR-USERNAME/PaunClip`
 
 ### Step 2: Clone to Local Computer
 
 ```bash
 # Clone YOUR fork (not the original repo!)
-git clone https://github.com/YOUR-USERNAME/yt-short-clipper.git
+git clone https://github.com/YOUR-USERNAME/PaunClip.git
 
 # Enter project folder
-cd yt-short-clipper
+cd PaunClip
 
 # Add "upstream" remote (original repo)
-git remote add upstream https://github.com/jipraks/yt-short-clipper.git
+git remote add upstream https://github.com/paundrapf/PaunClip.git
 
 # Verify remotes
 git remote -v
 # Output:
-# origin    https://github.com/YOUR-USERNAME/yt-short-clipper.git (fetch)
-# origin    https://github.com/YOUR-USERNAME/yt-short-clipper.git (push)
-# upstream  https://github.com/jipraks/yt-short-clipper.git (fetch)
-# upstream  https://github.com/jipraks/yt-short-clipper.git (push)
+# origin    https://github.com/YOUR-USERNAME/PaunClip.git (fetch)
+# origin    https://github.com/YOUR-USERNAME/PaunClip.git (push)
+# upstream  https://github.com/paundrapf/PaunClip.git (fetch)
+# upstream  https://github.com/paundrapf/PaunClip.git (push)
 ```
 
 ### Step 3: Sync with Upstream (Important!)
