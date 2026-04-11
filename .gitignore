@@ -327,3 +327,12 @@ cookies.txt
 ffmpeg
 bin
 *.runtime-cache
+
+# Local planning / agent artifacts
+.sisyphus/
+1.Nambah Fitur.txt
+docs/hasil brainstrom dengan Claude/
+config/AGENTS.md
+pages/AGENTS.md
+pages/settings/AGENTS.md
+utils/AGENTS.md
