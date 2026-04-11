@@ -1,6 +1,4 @@
-﻿"""
-YT Short Clipper Desktop App
-"""
+"""PaunClip desktop app."""
 
 import customtkinter as ctk
 import threading
@@ -125,7 +123,7 @@ class YTShortClipperApp(ctk.CTk):
         self.active_campaign_id = None
         self.active_campaign_name = None
 
-        self.title("YT Short Clipper")
+        self.title("PaunClip")
         self.geometry("780x620")
         self.resizable(False, False)
 
@@ -160,9 +158,6 @@ class YTShortClipperApp(ctk.CTk):
 
         # Update start button state based on cookies
         self.update_start_button_state()
-
-        # Check for updates on startup
-        threading.Thread(target=self.check_update_silent, daemon=True).start()
 
         # Show Terms of Service if not yet accepted
         if not self.config.get("tos_accepted", False):
@@ -638,7 +633,10 @@ class YTShortClipperApp(ctk.CTk):
         footer = PageFooter(page, self)
         footer.pack(fill="x", padx=20, pady=(5, 8), side="bottom")
 
-    def create_preview_placeholder(self, text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Âº Video thumbnail will appear here"):
+    def create_preview_placeholder(
+        self,
+        text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Âº Video thumbnail will appear here",
+    ):
         """Create placeholder content for video preview"""
         # Clear existing content
         for widget in self.thumb_frame.winfo_children():
@@ -679,7 +677,9 @@ class YTShortClipperApp(ctk.CTk):
                     f"ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â Local video selected\n{local_name}"
                 )
             else:
-                self.create_preview_placeholder("ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â Select a local video to begin")
+                self.create_preview_placeholder(
+                    "ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â Select a local video to begin"
+                )
         else:
             self.local_source_frame.pack_forget()
             self.youtube_source_frame.pack(
@@ -815,7 +815,7 @@ class YTShortClipperApp(ctk.CTk):
             hover_color=("#2E7AB8", "#16527D"),
             command=lambda: [
                 webbrowser.open(
-                    "https://github.com/jipraks/yt-short-clipper/blob/master/GUIDE.md#3-setup-youtube-cookies"
+                    "https://github.com/paundrapf/PaunClip/blob/main/COOKIES.md#english"
                 ),
                 dialog.destroy(),
             ],
@@ -833,7 +833,7 @@ class YTShortClipperApp(ctk.CTk):
             hover_color=("#2E7AB8", "#16527D"),
             command=lambda: [
                 webbrowser.open(
-                    "https://github.com/jipraks/yt-short-clipper/blob/master/PANDUAN.md#3-setup-cookies-youtube"
+                    "https://github.com/paundrapf/PaunClip/blob/main/COOKIES.md#bahasa-indonesia"
                 ),
                 dialog.destroy(),
             ],
@@ -892,7 +892,8 @@ class YTShortClipperApp(ctk.CTk):
             return True
         else:
             self.cookies_status_label.configure(
-                text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Âª No cookies.txt found", text_color="gray"
+                text="ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Âª No cookies.txt found",
+                text_color="gray",
             )
             # Update start button state when cookies status changes
             self.update_start_button_state()
@@ -1485,7 +1486,9 @@ class YTShortClipperApp(ctk.CTk):
         mode = str(highlight_runtime.get("mode") or "").replace("_", " ").title()
         model = highlight_runtime.get("model") or "Unknown model"
         if mode:
-            return f"Highlight provider: {mode} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ {model}"
+            return (
+                f"Highlight provider: {mode} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ {model}"
+            )
         return f"Highlight provider: {model}"
 
     def _get_workspace_editor_defaults(self, session_data: dict | None = None) -> dict:
@@ -1656,7 +1659,9 @@ class YTShortClipperApp(ctk.CTk):
                 {
                     **highlight,
                     "time_range": (
-                        f"{start_time} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ {end_time}" if start_time or end_time else ""
+                        f"{start_time} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ {end_time}"
+                        if start_time or end_time
+                        else ""
                     ),
                     "clip_status": clip_status_lookup.get(
                         highlight.get("highlight_id")
@@ -1733,7 +1738,9 @@ class YTShortClipperApp(ctk.CTk):
             "origin_label": origin_labels.get(
                 self.session_workspace_origin, "Session Flow"
             ),
-            "back_label": back_labels.get(self.session_workspace_origin, "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ãƒâ€šÃ‚Â Back"),
+            "back_label": back_labels.get(
+                self.session_workspace_origin, "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ãƒâ€šÃ‚Â Back"
+            ),
             "workspace_state": session_data.get("workspace_state") or {},
             "source_rows": source_rows,
             "provider_summary": self._build_workspace_provider_summary(session_data),
@@ -2783,7 +2790,7 @@ class YTShortClipperApp(ctk.CTk):
                             "Groq Rotate is not runtime-ready!\n\n"
                             + "No Groq keys were loaded from the locked .env lookup order.\n\n"
                             + "Expected lookup order:\n"
-                            + "1. 7.Clipper/.env\n2. yt-short-clipper/.env\n3. process environment"
+                            + "1. PaunClip/.env\n2. process environment"
                         )
                     else:
                         message = (
@@ -2857,7 +2864,8 @@ class YTShortClipperApp(ctk.CTk):
 
         if not self.client and not self._hydrate_provider_runtime(update_ui=True):
             messagebox.showerror(
-                "Error", "Configure API settings first!\nClick ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â button."
+                "Error",
+                "Configure API settings first!\nClick ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â button.",
             )
             return
 
@@ -3993,10 +4001,14 @@ class YTShortClipperApp(ctk.CTk):
             self.cancelled = True
             # Update both pages
             if "processing" in self.pages:
-                self.pages["processing"].update_status("ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Cancelling... please wait")
+                self.pages["processing"].update_status(
+                    "ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Cancelling... please wait"
+                )
                 self.pages["processing"].cancel_btn.configure(state="disabled")
             if "clipping" in self.pages:
-                self.pages["clipping"].update_status("ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Cancelling... please wait")
+                self.pages["clipping"].update_status(
+                    "ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Cancelling... please wait"
+                )
                 self.pages["clipping"].cancel_btn.configure(state="disabled")
 
     def on_cancelled(self):
@@ -4061,18 +4073,18 @@ class YTShortClipperApp(ctk.CTk):
         """Open GitHub repository"""
         import webbrowser
 
-        webbrowser.open("https://github.com/jipraks/yt-short-clipper")
+        webbrowser.open("https://github.com/paundrapf/PaunClip")
 
     def check_update_silent(self):
         """Check for updates silently on startup"""
+        if not UPDATE_CHECK_URL:
+            return
         try:
             # Get installation_id from config
             installation_id = self.config.get("installation_id", "unknown")
             url = f"{UPDATE_CHECK_URL}?installation_id={installation_id}&app_version={__version__}"
 
-            req = urllib.request.Request(
-                url, headers={"User-Agent": "YT-Short-Clipper"}
-            )
+            req = urllib.request.Request(url, headers={"User-Agent": "PaunClip"})
             with urllib.request.urlopen(req, timeout=5) as response:
                 data = json.loads(response.read().decode())
                 latest_version = data.get("version", "")
@@ -4095,14 +4107,18 @@ class YTShortClipperApp(ctk.CTk):
 
     def check_update_manual(self):
         """Check for updates manually from settings page"""
+        if not UPDATE_CHECK_URL:
+            messagebox.showinfo(
+                "Update Check",
+                "Runtime update checks are disabled in this PaunClip fork.",
+            )
+            return
         try:
             # Get installation_id from config
             installation_id = self.config.get("installation_id", "unknown")
             url = f"{UPDATE_CHECK_URL}?installation_id={installation_id}&app_version={__version__}"
 
-            req = urllib.request.Request(
-                url, headers={"User-Agent": "YT-Short-Clipper"}
-            )
+            req = urllib.request.Request(url, headers={"User-Agent": "PaunClip"})
             with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode())
                 latest_version = data.get("version", "")
