@@ -12,25 +12,34 @@ shell.appendChild(main);
 
 const aiView = window.Components.AiSettingsView();
 const homeView = window.Components.HomeView();
+const campaignsView = window.Components.CampaignsView();
+const campaignQueueView = window.Components.CampaignQueueView();
 const sessionsView = window.Components.SessionsView();
 const workspaceView = window.Components.WorkspaceView();
 const outputsView = window.Components.OutputsView();
 main.appendChild(aiView.element);
 main.appendChild(homeView.element);
+main.appendChild(campaignsView.element);
+main.appendChild(campaignQueueView.element);
 main.appendChild(sessionsView.element);
 main.appendChild(workspaceView.element);
 main.appendChild(outputsView.element);
 
 const navButtons = header.buttons;
-const views = [aiView.element, homeView.element, sessionsView.element, workspaceView.element, outputsView.element];
+const views = [aiView.element, homeView.element, campaignsView.element, campaignQueueView.element, sessionsView.element, workspaceView.element, outputsView.element];
 
 let polling = null;
 let iconTriedData = false;
 const fallbackSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none"><rect width="96" height="96" rx="18" fill="#0B1B24"/><path d="M18 36h60v36a6 6 0 0 1-6 6H24a6 6 0 0 1-6-6V36Z" fill="#12BFE4"/><path d="M20 20l10 10m6-10 10 10m6-10 10 10m6-10 10 10" stroke="#12BFE4" stroke-width="6" stroke-linecap="round"/></svg>`;
 let providerType = 'ytclip';
+let campaignsState = [];
+let activeCampaignId = null;
+let campaignDetailState = null;
 let workspaceState = null;
 let activeHighlightId = null;
 let selectedHighlightIds = [];
+let workspaceBackView = 'sessions';
+let workspaceBackNav = 'sessions';
 
 function waitForApi() {
   return new Promise((resolve) => {
@@ -94,8 +103,20 @@ function getWorkspaceSessionRef() {
   };
 }
 
+function getCampaignRef() {
+  return {
+    campaign_id: activeCampaignId
+  };
+}
+
 function setWorkspaceStatus(text) {
   workspaceView.fields.status.textContent = text || '';
+}
+
+function setCampaignStatus(text) {
+  const value = text || '';
+  campaignsView.fields.status.textContent = value;
+  campaignQueueView.fields.status.textContent = value;
 }
 
 function syncWorkspaceSelectionFromPayload() {
@@ -189,6 +210,340 @@ function renderSessionCards(items) {
     card.appendChild(actions);
     sessionsView.fields.list.appendChild(card);
   });
+}
+
+function renderCampaignCards(items) {
+  campaignsView.fields.list.innerHTML = '';
+  if (!items || items.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'card-copy';
+    empty.textContent = 'No campaigns yet. Add one and start fetching channel videos.';
+    campaignsView.fields.list.appendChild(empty);
+    return;
+  }
+
+  items.forEach((campaign) => {
+    const card = document.createElement('div');
+    card.className = 'campaign-card' + (campaign.id === activeCampaignId ? ' active' : '');
+
+    const top = document.createElement('div');
+    top.className = 'card-row';
+    const title = document.createElement('div');
+    title.className = 'card-title';
+    title.textContent = campaign.name || 'Untitled Campaign';
+    const badge = document.createElement('div');
+    badge.className = 'pill';
+    badge.textContent = String(campaign.status || 'active').replace(/_/g, ' ');
+    top.appendChild(title);
+    top.appendChild(badge);
+
+    const channel = document.createElement('div');
+    channel.className = 'card-meta';
+    channel.textContent = campaign.channel_url || 'No linked channel yet';
+
+    const stats = document.createElement('div');
+    stats.className = 'card-meta';
+    stats.textContent = [
+      `${campaign.session_count || 0} sessions`,
+      `${campaign.completed_session_count || 0} completed`,
+      `${campaign.failed_session_count || 0} failed`,
+      campaign.last_activity ? `Last activity ${campaign.last_activity}` : null,
+    ].filter(Boolean).join(' • ');
+
+    const actions = document.createElement('div');
+    actions.className = 'workspace-actions';
+    const select = document.createElement('button');
+    select.className = 'btn ghost';
+    select.textContent = 'Select';
+    select.addEventListener('click', () => {
+      activeCampaignId = campaign.id;
+      renderCampaignCards(campaignsState);
+    });
+    const open = document.createElement('button');
+    open.className = 'btn primary';
+    open.textContent = 'Open Queue';
+    open.addEventListener('click', () => openCampaign(campaign.id));
+    actions.appendChild(select);
+    actions.appendChild(open);
+
+    card.appendChild(top);
+    card.appendChild(channel);
+    card.appendChild(stats);
+    card.appendChild(actions);
+    campaignsView.fields.list.appendChild(card);
+  });
+}
+
+function renderCampaignQueue() {
+  const detail = campaignDetailState || {};
+  const campaign = detail.campaign || {};
+  const snapshot = detail.channel_fetch || {};
+  const videos = snapshot.videos || [];
+
+  campaignQueueView.fields.campaignTitle.textContent = campaign.name || 'Campaign Queue';
+  campaignQueueView.fields.campaignMeta.textContent = [
+    campaign.id,
+    campaign.channel_url || null,
+    snapshot.fetched_at ? `Fetched ${snapshot.fetched_at}` : null,
+  ].filter(Boolean).join(' • ');
+  const newCount = videos.filter((item) => item.status === 'new').length;
+  const sessionCount = videos.filter((item) => item.session_id).length;
+  campaignQueueView.fields.queueBadge.textContent = videos.length
+    ? `${videos.length} videos • ${newCount} new • ${sessionCount} linked sessions`
+    : 'No fetched videos yet';
+  campaignQueueView.fields.channelUrl.value = campaign.channel_url || '';
+  campaignQueueView.fields.queueAll.disabled = newCount === 0;
+
+  campaignQueueView.fields.list.innerHTML = '';
+  if (!videos.length) {
+    const empty = document.createElement('div');
+    empty.className = 'card-copy';
+    empty.textContent = 'Fetch latest videos to populate this campaign queue.';
+    campaignQueueView.fields.list.appendChild(empty);
+    return;
+  }
+
+  videos.forEach((video) => {
+    const card = document.createElement('div');
+    card.className = 'queue-card';
+    const top = document.createElement('div');
+    top.className = 'card-row';
+    const title = document.createElement('div');
+    title.className = 'card-title';
+    title.textContent = video.title || 'Untitled Video';
+    const badge = document.createElement('div');
+    badge.className = 'pill';
+    badge.textContent = String(video.status || 'new').replace(/_/g, ' ');
+    top.appendChild(title);
+    top.appendChild(badge);
+
+    const meta = document.createElement('div');
+    meta.className = 'card-meta';
+    meta.textContent = [
+      video.video_id,
+      video.published_at || null,
+      video.duration_seconds ? `${Math.round(Number(video.duration_seconds))}s` : null,
+      video.channel_name || null,
+    ].filter(Boolean).join(' • ');
+
+    const session = document.createElement('div');
+    session.className = 'card-meta';
+    session.textContent = `Session: ${video.session_id || 'No session linked yet'}`;
+
+    const error = document.createElement('div');
+    error.className = 'card-copy';
+    error.textContent = video.last_error || '';
+    if (!video.last_error) {
+      error.style.display = 'none';
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'queue-actions';
+
+    function addAction(label, className, handler, disabled) {
+      const btn = document.createElement('button');
+      btn.className = className;
+      btn.textContent = label;
+      btn.disabled = Boolean(disabled);
+      btn.addEventListener('click', handler);
+      actions.appendChild(btn);
+    }
+
+    addAction('Queue', 'btn ghost', () => queueCampaignVideo(video.video_id), video.status !== 'new');
+    addAction('Process', 'btn primary', () => processCampaignVideo(video.video_id, false), ['downloading', 'transcribing'].includes(video.status) || Boolean(video.session_id));
+    addAction('Skip', 'btn ghost', () => skipCampaignVideo(video.video_id), ['completed', 'rendering'].includes(video.status));
+    addAction('Process Now', 'btn ghost', () => processCampaignVideo(video.video_id, true), !['failed', 'skipped'].includes(video.status));
+    addAction('Resume Editing', 'btn ghost', () => openCampaignVideoSession(video.video_id), !video.session_id);
+
+    card.appendChild(top);
+    card.appendChild(meta);
+    card.appendChild(session);
+    card.appendChild(error);
+    card.appendChild(actions);
+    campaignQueueView.fields.list.appendChild(card);
+  });
+}
+
+async function loadCampaigns(showView = false) {
+  setCampaignStatus('Loading campaigns...');
+  try {
+    const res = await window.pywebview.api.list_campaigns();
+    campaignsState = (res && res.campaigns) || [];
+    if (!activeCampaignId && campaignsState.length) {
+      activeCampaignId = campaignsState[0].id;
+    }
+    if (activeCampaignId && !campaignsState.some((item) => item.id === activeCampaignId)) {
+      activeCampaignId = campaignsState.length ? campaignsState[0].id : null;
+    }
+    renderCampaignCards(campaignsState);
+    setCampaignStatus(`${campaignsState.length} campaigns loaded`);
+    if (showView) {
+      setActiveView('campaigns');
+    }
+  } catch (error) {
+    setCampaignStatus((error && error.message) || 'Failed to load campaigns');
+  }
+}
+
+async function createCampaign() {
+  const name = campaignsView.fields.nameInput.value.trim();
+  const channelUrl = campaignsView.fields.urlInput.value.trim();
+  if (!name) {
+    setCampaignStatus('Campaign name cannot be empty');
+    return;
+  }
+  setCampaignStatus('Creating campaign...');
+  try {
+    const res = await window.pywebview.api.create_campaign({ name, channel_url: channelUrl });
+    if (!res || res.status !== 'ok') {
+      throw new Error((res && res.message) || 'Failed to create campaign');
+    }
+    campaignsState = res.campaigns || [];
+    activeCampaignId = res.campaign && res.campaign.id;
+    campaignsView.fields.nameInput.value = '';
+    campaignsView.fields.urlInput.value = '';
+    renderCampaignCards(campaignsState);
+    setCampaignStatus('Campaign created');
+  } catch (error) {
+    setCampaignStatus((error && error.message) || 'Failed to create campaign');
+  }
+}
+
+async function renameCampaign() {
+  if (!activeCampaignId) {
+    setCampaignStatus('Select a campaign first');
+    return;
+  }
+  const current = campaignsState.find((item) => item.id === activeCampaignId);
+  const nextName = window.prompt('Rename campaign', current && current.name ? current.name : '');
+  if (nextName === null) {
+    return;
+  }
+  setCampaignStatus('Renaming campaign...');
+  try {
+    const res = await window.pywebview.api.rename_campaign({ campaign_id: activeCampaignId, name: nextName.trim() });
+    if (!res || res.status !== 'ok') {
+      throw new Error((res && res.message) || 'Failed to rename campaign');
+    }
+    campaignsState = res.campaigns || [];
+    renderCampaignCards(campaignsState);
+    setCampaignStatus('Campaign renamed');
+  } catch (error) {
+    setCampaignStatus((error && error.message) || 'Failed to rename campaign');
+  }
+}
+
+async function archiveCampaign() {
+  if (!activeCampaignId) {
+    setCampaignStatus('Select a campaign first');
+    return;
+  }
+  if (!window.confirm('Archive the selected campaign?')) {
+    return;
+  }
+  setCampaignStatus('Archiving campaign...');
+  try {
+    const res = await window.pywebview.api.archive_campaign({ campaign_id: activeCampaignId });
+    if (!res || res.status !== 'ok') {
+      throw new Error((res && res.message) || 'Failed to archive campaign');
+    }
+    campaignsState = res.campaigns || [];
+    if (activeCampaignId && !campaignsState.some((item) => item.id === activeCampaignId)) {
+      activeCampaignId = campaignsState.length ? campaignsState[0].id : null;
+    }
+    renderCampaignCards(campaignsState);
+    setCampaignStatus('Campaign archived');
+  } catch (error) {
+    setCampaignStatus((error && error.message) || 'Failed to archive campaign');
+  }
+}
+
+async function openCampaign(campaignId) {
+  activeCampaignId = campaignId || activeCampaignId;
+  if (!activeCampaignId) {
+    setCampaignStatus('Select a campaign first');
+    return;
+  }
+  setCampaignStatus('Loading campaign queue...');
+  try {
+    const res = await window.pywebview.api.get_campaign_detail({ campaign_id: activeCampaignId });
+    if (!res || res.status !== 'ok') {
+      throw new Error((res && res.message) || 'Failed to load campaign detail');
+    }
+    campaignDetailState = res.detail;
+    renderCampaignCards(campaignsState);
+    renderCampaignQueue();
+    setCampaignStatus('Campaign queue ready');
+    setActiveView('campaign-queue', 'campaigns');
+  } catch (error) {
+    setCampaignStatus((error && error.message) || 'Failed to load campaign queue');
+  }
+}
+
+async function queueAllCampaignVideos() {
+  if (!activeCampaignId) return;
+  setCampaignStatus('Queueing all new videos...');
+  try {
+    const res = await window.pywebview.api.queue_all_campaign_videos(getCampaignRef());
+    if (!res || res.status !== 'ok') {
+      throw new Error((res && res.message) || 'Failed to queue videos');
+    }
+    campaignDetailState = res.detail;
+    renderCampaignQueue();
+    setCampaignStatus('Queued all new videos');
+  } catch (error) {
+    setCampaignStatus((error && error.message) || 'Failed to queue videos');
+  }
+}
+
+async function queueCampaignVideo(videoId) {
+  setCampaignStatus('Queueing video...');
+  try {
+    const res = await window.pywebview.api.queue_campaign_video({ ...getCampaignRef(), video_id: videoId });
+    if (!res || res.status !== 'ok') {
+      throw new Error((res && res.message) || 'Failed to queue video');
+    }
+    campaignDetailState = res.detail;
+    renderCampaignQueue();
+    setCampaignStatus('Video queued');
+  } catch (error) {
+    setCampaignStatus((error && error.message) || 'Failed to queue video');
+  }
+}
+
+async function skipCampaignVideo(videoId) {
+  setCampaignStatus('Skipping video...');
+  try {
+    const res = await window.pywebview.api.skip_campaign_video({ ...getCampaignRef(), video_id: videoId });
+    if (!res || res.status !== 'ok') {
+      throw new Error((res && res.message) || 'Failed to skip video');
+    }
+    campaignDetailState = res.detail;
+    renderCampaignQueue();
+    setCampaignStatus('Video skipped');
+  } catch (error) {
+    setCampaignStatus((error && error.message) || 'Failed to skip video');
+  }
+}
+
+async function openCampaignVideoSession(videoId) {
+  setCampaignStatus('Opening linked session...');
+  try {
+    const res = await window.pywebview.api.open_campaign_video_session({ ...getCampaignRef(), video_id: videoId });
+    if (!res || res.status !== 'ok') {
+      throw new Error((res && res.message) || 'Failed to open linked session');
+    }
+    workspaceState = res.workspace;
+    syncWorkspaceSelectionFromPayload();
+    renderWorkspace();
+    renderOutputsView();
+    workspaceBackView = 'campaign-queue';
+    workspaceBackNav = 'campaigns';
+    setWorkspaceStatus('Workspace ready');
+    setActiveView('workspace', 'campaigns');
+  } catch (error) {
+    setCampaignStatus((error && error.message) || 'Failed to open linked session');
+  }
 }
 
 function renderSourceRows(rows) {
@@ -467,7 +822,7 @@ async function loadSessions(showView = false) {
   }
 }
 
-async function loadWorkspace(sessionId) {
+async function loadWorkspace(sessionId, options = {}) {
   setWorkspaceStatus('Loading workspace...');
   try {
     const res = await window.pywebview.api.get_session_workspace({ session_id: sessionId });
@@ -475,11 +830,13 @@ async function loadWorkspace(sessionId) {
       throw new Error((res && res.message) || 'Failed to load workspace');
     }
     workspaceState = res.workspace;
+    workspaceBackView = options.backView || 'sessions';
+    workspaceBackNav = options.navView || 'sessions';
     syncWorkspaceSelectionFromPayload();
     renderWorkspace();
     renderOutputsView();
     setWorkspaceStatus('Workspace ready');
-    setActiveView('workspace', 'sessions');
+    setActiveView('workspace', workspaceBackNav);
   } catch (error) {
     setWorkspaceStatus((error && error.message) || 'Failed to load workspace');
   }
@@ -516,7 +873,7 @@ async function saveWorkspaceDraft() {
   }
 }
 
-function beginTaskPolling(onDone) {
+function beginTaskPolling(statusSetter, onDone) {
   if (polling) {
     clearInterval(polling);
     polling = null;
@@ -524,18 +881,18 @@ function beginTaskPolling(onDone) {
   polling = setInterval(async () => {
     try {
       const p = await window.pywebview.api.get_progress();
-      setWorkspaceStatus(p.status || 'Running');
+      statusSetter(p.status || 'Running');
       if (p.status && (p.status.startsWith('error') || p.status === 'complete')) {
         clearInterval(polling);
         polling = null;
         if (p.status === 'complete') {
-          await onDone();
+          await onDone(p);
         }
       }
     } catch {
       clearInterval(polling);
       polling = null;
-      setWorkspaceStatus('Progress polling stopped');
+      statusSetter('Progress polling stopped');
     }
   }, 600);
 }
@@ -568,12 +925,65 @@ async function renderWorkspaceSelection(retryFailed = false) {
     if (!res || res.status !== 'started') {
       throw new Error((res && res.message) || 'Render did not start');
     }
-    beginTaskPolling(async () => {
-      await loadWorkspace(getWorkspaceSessionRef().session_id);
+    beginTaskPolling(setWorkspaceStatus, async () => {
+      await loadWorkspace(getWorkspaceSessionRef().session_id, {
+        backView: workspaceBackView,
+        navView: workspaceBackNav,
+      });
       setWorkspaceStatus('Render complete');
     });
   } catch (error) {
     setWorkspaceStatus((error && error.message) || 'Render failed to start');
+  }
+}
+
+async function fetchCampaignVideos() {
+  if (!activeCampaignId) {
+    setCampaignStatus('Select a campaign first');
+    return;
+  }
+  setCampaignStatus('Starting fetch...');
+  try {
+    const res = await window.pywebview.api.fetch_campaign_videos({
+      ...getCampaignRef(),
+      channel_url: campaignQueueView.fields.channelUrl.value.trim(),
+    });
+    if (!res || res.status !== 'started') {
+      throw new Error((res && res.message) || 'Fetch did not start');
+    }
+    beginTaskPolling(setCampaignStatus, async () => {
+      await openCampaign(activeCampaignId);
+      setCampaignStatus('Fetch complete');
+    });
+  } catch (error) {
+    setCampaignStatus((error && error.message) || 'Failed to start fetch');
+  }
+}
+
+async function processCampaignVideo(videoId, retryMode) {
+  if (!activeCampaignId) {
+    setCampaignStatus('Select a campaign first');
+    return;
+  }
+  setCampaignStatus(retryMode ? 'Retrying queue item...' : 'Starting queue processing...');
+  try {
+    const res = retryMode
+      ? await window.pywebview.api.retry_campaign_video({ ...getCampaignRef(), video_id: videoId })
+      : await window.pywebview.api.process_campaign_video({ ...getCampaignRef(), video_id: videoId });
+    if (!res || res.status !== 'started') {
+      throw new Error((res && res.message) || 'Queue processing did not start');
+    }
+    beginTaskPolling(setCampaignStatus, async (progress) => {
+      if (progress && progress.session_id) {
+        await loadWorkspace(progress.session_id, { backView: 'campaign-queue', navView: 'campaigns' });
+        setCampaignStatus('Queue item ready in workspace');
+      } else {
+        await openCampaign(activeCampaignId);
+        setCampaignStatus('Queue processing complete');
+      }
+    });
+  } catch (error) {
+    setCampaignStatus((error && error.message) || 'Failed to start queue processing');
   }
 }
 
@@ -688,31 +1098,49 @@ async function poll() {
 }
 
 homeView.fields.start.addEventListener('click', start);
+campaignsView.fields.refresh.addEventListener('click', () => loadCampaigns(true));
+campaignsView.fields.create.addEventListener('click', createCampaign);
+campaignsView.fields.rename.addEventListener('click', renameCampaign);
+campaignsView.fields.archive.addEventListener('click', archiveCampaign);
+campaignsView.fields.open.addEventListener('click', () => openCampaign(activeCampaignId));
+campaignQueueView.fields.back.addEventListener('click', () => setActiveView('campaigns'));
+campaignQueueView.fields.queueAll.addEventListener('click', queueAllCampaignVideos);
+campaignQueueView.fields.fetchBtn.addEventListener('click', fetchCampaignVideos);
 sessionsView.fields.refresh.addEventListener('click', () => loadSessions(true));
-workspaceView.fields.back.addEventListener('click', () => setActiveView('sessions'));
+workspaceView.fields.back.addEventListener('click', () => setActiveView(workspaceBackView, workspaceBackNav));
 workspaceView.fields.refresh.addEventListener('click', async () => {
   if (!workspaceState) return;
-  await loadWorkspace(getWorkspaceSessionRef().session_id);
+  await loadWorkspace(getWorkspaceSessionRef().session_id, {
+    backView: workspaceBackView,
+    navView: workspaceBackNav,
+  });
 });
 workspaceView.fields.save.addEventListener('click', saveWorkspaceDraft);
 workspaceView.fields.render.addEventListener('click', () => renderWorkspaceSelection(false));
 workspaceView.fields.retry.addEventListener('click', () => renderWorkspaceSelection(true));
 workspaceView.fields.outputs.addEventListener('click', () => {
   renderOutputsView();
-  setActiveView('outputs', 'outputs');
+  setActiveView('outputs', workspaceBackNav === 'campaigns' ? 'campaigns' : 'outputs');
 });
-outputsView.fields.back.addEventListener('click', () => setActiveView('workspace', 'sessions'));
+outputsView.fields.back.addEventListener('click', () => setActiveView('workspace', workspaceBackNav));
 outputsView.fields.refresh.addEventListener('click', async () => {
   if (!workspaceState) {
     renderOutputsView();
     return;
   }
-  await loadWorkspace(getWorkspaceSessionRef().session_id);
-  setActiveView('outputs', 'outputs');
+  await loadWorkspace(getWorkspaceSessionRef().session_id, {
+    backView: workspaceBackView,
+    navView: workspaceBackNav,
+  });
+  setActiveView('outputs', workspaceBackNav === 'campaigns' ? 'campaigns' : 'outputs');
 });
 
 navButtons.forEach((btn) => {
   btn.addEventListener('click', async () => {
+    if (btn.dataset.view === 'campaigns') {
+      await loadCampaigns(true);
+      return;
+    }
     if (btn.dataset.view === 'sessions') {
       await loadSessions(true);
       return;
@@ -786,9 +1214,10 @@ async function init() {
     providerType = provider.provider_type || 'ytclip';
   } catch {}
   setProviderType(providerType, true);
+  await loadCampaigns(false);
   await loadSessions(false);
   renderOutputsView();
-  setActiveView('home');
+  setActiveView('campaigns');
 }
 
 aiView.fields.providerButtons.forEach((btn) => {

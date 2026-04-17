@@ -16,7 +16,7 @@ window.Components.Header = function () {
 
   const title = document.createElement('div');
   title.className = 'brand-title';
-  title.textContent = 'YT Short Clipper';
+  title.textContent = 'PaunClip';
 
   const sub = document.createElement('div');
   sub.className = 'brand-sub';
@@ -36,6 +36,11 @@ window.Components.Header = function () {
   homeBtn.dataset.view = 'home';
   homeBtn.textContent = 'Home';
 
+  const campaignsBtn = document.createElement('button');
+  campaignsBtn.className = 'nav-btn';
+  campaignsBtn.dataset.view = 'campaigns';
+  campaignsBtn.textContent = 'Campaigns';
+
   const sessionsBtn = document.createElement('button');
   sessionsBtn.className = 'nav-btn';
   sessionsBtn.dataset.view = 'sessions';
@@ -52,6 +57,7 @@ window.Components.Header = function () {
   aiBtn.textContent = 'AI Settings';
 
   nav.appendChild(homeBtn);
+  nav.appendChild(campaignsBtn);
   nav.appendChild(sessionsBtn);
   nav.appendChild(outputsBtn);
   nav.appendChild(aiBtn);
@@ -59,5 +65,5 @@ window.Components.Header = function () {
   header.appendChild(brand);
   header.appendChild(nav);
 
-  return { element: header, icon, buttons: [homeBtn, sessionsBtn, outputsBtn, aiBtn] };
+  return { element: header, icon, buttons: [homeBtn, campaignsBtn, sessionsBtn, outputsBtn, aiBtn] };
 };

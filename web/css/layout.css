@@ -48,6 +48,7 @@
   .grid { grid-template-columns: 1fr 1fr; }
   .ai-grid { grid-template-columns: 1fr; }
   .provider-grid { grid-template-columns: 1fr; }
+  .campaign-form { grid-template-columns: 1fr; }
   .workspace-shell { grid-template-columns: 1fr; }
   .view-topbar { flex-direction: column; align-items: stretch; }
 }

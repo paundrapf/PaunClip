@@ -260,6 +260,8 @@
 }
 
 .session-list,
+.campaign-list,
+.campaign-queue-list,
 .workspace-list,
 .output-list {
   display: grid;
@@ -267,7 +269,16 @@
   margin-top: 12px;
 }
 
+.campaign-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto;
+  gap: 12px;
+  margin-top: 18px;
+}
+
 .session-card,
+.campaign-card,
+.queue-card,
 .highlight-card,
 .output-card {
   background: rgba(12, 12, 12, 0.58);
@@ -277,9 +288,17 @@
 }
 
 .session-card.active,
+.campaign-card.active,
 .highlight-card.active {
   border-color: rgba(36, 209, 255, 0.45);
   box-shadow: 0 0 0 1px rgba(36, 209, 255, 0.15) inset;
+}
+
+.queue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .card-row {

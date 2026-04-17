@@ -7,6 +7,7 @@ from openai import OpenAI
 from config.config_manager import ConfigManager
 from utils.helpers import get_app_dir, get_bundle_dir, get_ffmpeg_path, get_ytdlp_path
 from clipper_core import AutoClipperCore
+from utils.web_campaign_api import WebCampaignAPI
 from utils.web_session_api import WebSessionAPI
 
 
@@ -20,6 +21,7 @@ class WebAPI:
         self.thread = None
         self.task_type = None
         self.active_session_id = None
+        self.active_campaign_id = None
 
     def get_progress(self):
         return {
@@ -27,6 +29,7 @@ class WebAPI:
             "progress": self.progress,
             "task_type": self.task_type,
             "session_id": self.active_session_id,
+            "campaign_id": self.active_campaign_id,
         }
 
     def get_asset_paths(self):
@@ -195,6 +198,200 @@ class WebAPI:
             self.thread = None
             self.task_type = None
 
+    def list_campaigns(self):
+        campaign_api = self._get_campaign_api()
+        return {"campaigns": campaign_api.list_campaigns()}
+
+    def create_campaign(self, payload):
+        if not isinstance(payload, dict):
+            return {"status": "error", "message": "Invalid payload"}
+        try:
+            campaign_api = self._get_campaign_api()
+            data = campaign_api.create_campaign(
+                str(payload.get("name") or "").strip(),
+                str(payload.get("channel_url") or "").strip(),
+            )
+            return {"status": "ok", **data}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def rename_campaign(self, payload):
+        if not isinstance(payload, dict):
+            return {"status": "error", "message": "Invalid payload"}
+        try:
+            campaign_api = self._get_campaign_api()
+            data = campaign_api.rename_campaign(
+                str(payload.get("campaign_id") or "").strip(),
+                str(payload.get("name") or "").strip(),
+            )
+            return {"status": "ok", **data}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def archive_campaign(self, payload):
+        if not isinstance(payload, dict):
+            return {"status": "error", "message": "Invalid payload"}
+        try:
+            campaign_api = self._get_campaign_api()
+            data = campaign_api.archive_campaign(
+                str(payload.get("campaign_id") or "").strip()
+            )
+            return {"status": "ok", **data}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def get_campaign_detail(self, payload):
+        if not isinstance(payload, dict):
+            return {"status": "error", "message": "Invalid payload"}
+        try:
+            campaign_api = self._get_campaign_api()
+            detail = campaign_api.get_campaign_detail(
+                str(payload.get("campaign_id") or "").strip()
+            )
+            return {"status": "ok", "detail": detail}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def queue_all_campaign_videos(self, payload):
+        if not isinstance(payload, dict):
+            return {"status": "error", "message": "Invalid payload"}
+        try:
+            campaign_api = self._get_campaign_api()
+            detail = campaign_api.queue_all_campaign_videos(
+                str(payload.get("campaign_id") or "").strip()
+            )
+            return {"status": "ok", "detail": detail}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def queue_campaign_video(self, payload):
+        if not isinstance(payload, dict):
+            return {"status": "error", "message": "Invalid payload"}
+        try:
+            campaign_api = self._get_campaign_api()
+            detail = campaign_api.queue_campaign_video(
+                str(payload.get("campaign_id") or "").strip(),
+                str(payload.get("video_id") or "").strip(),
+            )
+            return {"status": "ok", "detail": detail}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def skip_campaign_video(self, payload):
+        if not isinstance(payload, dict):
+            return {"status": "error", "message": "Invalid payload"}
+        try:
+            campaign_api = self._get_campaign_api()
+            detail = campaign_api.skip_campaign_video(
+                str(payload.get("campaign_id") or "").strip(),
+                str(payload.get("video_id") or "").strip(),
+            )
+            return {"status": "ok", "detail": detail}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def open_campaign_video_session(self, payload):
+        if not isinstance(payload, dict):
+            return {"status": "error", "message": "Invalid payload"}
+        try:
+            campaign_api = self._get_campaign_api()
+            workspace = campaign_api.open_campaign_video_session(
+                str(payload.get("campaign_id") or "").strip(),
+                str(payload.get("video_id") or "").strip(),
+            )
+            return {"status": "ok", "workspace": workspace}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def fetch_campaign_videos(self, payload):
+        if self.thread and self.thread.is_alive():
+            return {"status": "busy"}
+        if not isinstance(payload, dict):
+            return {"status": "error", "message": "Invalid payload"}
+        self.task_type = "campaign_fetch"
+        self.active_campaign_id = payload.get("campaign_id")
+        self.thread = threading.Thread(
+            target=self._run_campaign_fetch,
+            args=(payload,),
+            daemon=True,
+        )
+        self.thread.start()
+        return {"status": "started"}
+
+    def process_campaign_video(self, payload):
+        if self.thread and self.thread.is_alive():
+            return {"status": "busy"}
+        if not isinstance(payload, dict):
+            return {"status": "error", "message": "Invalid payload"}
+        self.task_type = "campaign_process"
+        self.active_campaign_id = payload.get("campaign_id")
+        self.active_session_id = None
+        self.thread = threading.Thread(
+            target=self._run_campaign_process,
+            args=(payload, False),
+            daemon=True,
+        )
+        self.thread.start()
+        return {"status": "started"}
+
+    def retry_campaign_video(self, payload):
+        if self.thread and self.thread.is_alive():
+            return {"status": "busy"}
+        if not isinstance(payload, dict):
+            return {"status": "error", "message": "Invalid payload"}
+        self.task_type = "campaign_retry"
+        self.active_campaign_id = payload.get("campaign_id")
+        self.active_session_id = None
+        self.thread = threading.Thread(
+            target=self._run_campaign_process,
+            args=(payload, True),
+            daemon=True,
+        )
+        self.thread.start()
+        return {"status": "started"}
+
+    def _run_campaign_fetch(self, payload):
+        campaign_api = self._get_campaign_api()
+        try:
+            self.status = "Fetching latest campaign videos..."
+            self.progress = 0.0
+            campaign_api.fetch_campaign_videos(
+                str(payload.get("campaign_id") or "").strip(),
+                channel_url=str(payload.get("channel_url") or "").strip() or None,
+            )
+            self.status = "complete"
+            self.progress = 1.0
+        except Exception as e:
+            self.status = f"error: {e}"
+        finally:
+            self.thread = None
+            self.task_type = None
+
+    def _run_campaign_process(self, payload, retry_mode):
+        campaign_api = self._get_campaign_api()
+        try:
+            self.status = "running"
+            self.progress = 0.0
+            workspace = (
+                campaign_api.retry_campaign_video(
+                    str(payload.get("campaign_id") or "").strip(),
+                    str(payload.get("video_id") or "").strip(),
+                )
+                if retry_mode
+                else campaign_api.process_campaign_video(
+                    str(payload.get("campaign_id") or "").strip(),
+                    str(payload.get("video_id") or "").strip(),
+                )
+            )
+            self.active_session_id = (workspace.get("session") or {}).get("session_id")
+            self.status = "complete"
+            self.progress = 1.0
+        except Exception as e:
+            self.status = f"error: {e}"
+        finally:
+            self.thread = None
+            self.task_type = None
+
     def list_sessions(self):
         session_api = self._get_session_api()
         return {"sessions": session_api.list_sessions()}
@@ -305,6 +502,13 @@ class WebAPI:
 
     def _get_session_api(self):
         return WebSessionAPI(
+            self._get_cfg_manager(),
+            status_callback=self._on_status_update,
+            progress_callback=self._on_progress_update,
+        )
+
+    def _get_campaign_api(self):
+        return WebCampaignAPI(
             self._get_cfg_manager(),
             status_callback=self._on_status_update,
             progress_callback=self._on_progress_update,
