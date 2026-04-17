@@ -322,8 +322,29 @@ def fetch_channel_videos(
     """Fetch public channel videos using yt-dlp with a lightweight flat playlist pass."""
     normalized_url = normalize_channel_videos_url(channel_url)
     if ytdlp_path == "yt_dlp_module":
-        return _fetch_channel_videos_module(normalized_url, limit)
-    return _fetch_channel_videos_subprocess(normalized_url, ytdlp_path, limit)
+        try:
+            return _fetch_channel_videos_module(
+                normalized_url, limit, use_remote_components=False
+            )
+        except Exception:
+            return _fetch_channel_videos_module(
+                normalized_url, limit, use_remote_components=True
+            )
+
+    try:
+        return _fetch_channel_videos_subprocess(
+            normalized_url,
+            ytdlp_path,
+            limit,
+            use_remote_components=False,
+        )
+    except Exception:
+        return _fetch_channel_videos_subprocess(
+            normalized_url,
+            ytdlp_path,
+            limit,
+            use_remote_components=True,
+        )
 
 
 def normalize_channel_videos_url(channel_url: str) -> str:
@@ -341,7 +362,12 @@ def build_video_watch_url(video_id: str) -> str:
     return f"https://www.youtube.com/watch?v={video_id}"
 
 
-def _fetch_channel_videos_module(channel_url: str, limit: int) -> dict:
+def _fetch_channel_videos_module(
+    channel_url: str,
+    limit: int,
+    *,
+    use_remote_components: bool,
+) -> dict:
     import yt_dlp
 
     options = {
@@ -352,7 +378,7 @@ def _fetch_channel_videos_module(channel_url: str, limit: int) -> dict:
     }
 
     deno_path = get_deno_path()
-    if deno_path and Path(deno_path).exists():
+    if use_remote_components and deno_path and Path(deno_path).exists():
         options["js_runtimes"] = {"deno": {"path": deno_path}}
         options["remote_components"] = ["ejs:github"]
 
@@ -363,7 +389,11 @@ def _fetch_channel_videos_module(channel_url: str, limit: int) -> dict:
 
 
 def _fetch_channel_videos_subprocess(
-    channel_url: str, ytdlp_path: str, limit: int
+    channel_url: str,
+    ytdlp_path: str,
+    limit: int,
+    *,
+    use_remote_components: bool,
 ) -> dict:
     command = [
         ytdlp_path,
@@ -375,7 +405,7 @@ def _fetch_channel_videos_subprocess(
     ]
 
     deno_path = get_deno_path()
-    if deno_path and Path(deno_path).exists():
+    if use_remote_components and deno_path and Path(deno_path).exists():
         command.extend(["--remote-components", "ejs:github"])
 
     result = subprocess.run(

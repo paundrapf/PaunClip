@@ -220,7 +220,15 @@ class AutoClipperCore:
             "center_weight": 0.3,
         }
         self.subtitle_language = subtitle_language
-        self.log = log_callback or print
+        raw_log = log_callback or print
+
+        def safe_log(message):
+            text = str(message)
+            if sys.platform == "win32":
+                text = text.encode("ascii", "replace").decode("ascii")
+            raw_log(text)
+
+        self.log = safe_log
         self.set_progress = progress_callback or (lambda s, p: None)
         self.report_tokens = token_callback or (lambda gi, go, w, t: None)
         self.is_cancelled = cancel_check or (lambda: False)
@@ -1410,7 +1418,12 @@ Transcript:
     def _get_optimized_segment_buffer_seconds(self) -> float:
         """Return the configured optimized segment buffer with a safe default."""
         try:
-            return max(float(self.optimized_ingestion_settings.get("segment_buffer_seconds", 3.0)), 0.5)
+            return max(
+                float(
+                    self.optimized_ingestion_settings.get("segment_buffer_seconds", 3.0)
+                ),
+                0.5,
+            )
         except (TypeError, ValueError, AttributeError):
             return 3.0
 
@@ -1426,7 +1439,9 @@ Transcript:
 
     def _download_video_audio_first(self, url: str) -> tuple:
         """Download audio-first analysis inputs while deferring video download until render time."""
-        self.log("  Optimized ingestion enabled: downloading audio-first analysis payload")
+        self.log(
+            "  Optimized ingestion enabled: downloading audio-first analysis payload"
+        )
 
         meta_cmd = [self.ytdlp_path, "--dump-json", "--no-download", url]
         result = subprocess.run(
@@ -1498,7 +1513,9 @@ Transcript:
             if path.suffix.lower() not in {".srt", ".vtt", ".json", ".part"}
         ]
         if not audio_candidates:
-            raise Exception("Optimized audio-first download did not produce an audio file")
+            raise Exception(
+                "Optimized audio-first download did not produce an audio file"
+            )
         audio_path = audio_candidates[0]
 
         srt_path = None
@@ -1581,7 +1598,9 @@ Transcript:
         if not source_url:
             raise Exception("Optimized ingestion metadata is missing source_url")
 
-        start_seconds = self.parse_timestamp(str(highlight["start_time"]).replace(",", "."))
+        start_seconds = self.parse_timestamp(
+            str(highlight["start_time"]).replace(",", ".")
+        )
         end_seconds = self.parse_timestamp(str(highlight["end_time"]).replace(",", "."))
         buffer_seconds = self._get_optimized_segment_buffer_seconds()
         segment_start = max(0.0, start_seconds - buffer_seconds)
@@ -1598,9 +1617,13 @@ Transcript:
         adjusted_highlight = copy.deepcopy(highlight)
         adjusted_start = max(0.0, start_seconds - segment_start)
         adjusted_end = max(adjusted_start + 0.05, end_seconds - segment_start)
-        adjusted_highlight["start_time"] = self._seconds_to_srt_timestamp(adjusted_start)
+        adjusted_highlight["start_time"] = self._seconds_to_srt_timestamp(
+            adjusted_start
+        )
         adjusted_highlight["end_time"] = self._seconds_to_srt_timestamp(adjusted_end)
-        adjusted_highlight["duration_seconds"] = max(adjusted_end - adjusted_start, 0.05)
+        adjusted_highlight["duration_seconds"] = max(
+            adjusted_end - adjusted_start, 0.05
+        )
 
         segment_metadata = {
             "mode": "audio_first_segment_download",
@@ -1654,8 +1677,10 @@ Transcript:
                 self.log("  Download finished, processing...")
                 self.set_progress("Processing downloaded file...", 0.25)
 
-        # High-quality format selector
-        format_selector = "bestvideo[height>=720][height<=2160]+bestaudio/best[height>=720][height<=2160]/bestvideo+bestaudio/best"
+        # Stable progressive selector for campaign/manual processing.
+        # Prefer a single-file stream first to reduce merge complexity,
+        # lower bandwidth pressure, and avoid fragile extractor/runtime paths.
+        format_selector = "best[height<=720]/best"
 
         # Base yt-dlp options
         ydl_opts = {
@@ -1685,13 +1710,14 @@ Transcript:
         else:
             self.log("  Skipping subtitle download (AI transcription mode)")
 
-        # Add Deno JS runtime if available
+        # Skip JS runtime / remote-components for the default download path.
+        # In practice this is more stable on Windows for public YouTube downloads.
         if deno_path and Path(deno_path).exists():
-            ydl_opts["js_runtimes"] = {"deno": {"path": deno_path}}
-            ydl_opts["remote_components"] = ["ejs:github"]
-            self.log(f"  JS runtime: deno at {deno_path}")
+            self.log(
+                f"  JS runtime available but skipped for stable download path: {deno_path}"
+            )
         else:
-            self.log(f"  WARNING: Deno not found - some formats may be missing!")
+            self.log(f"  WARNING: Deno not found - continuing with non-JS runtime path")
 
         # Add FFmpeg location if available
         if ffmpeg_path and Path(ffmpeg_path).exists():
@@ -4509,7 +4535,9 @@ Candidates:
             lambda progress: run_progress(0.05 + (progress * 0.95)),
         )
 
-    def _build_split_screen_geometry(self, orig_w: int, orig_h: int) -> tuple[int, int, int, int]:
+    def _build_split_screen_geometry(
+        self, orig_w: int, orig_h: int
+    ) -> tuple[int, int, int, int]:
         """Calculate stable left/right panel crops for vertical split-screen output."""
         panel_ratio = 9 / 8
         crop_h = orig_h
@@ -4589,7 +4617,9 @@ Candidates:
             detected_samples += 1
             if len(faces) >= 2:
                 multi_face_samples += 1
-                sorted_faces = sorted(faces, key=lambda face: face[2] * face[3], reverse=True)[:2]
+                sorted_faces = sorted(
+                    faces, key=lambda face: face[2] * face[3], reverse=True
+                )[:2]
                 centers = sorted(face[0] + (face[2] / 2.0) for face in sorted_faces)
                 if orig_w > 0:
                     separation = (centers[1] - centers[0]) / orig_w
