@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  --color-background: #0a0a0a;
+  --color-foreground: #eaeaea;
+  --color-foreground-soft: #d8d8d8;
+  --color-muted: #a3a3a3;
+  --color-muted-strong: #c4c4c4;
+  --color-panel: rgb(20 20 20);
+  --color-panel-muted: rgb(12 12 12);
+  --color-stroke: rgba(255, 255, 255, 0.08);
+  --color-stroke-strong: rgba(36, 209, 255, 0.32);
+  --color-brand: #3b8ed0;
+  --color-brand-strong: #1f6aa5;
+  --color-accent: #24d1ff;
+  --color-success: #19c37d;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+
+  --radius-card: 1.25rem;
+  --radius-pill: 999px;
+}
+
+:root {
+  --shadow-panel: 0 18px 60px rgba(0, 0, 0, 0.38);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 500px at 20% -20%, rgba(36, 209, 255, 0.15), transparent 60%),
+    radial-gradient(900px 400px at 90% 0%, rgba(59, 142, 208, 0.25), transparent 55%),
+    #0a0a0a;
+}
+
+::selection {
+  background: rgba(36, 209, 255, 0.28);
+  color: #f7fbff;
+}
+
+a {
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
