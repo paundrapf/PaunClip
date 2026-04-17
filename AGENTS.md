@@ -23,6 +23,23 @@
 - `utils/AGENTS.md` for runtime path, bundled binary, and logging rules.
 - When editing inside one of those directories, read the local AGENTS file first.
 
+## Core memory files
+- `MEMORY.md` = durable project memory (decisions, invariants, proven lessons)
+- `TOOLS.md` = environment/runtime/tool quirks and known-good commands
+- `BOOTSTRAP.md` = first-read onboarding order for new sessions after compaction
+- `WORKING.md` = current active phase, blocker, and next-step checkpoint
+
+## Optional private/local memory files
+- `USER.md` = local user preferences and communication style (do not commit)
+- `SOUL.md` = optional local agent tone/persona (do not commit)
+- `memory/YYYY-MM-DD.md` = local daily scratch notes to distill later (do not commit)
+
+## Recommended read order for new sessions
+1. `AGENTS.md`
+2. `MEMORY.md`
+3. `TOOLS.md`
+4. `WORKING.md`
+5. Relevant docs in `docs/major-update/`
 ## Environment setup
 ```bash
 pip install -r requirements.txt
@@ -177,3 +194,4 @@ python webview_app.py
 - Do not rename status text, session keys, clip metadata keys, or runtime directories casually.
 - Do not bypass helper path resolution or config migration code.
 - Do not move blocking work onto the main UI thread.
+

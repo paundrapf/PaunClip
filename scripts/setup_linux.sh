@@ -32,6 +32,7 @@ echo
 echo "Setup complete."
 echo "Desktop app: $PYTHON_BIN app.py"
 echo "Webview app : $PYTHON_BIN webview_app.py"
+echo "API server  : $PYTHON_BIN -m uvicorn server:app --host 0.0.0.0 --port 8000"
 echo
 echo "Notes:"
 echo "- yt-dlp is installed from requirements.txt."

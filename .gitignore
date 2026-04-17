@@ -336,3 +336,8 @@ config/AGENTS.md
 pages/AGENTS.md
 pages/settings/AGENTS.md
 utils/AGENTS.md
+
+# Local AI memory files
+USER.md
+SOUL.md
+memory/

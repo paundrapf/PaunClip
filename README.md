@@ -130,6 +130,33 @@ python webview_app.py
 
 The setup scripts above simply automate the virtualenv and dependency installation steps.
 
+## FastAPI backend (recommended for web testing)
+
+### Windows
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn server:app --host 127.0.0.1 --port 8000
+```
+
+Then open:
+
+- `http://127.0.0.1:8000/docs`
+
+### Linux
+
+```bash
+./.venv/bin/python -m uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+Then open:
+
+- `http://127.0.0.1:8000/docs` (same machine)
+- `http://<server-ip>:8000/docs` (remote server)
+
+### Important note for Windows
+
+Avoid `--reload` when the repo lives inside OneDrive or another synced folder. In this environment, `uvicorn --reload` starts but the HTTP port can still refuse connections. Use the non-reload command above while developing locally.
+
 ## Project structure
 
 ```text
