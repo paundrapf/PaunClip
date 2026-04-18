@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/Paunclip%20Banner/paunclip-banner-transparant.png" alt="PaunClip Banner" width="720" />
+</p>
+
 # PaunClip
 
 PaunClip is a desktop-first short-form clipping tool that turns long videos into editable, resumable short clips with hook generation, captions, reframing, and session-based output management.

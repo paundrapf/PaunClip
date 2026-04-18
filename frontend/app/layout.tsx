@@ -20,6 +20,11 @@ export const metadata: Metadata = {
     template: "%s | PaunClip Workspace",
   },
   description: "Sessions browser and workspace for the PaunClip website frontend.",
+  icons: {
+    icon: "/branding/paunclip-logo.png",
+    shortcut: "/branding/paunclip-logo.png",
+    apple: "/branding/paunclip-logo.png",
+  },
 };
 
 export default function RootLayout({

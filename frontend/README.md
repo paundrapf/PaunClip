@@ -1,8 +1,20 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# PaunClip Frontend
+
+<p align="center">
+  <img src="public/branding/paunclip-banner.png" alt="PaunClip Banner" width="720" />
+</p>
+
+This is the real Next.js frontend for the PaunClip website, backed by the FastAPI server in the repo root.
 
 ## Getting Started
 
-First, run the development server:
+First, make sure the FastAPI backend is running from the repo root:
+
+```bash
+python server.py
+```
+
+Then, inside `frontend/`, run the development server:
 
 ```bash
 npm run dev
@@ -16,9 +28,17 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+The frontend expects the PaunClip API at `http://127.0.0.1:8000` by default.
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+
+## Notes
+
+- Use `npm run build` to verify the production bundle.
+- Use `npm run start` to serve the built frontend.
+- The backend serves output assets and progress/events.
 
 ## Learn More
 

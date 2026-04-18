@@ -1,7 +1,8 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
-import { Clapperboard, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 
 import { GlobalProgressWidget } from "@/components/progress/global-progress-widget";
 import { getApiHostLabel } from "@/lib/config";
@@ -18,8 +19,15 @@ export function AppSidebar({ pathname }: AppSidebarProps) {
       <div className="flex h-full flex-col gap-6 px-4 py-4 sm:px-6 lg:px-5 lg:py-6">
         <div className="flex items-center gap-3">
           <Link href="/" className="flex items-center gap-3">
-            <div className="flex size-11 items-center justify-center rounded-card border border-stroke-strong bg-accent/10 text-accent shadow-[0_0_24px_rgba(36,209,255,0.2)]">
-              <Clapperboard className="size-5" />
+            <div className="flex size-11 items-center justify-center overflow-hidden rounded-card border border-stroke-strong bg-accent/10 shadow-[0_0_24px_rgba(36,209,255,0.2)]">
+              <Image
+                src="/branding/paunclip-logo.png"
+                alt="PaunClip logo"
+                width={44}
+                height={44}
+                className="size-full object-contain"
+                priority
+              />
             </div>
             <div>
               <p className="text-sm font-semibold tracking-tight text-foreground">PaunClip</p>
