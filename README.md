@@ -58,12 +58,16 @@ bash ./scripts/setup_linux.sh
 ./.venv/bin/python app.py
 ```
 
+Use the desktop app on Linux only when you have a real GUI desktop session.
+
 For the webview shell:
 
 ```bash
 bash ./scripts/setup_linux.sh --web
 ./.venv/bin/python webview_app.py
 ```
+
+`webview_app.py` is for GUI desktops only. It is not the correct runtime for a headless VPS.
 
 ## Dependency model
 
@@ -152,6 +156,8 @@ Then open:
 
 - `http://127.0.0.1:8000/docs` (same machine)
 - `http://<server-ip>:8000/docs` (remote server)
+
+This FastAPI path is the correct Linux/VPS deployment model for headless servers.
 
 ### Important note for Windows
 
