@@ -171,8 +171,11 @@ cython_debug/
 !docs/*.gif
 !assets/*.png
 !assets/*.jpg
+!assets/**/*.png
+!assets/**/*.jpg
 !assets/docs/*.png
 !assets/docs/*.jpg
+!frontend/public/branding/*.png
 
 # User watermarks (copied from user selection)
 assets/watermarks/*

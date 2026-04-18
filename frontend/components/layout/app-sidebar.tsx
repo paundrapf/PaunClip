@@ -31,7 +31,7 @@ export function AppSidebar({ pathname }: AppSidebarProps) {
             </div>
             <div>
               <p className="text-sm font-semibold tracking-tight text-foreground">PaunClip</p>
-              <p className="text-xs text-muted">Content operations workstation</p>
+              <p className="text-xs text-muted">Clip engine, queue, and workspace</p>
             </div>
           </Link>
         </div>

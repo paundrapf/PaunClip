@@ -20,7 +20,7 @@ window.Components.Header = function () {
 
   const sub = document.createElement('div');
   sub.className = 'brand-sub';
-  sub.textContent = 'Turn long YouTube videos into viral shorts — Powered by AI';
+  sub.textContent = 'Personal clip engine, campaign queue, and workspace toolkit';
 
   brandText.appendChild(title);
   brandText.appendChild(sub);
