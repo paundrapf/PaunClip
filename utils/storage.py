@@ -686,16 +686,30 @@ def load_session_manifest(session_manifest_path: Path | str) -> dict:
 
 def write_session_manifest(session_dir: Path | str, session_data: dict) -> Path:
     """Write a normalized session manifest and return its path."""
+    import os
+    import tempfile
+    
     session_path = Path(session_dir)
     session_path.mkdir(parents=True, exist_ok=True)
     session_manifest_path = session_path / SESSION_MANIFEST_FILENAME
     normalized = normalize_session_manifest(session_data, session_path)
 
-    with open(session_manifest_path, "w", encoding="utf-8") as f:
-        json.dump(normalized, f, indent=2, ensure_ascii=False)
+    fd, temp_path = tempfile.mkstemp(dir=session_path, suffix=".tmp", prefix="manifest_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(normalized, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, session_manifest_path)
+    except Exception:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        raise
 
     return session_manifest_path
-
 
 def discover_session_manifests(output_dir: Path | str) -> list[Path]:
     """Discover session manifests in both legacy and campaign-aware locations."""

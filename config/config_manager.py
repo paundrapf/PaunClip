@@ -375,8 +375,24 @@ class ConfigManager:
 
     def save_config(self, config):
         """Save configuration dict to file"""
-        with open(self.config_file, "w") as f:
-            json.dump(config, f, indent=2)
+        import os
+        import tempfile
+        
+        self.config_file.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_path = tempfile.mkstemp(dir=self.config_file.parent, suffix=".tmp", prefix="config_")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(config, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, self.config_file)
+        except Exception:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            raise
 
     def _build_campaign_catalog(self, campaigns: list[dict]) -> list[dict]:
         """Build lightweight config summaries from canonical campaign manifests."""
@@ -439,12 +455,27 @@ class ConfigManager:
 
     def _write_campaign_manifest(self, campaign_data: dict) -> dict:
         """Persist a campaign manifest and return the normalized record."""
+        import os
+        import tempfile
+        
         normalized = self._normalize_campaign_manifest(campaign_data)
         manifest_path = self.get_campaign_manifest_path(normalized["id"])
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(manifest_path, "w", encoding="utf-8") as f:
-            json.dump(normalized, f, indent=2, ensure_ascii=False)
+        fd, temp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".tmp", prefix="campaign_")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(normalized, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, manifest_path)
+        except Exception:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            raise
 
         return normalized
 

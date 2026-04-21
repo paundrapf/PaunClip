@@ -22,15 +22,18 @@ class WebAPI:
         self.task_type = None
         self.active_session_id = None
         self.active_campaign_id = None
+        self._lock = threading.Lock()
+        self._cfg_mgr = None
 
     def get_progress(self):
-        return {
-            "status": self.status,
-            "progress": self.progress,
-            "task_type": self.task_type,
-            "session_id": self.active_session_id,
-            "campaign_id": self.active_campaign_id,
-        }
+        with self._lock:
+            return {
+                "status": self.status,
+                "progress": self.progress,
+                "task_type": self.task_type,
+                "session_id": self.active_session_id,
+                "campaign_id": self.active_campaign_id,
+            }
 
     def get_asset_paths(self):
         bundle_dir = get_bundle_dir()
@@ -185,15 +188,18 @@ class WebAPI:
             ),
         )
         try:
-            self.status = "running"
-            self.progress = 0.0
+            with self._lock:
+                self.status = "running"
+                self.progress = 0.0
             core.process(
                 url, num_clips=num_clips, add_captions=add_captions, add_hook=add_hook
             )
-            self.status = "complete"
-            self.progress = 1.0
+            with self._lock:
+                self.status = "complete"
+                self.progress = 1.0
         except Exception as e:
-            self.status = f"error: {e}"
+            with self._lock:
+                self.status = f"error: {e}"
         finally:
             self.thread = None
             self.task_type = None
@@ -211,7 +217,7 @@ class WebAPI:
                 str(payload.get("name") or "").strip(),
                 str(payload.get("channel_url") or "").strip(),
             )
-            return {"status": "ok", **data}
+            return {"status": "ok", "campaigns": campaign_api.list_campaigns(), "campaign": data}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -224,7 +230,7 @@ class WebAPI:
                 str(payload.get("campaign_id") or "").strip(),
                 str(payload.get("name") or "").strip(),
             )
-            return {"status": "ok", **data}
+            return {"status": "ok", "campaigns": campaign_api.list_campaigns(), "campaign": data}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -236,7 +242,7 @@ class WebAPI:
             data = campaign_api.archive_campaign(
                 str(payload.get("campaign_id") or "").strip()
             )
-            return {"status": "ok", **data}
+            return {"status": "ok", "campaigns": campaign_api.list_campaigns(), "campaign": data}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -353,16 +359,27 @@ class WebAPI:
     def _run_campaign_fetch(self, payload):
         campaign_api = self._get_campaign_api()
         try:
-            self.status = "Fetching latest campaign videos..."
-            self.progress = 0.0
+            with self._lock:
+                self.status = "Fetching latest campaign videos..."
+                self.progress = 0.0
+            def on_fetch_progress(msg, p=None):
+                with self._lock:
+                    self.status = msg
+                    if p is not None:
+                        self.progress = p
+            campaign_api.status_callback = on_fetch_progress
+            campaign_api.progress_callback = on_fetch_progress
+            
             campaign_api.fetch_campaign_videos(
                 str(payload.get("campaign_id") or "").strip(),
                 channel_url=str(payload.get("channel_url") or "").strip() or None,
             )
-            self.status = "complete"
-            self.progress = 1.0
+            with self._lock:
+                self.status = "complete"
+                self.progress = 1.0
         except Exception as e:
-            self.status = f"error: {e}"
+            with self._lock:
+                self.status = f"error: {e}"
         finally:
             self.thread = None
             self.task_type = None
@@ -489,16 +506,20 @@ class WebAPI:
             self.task_type = None
 
     def _on_status_update(self, message: str):
-        self.status = str(message)
+        with self._lock:
+            self.status = str(message)
 
     def _on_progress_update(self, progress: float):
-        try:
-            self.progress = float(progress)
-        except Exception:
-            self.progress = 0.0
+        with self._lock:
+            try:
+                self.progress = float(progress)
+            except Exception:
+                self.progress = 0.0
 
     def _get_cfg_manager(self):
-        return ConfigManager(Path(self.config_file), Path(self.output_dir))
+        if self._cfg_mgr is None:
+            self._cfg_mgr = ConfigManager(Path(self.config_file), Path(self.output_dir))
+        return self._cfg_mgr
 
     def _get_session_api(self):
         return WebSessionAPI(

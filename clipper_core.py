@@ -1499,7 +1499,7 @@ Transcript:
             capture_output=True,
             text=True,
             creationflags=SUBPROCESS_FLAGS,
-            timeout=120000,
+            timeout=1200,
         )
         if result.returncode != 0:
             raise Exception(
@@ -1570,7 +1570,7 @@ Transcript:
             capture_output=True,
             text=True,
             creationflags=SUBPROCESS_FLAGS,
-            timeout=120000,
+            timeout=1200,
         )
         if result.returncode != 0:
             raise Exception(

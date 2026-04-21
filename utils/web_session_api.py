@@ -387,6 +387,10 @@ class WebSessionAPI:
                 except Exception:
                     self.progress_callback(0.0)
 
+        provider_router = None
+        if hasattr(self.config_manager, "build_provider_router"):
+            provider_router = self.config_manager.build_provider_router()
+
         return AutoClipperCore(
             client=fallback_client,
             ffmpeg_path=get_ffmpeg_path(),
@@ -411,7 +415,8 @@ class WebSessionAPI:
                 },
             ),
             ai_providers=normalized_ai_providers,
-            subtitle_language="id",
+            provider_router=provider_router,
+            subtitle_language=config.get("subtitle_language", "id"),
             optimized_ingestion_settings=config.get(
                 "optimized_ingestion",
                 {"enabled": False, "segment_buffer_seconds": 3.0},

@@ -127,7 +127,8 @@ class GroqKeyPool:
             self.last_pool_error = "No Groq API keys found in runtime env lookup"
 
     def is_ready(self) -> bool:
-        return bool(self.keys)
+        now = time.time()
+        return any(self._is_key_available(key, now) for key in self.keys)
 
     def _is_key_available(self, key_record: dict, now: float) -> bool:
         if not key_record.get("available", True):

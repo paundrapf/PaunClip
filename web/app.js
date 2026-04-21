@@ -28,7 +28,7 @@ main.appendChild(outputsView.element);
 const navButtons = header.buttons;
 const views = [aiView.element, homeView.element, campaignsView.element, campaignQueueView.element, sessionsView.element, workspaceView.element, outputsView.element];
 
-let polling = null;
+let homePolling = null;
 let iconTriedData = false;
 const fallbackSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none"><rect width="96" height="96" rx="18" fill="#0B1B24"/><path d="M18 36h60v36a6 6 0 0 1-6 6H24a6 6 0 0 1-6-6V36Z" fill="#12BFE4"/><path d="M20 20l10 10m6-10 10 10m6-10 10 10m6-10 10 10" stroke="#12BFE4" stroke-width="6" stroke-linecap="round"/></svg>`;
 let providerType = 'ytclip';
@@ -875,23 +875,27 @@ async function saveWorkspaceDraft() {
 
 function beginTaskPolling(statusSetter, onDone) {
   if (polling) {
-    clearInterval(polling);
-    polling = null;
+    if (homePolling) clearInterval(homePolling);
+    homePolling = null;
   }
   polling = setInterval(async () => {
     try {
       const p = await window.pywebview.api.get_progress();
       statusSetter(p.status || 'Running');
-      if (p.status && (p.status.startsWith('error') || p.status === 'complete')) {
-        clearInterval(polling);
-        polling = null;
+      if (p.status && (p.status.toLowerCase().startsWith('error') || p.status.toLowerCase() === 'complete')) {
+      if (p.status.toLowerCase() === 'complete') {
+        setActiveView('sessions', 'sessions');
+        loadSessions(true);
+      }
+        if (homePolling) clearInterval(homePolling);
+        homePolling = null;
         if (p.status === 'complete') {
           await onDone(p);
         }
       }
     } catch {
-      clearInterval(polling);
-      polling = null;
+      if (homePolling) clearInterval(homePolling);
+      homePolling = null;
       statusSetter('Progress polling stopped');
     }
   }, 600);
@@ -1068,7 +1072,7 @@ async function start() {
     );
     if (res && res.status === 'started') {
       poll();
-      polling = setInterval(poll, 500);
+      homePolling = setInterval(poll, 500);
     } else {
       homeView.fields.status.textContent = 'Busy';
       lockControls(false);
@@ -1085,14 +1089,18 @@ async function poll() {
     const pr = Math.max(0, Math.min(1, p.progress || 0));
     homeView.fields.bar.style.width = (pr * 100).toFixed(1) + '%';
     homeView.fields.status.textContent = p.status || '';
-    if (p.status && (p.status.startsWith('error') || p.status === 'complete')) {
-      clearInterval(polling);
-      polling = null;
+    if (p.status && (p.status.toLowerCase().startsWith('error') || p.status.toLowerCase() === 'complete')) {
+      if (p.status.toLowerCase() === 'complete') {
+        setActiveView('sessions', 'sessions');
+        loadSessions(true);
+      }
+      if (homePolling) clearInterval(homePolling);
+      homePolling = null;
       lockControls(false);
     }
   } catch {
-    clearInterval(polling);
-    polling = null;
+    if (homePolling) clearInterval(homePolling);
+    homePolling = null;
     lockControls(false);
   }
 }
