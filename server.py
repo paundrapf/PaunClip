@@ -212,9 +212,9 @@ def validate_api_key(payload: ValidateKeyPayload):
         )
         if resp.status_code == 200:
             return {"status": "ok"}
-        return {"status": "error", "message": f"HTTP {resp.status_code}"}
+        raise HTTPException(status_code=resp.status_code, detail=f"HTTP {resp.status_code}")
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/settings/models")
@@ -235,8 +235,8 @@ def get_models(payload: ValidateKeyPayload):
         items = data.get("data", [])
         models = [item.get("id") for item in items if item.get("id")]
         return {"models": models}
-    except:
-        return {"models": []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- Start Processing ---
@@ -346,7 +346,7 @@ def get_session_workspace(session_id: str):
         workspace = get_session_api().get_workspace(session_id=session_id)
         return {"status": "ok", "workspace": workspace}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/sessions/{session_id}/save")
@@ -364,7 +364,7 @@ def save_session_workspace(session_id: str, payload: dict):
         )
         return {"status": "saved", "workspace": workspace}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def run_session_render_task(session_id: str, payload: dict, retry_failed: bool):
@@ -446,7 +446,7 @@ def create_campaign(payload: dict):
         )
         return {"status": "ok", **data}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.put("/api/campaigns/{campaign_id}")
@@ -457,7 +457,7 @@ def rename_campaign(campaign_id: str, payload: dict):
         )
         return {"status": "ok", **data}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/campaigns/{campaign_id}/archive")
@@ -466,7 +466,7 @@ def archive_campaign(campaign_id: str):
         data = get_campaign_api().archive_campaign(campaign_id)
         return {"status": "ok", **data}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/campaigns/{campaign_id}")
@@ -475,7 +475,7 @@ def get_campaign_detail(campaign_id: str):
         detail = get_campaign_api().get_campaign_detail(campaign_id)
         return {"status": "ok", "detail": detail}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/campaigns/{campaign_id}/queue-all")
@@ -484,7 +484,7 @@ def queue_all_campaign_videos(campaign_id: str):
         detail = get_campaign_api().queue_all_campaign_videos(campaign_id)
         return {"status": "ok", "detail": detail}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/campaigns/{campaign_id}/videos/{video_id}/queue")
@@ -493,7 +493,7 @@ def queue_campaign_video(campaign_id: str, video_id: str):
         detail = get_campaign_api().queue_campaign_video(campaign_id, video_id)
         return {"status": "ok", "detail": detail}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/campaigns/{campaign_id}/videos/{video_id}/skip")
@@ -502,7 +502,7 @@ def skip_campaign_video(campaign_id: str, video_id: str):
         detail = get_campaign_api().skip_campaign_video(campaign_id, video_id)
         return {"status": "ok", "detail": detail}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/campaigns/{campaign_id}/videos/{video_id}/session")
@@ -513,7 +513,7 @@ def open_campaign_video_session(campaign_id: str, video_id: str):
         )
         return {"status": "ok", "workspace": workspace}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def run_campaign_fetch_task(campaign_id: str, channel_url: str):
