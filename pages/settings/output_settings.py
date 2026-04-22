@@ -5,6 +5,7 @@ Output Settings Sub-Page
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from pathlib import Path
+import os
 
 from pages.settings.base_dialog import BaseSettingsSubPage
 from utils.storage import normalize_reframe_mode
@@ -274,6 +275,17 @@ class OutputSettingsSubPage(BaseSettingsSubPage):
         if not output_dir:
             messagebox.showerror("Error", "Output directory is required")
             return
+
+        # Validate: reject traversal attempts
+        normalized = os.path.normpath(output_dir)
+        if ".." in normalized.split(os.sep):
+            messagebox.showerror("Error", "Invalid path: directory traversal not allowed")
+            return
+
+        # Resolve to absolute (relative to app dir if not absolute)
+        if not os.path.isabs(output_dir):
+            from utils.helpers import get_app_dir
+            output_dir = str(get_app_dir() / output_dir)
 
         try:
             Path(output_dir).mkdir(parents=True, exist_ok=True)

@@ -105,8 +105,15 @@ def load_channel_fetch_record(output_dir: Path | str, campaign: dict) -> dict:
     if not path.exists():
         return default_channel_fetch_record(campaign)
 
-    with open(path, "r", encoding="utf-8") as f:
-        return normalize_channel_fetch_record(json.load(f), campaign)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return normalize_channel_fetch_record(json.load(f), campaign)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        from utils.logger import log_error
+        log_error(f"Corrupt channel fetch record: {path}", e)
+        backup = path.with_suffix('.json.corrupt')
+        path.rename(backup)
+        return default_channel_fetch_record(campaign)
 
 
 def save_channel_fetch_record(

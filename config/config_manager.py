@@ -4,8 +4,9 @@ Configuration manager for YT Short Clipper
 
 import json
 import os
+import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from utils.storage import (
@@ -25,85 +26,97 @@ class ConfigManager:
     def __init__(self, config_file: Path, output_dir: Path):
         self.config_file = config_file
         self.output_dir = output_dir
+        self._lock = threading.RLock()
         self.config = self.load()
 
     def load(self):
         """Load configuration from file"""
+        loaded = None
         if self.config_file.exists():
-            with open(self.config_file, "r") as f:
-                config = json.load(f)
+            try:
+                with open(self.config_file, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                from utils.logger import log_error
+                backup_path = self.config_file.with_suffix('.json.corrupt')
+                self.config_file.rename(backup_path)
+                log_error(f"Config corrupted, backed up to {backup_path}, using defaults", e)
+                loaded = None
 
-                # Migrate old config to new multi-provider structure
-                if "api_key" in config and "ai_providers" not in config:
-                    config = self._migrate_to_multi_provider(config)
+        if loaded is not None:
+            config = loaded
 
-                # Add default system_prompt if not exists
-                if "system_prompt" not in config:
-                    from clipper_core import AutoClipperCore
+            # Migrate old config to new multi-provider structure
+            if "api_key" in config and "ai_providers" not in config:
+                config = self._migrate_to_multi_provider(config)
 
-                    config["system_prompt"] = AutoClipperCore.get_default_prompt()
-                # Add default temperature if not exists
-                if "temperature" not in config:
-                    config["temperature"] = 1.0
-                # Add default tts_model if not exists (for backward compatibility)
-                if "tts_model" not in config:
-                    config["tts_model"] = "tts-1"
-                # Add default watermark settings if not exists
-                if "watermark" not in config:
-                    config["watermark"] = {
-                        "enabled": False,
-                        "image_path": "",
-                        "position_x": 0.85,  # 0-1 (percentage from left)
-                        "position_y": 0.05,  # 0-1 (percentage from top)
-                        "opacity": 0.8,  # 0-1
-                        "scale": 0.15,  # 0-1 (percentage of video width)
-                    }
-                # Add default face tracking mode if not exists
-                if "face_tracking_mode" not in config:
-                    config["face_tracking_mode"] = "center_crop"
-                else:
-                    config["face_tracking_mode"] = normalize_reframe_mode(
-                        config.get("face_tracking_mode")
-                    )
-                # Add default MediaPipe settings if not exists
-                if "mediapipe_settings" not in config:
-                    config["mediapipe_settings"] = {
-                        "lip_activity_threshold": 0.15,
-                        "switch_threshold": 0.3,
-                        "min_shot_duration": 90,
-                        "center_weight": 0.3,
-                    }
-                # Generate installation_id if not exists
-                if "installation_id" not in config:
-                    config["installation_id"] = str(uuid.uuid4())
-                    self.save_config(config)
+            # Add default system_prompt if not exists
+            if "system_prompt" not in config:
+                from clipper_core import AutoClipperCore
 
-                # Ensure ai_providers structure exists and is normalized
-                config, changed = self._normalize_ai_providers(config)
-                if changed:
-                    self.save_config(config)
+                config["system_prompt"] = AutoClipperCore.get_default_prompt()
+            # Add default temperature if not exists
+            if "temperature" not in config:
+                config["temperature"] = 1.0
+            # Add default tts_model if not exists (for backward compatibility)
+            if "tts_model" not in config:
+                config["tts_model"] = "tts-1"
+            # Add default watermark settings if not exists
+            if "watermark" not in config:
+                config["watermark"] = {
+                    "enabled": False,
+                    "image_path": "",
+                    "position_x": 0.85,  # 0-1 (percentage from left)
+                    "position_y": 0.05,  # 0-1 (percentage from top)
+                    "opacity": 0.8,  # 0-1
+                    "scale": 0.15,  # 0-1 (percentage of video width)
+                }
+            # Add default face tracking mode if not exists
+            if "face_tracking_mode" not in config:
+                config["face_tracking_mode"] = "center_crop"
+            else:
+                config["face_tracking_mode"] = normalize_reframe_mode(
+                    config.get("face_tracking_mode")
+                )
+            # Add default MediaPipe settings if not exists
+            if "mediapipe_settings" not in config:
+                config["mediapipe_settings"] = {
+                    "lip_activity_threshold": 0.15,
+                    "switch_threshold": 0.3,
+                    "min_shot_duration": 90,
+                    "center_weight": 0.3,
+                }
+            # Generate installation_id if not exists
+            if "installation_id" not in config:
+                config["installation_id"] = str(uuid.uuid4())
+                self.save_config(config)
 
-                # Add default Repliz settings if not exists
-                if "repliz" not in config:
-                    config["repliz"] = {"access_key": "", "secret_key": ""}
+            # Ensure ai_providers structure exists and is normalized
+            config, changed = self._normalize_ai_providers(config)
+            if changed:
+                self.save_config(config)
 
-                # Add default GPU settings if not exists
-                if "gpu_acceleration" not in config:
-                    config["gpu_acceleration"] = {"enabled": False}
+            # Add default Repliz settings if not exists
+            if "repliz" not in config:
+                config["repliz"] = {"access_key": "", "secret_key": ""}
 
-                if "optimized_ingestion" not in config:
-                    config["optimized_ingestion"] = {
-                        "enabled": False,
-                        "segment_buffer_seconds": 3.0,
-                    }
+            # Add default GPU settings if not exists
+            if "gpu_acceleration" not in config:
+                config["gpu_acceleration"] = {"enabled": False}
 
-                # Add campaign catalog defaults if not exists
-                if "campaigns" not in config or not isinstance(
-                    config["campaigns"], list
-                ):
-                    config["campaigns"] = []
+            if "optimized_ingestion" not in config:
+                config["optimized_ingestion"] = {
+                    "enabled": False,
+                    "segment_buffer_seconds": 3.0,
+                }
 
-                return config
+            # Add campaign catalog defaults if not exists
+            if "campaigns" not in config or not isinstance(
+                config["campaigns"], list
+            ):
+                config["campaigns"] = []
+
+            return config
 
         # Default config with system prompt
         from clipper_core import AutoClipperCore
@@ -295,47 +308,48 @@ class ConfigManager:
         self, provider_key: str, include_legacy_fallback: bool = True
     ):
         """Get normalized provider config, with optional legacy root fallback."""
-        defaults = self._get_default_ai_providers().get(provider_key, {}).copy()
-        provider_config = self.config.get("ai_providers", {}).get(provider_key, {})
-        if isinstance(provider_config, dict):
-            defaults.update(provider_config)
+        with self._lock:
+            defaults = self._get_default_ai_providers().get(provider_key, {}).copy()
+            provider_config = self.config.get("ai_providers", {}).get(provider_key, {})
+            if isinstance(provider_config, dict):
+                defaults.update(provider_config)
 
-        if include_legacy_fallback and provider_key == "highlight_finder":
-            if not defaults.get("api_key"):
-                defaults["api_key"] = self.config.get("api_key", "")
-            if not defaults.get("base_url"):
-                defaults["base_url"] = self.config.get(
-                    "base_url", defaults.get("base_url", "https://api.openai.com/v1")
-                )
-            if not defaults.get("model"):
-                defaults["model"] = self.config.get(
-                    "model", defaults.get("model", "gpt-4.1")
-                )
+            if include_legacy_fallback and provider_key == "highlight_finder":
+                if not defaults.get("api_key"):
+                    defaults["api_key"] = self.config.get("api_key", "")
+                if not defaults.get("base_url"):
+                    defaults["base_url"] = self.config.get(
+                        "base_url", defaults.get("base_url", "https://api.openai.com/v1")
+                    )
+                if not defaults.get("model"):
+                    defaults["model"] = self.config.get(
+                        "model", defaults.get("model", "gpt-4.1")
+                    )
 
-        if include_legacy_fallback and provider_key == "hook_maker":
-            if not defaults.get("api_key"):
-                defaults["api_key"] = self.config.get("api_key", "")
-            if not defaults.get("base_url"):
-                defaults["base_url"] = self.config.get(
-                    "base_url", defaults.get("base_url", "https://api.openai.com/v1")
-                )
-            if not defaults.get("model"):
-                defaults["model"] = self.config.get(
-                    "tts_model", defaults.get("model", "tts-1")
-                )
+            if include_legacy_fallback and provider_key == "hook_maker":
+                if not defaults.get("api_key"):
+                    defaults["api_key"] = self.config.get("api_key", "")
+                if not defaults.get("base_url"):
+                    defaults["base_url"] = self.config.get(
+                        "base_url", defaults.get("base_url", "https://api.openai.com/v1")
+                    )
+                if not defaults.get("model"):
+                    defaults["model"] = self.config.get(
+                        "tts_model", defaults.get("model", "tts-1")
+                    )
 
-            hook_base_url = str(defaults.get("base_url", "")).lower()
-            hook_model = str(defaults.get("model", "")).lower()
-            is_groq_hook = "groq" in hook_base_url or "orpheus" in hook_model
+                hook_base_url = str(defaults.get("base_url", "")).lower()
+                hook_model = str(defaults.get("model", "")).lower()
+                is_groq_hook = "groq" in hook_base_url or "orpheus" in hook_model
 
-            if not defaults.get("tts_voice"):
-                defaults["tts_voice"] = "autumn" if is_groq_hook else "nova"
-            if not defaults.get("tts_response_format"):
-                defaults["tts_response_format"] = "wav" if is_groq_hook else "mp3"
-            if not defaults.get("tts_speed"):
-                defaults["tts_speed"] = 1.0
+                if not defaults.get("tts_voice"):
+                    defaults["tts_voice"] = "autumn" if is_groq_hook else "nova"
+                if not defaults.get("tts_response_format"):
+                    defaults["tts_response_format"] = "wav" if is_groq_hook else "mp3"
+                if not defaults.get("tts_speed"):
+                    defaults["tts_speed"] = 1.0
 
-        return defaults
+            return defaults
 
     def get_provider_mode(self) -> str:
         """Get the user-facing provider mode."""
@@ -354,17 +368,18 @@ class ConfigManager:
 
     def build_provider_router(self):
         """Build the runtime provider router from persisted config and .env data."""
-        from utils.provider_router import ProviderRouter
+        with self._lock:
+            from utils.provider_router import ProviderRouter
 
-        ai_providers = {}
-        for provider_key in self._get_default_ai_providers().keys():
-            ai_providers[provider_key] = self.get_ai_provider_config(provider_key)
+            ai_providers = {}
+            for provider_key in self._get_default_ai_providers().keys():
+                ai_providers[provider_key] = self.get_ai_provider_config(provider_key)
 
-        return ProviderRouter(
-            ai_providers=ai_providers,
-            provider_mode=self.get_provider_mode(),
-            env_lookup_paths=self.get_runtime_env_lookup_paths(),
-        )
+            return ProviderRouter(
+                ai_providers=ai_providers,
+                provider_mode=self.get_provider_mode(),
+                env_lookup_paths=self.get_runtime_env_lookup_paths(),
+            )
 
     def get_provider_status_snapshot(self) -> dict:
         """Return a redacted runtime provider status summary."""
@@ -376,10 +391,11 @@ class ConfigManager:
 
     def save_config(self, config):
         """Save configuration dict to file atomically."""
-        temp_path = self.config_file.with_suffix(".tmp")
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
-        os.replace(temp_path, self.config_file)
+        with self._lock:
+            temp_path = self.config_file.with_suffix(".tmp")
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2)
+            os.replace(temp_path, self.config_file)
 
     def _build_campaign_catalog(self, campaigns: list[dict]) -> list[dict]:
         """Build lightweight config summaries from canonical campaign manifests."""
@@ -397,14 +413,15 @@ class ConfigManager:
 
     def _sync_campaign_catalog(self, campaigns: list[dict]):
         """Mirror canonical campaign manifests into lightweight config state."""
-        catalog = self._build_campaign_catalog(campaigns)
-        if self.config.get("campaigns") != catalog:
-            self.config["campaigns"] = catalog
-            self.save()
+        with self._lock:
+            catalog = self._build_campaign_catalog(campaigns)
+            if self.config.get("campaigns") != catalog:
+                self.config["campaigns"] = catalog
+                self.save()
 
     def _normalize_campaign_manifest(self, campaign_data: dict) -> dict:
         """Normalize a campaign manifest into the additive canonical shape."""
-        now = datetime.utcnow().replace(microsecond=0).isoformat()
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         normalized = campaign_data.copy() if isinstance(campaign_data, dict) else {}
 
         normalized["id"] = str(normalized.get("id", "")).strip()
@@ -494,25 +511,26 @@ class ConfigManager:
 
     def get_campaign(self, campaign_id: str) -> dict | None:
         """Load a single canonical campaign manifest by id."""
-        if not campaign_id:
-            return None
+        with self._lock:
+            if not campaign_id:
+                return None
 
-        manifest_path = self.get_campaign_manifest_path(campaign_id)
-        if not manifest_path.exists():
-            return None
+            manifest_path = self.get_campaign_manifest_path(campaign_id)
+            if not manifest_path.exists():
+                return None
 
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            campaign_data = json.load(f)
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                campaign_data = json.load(f)
 
-        campaign_data.setdefault("id", campaign_id)
-        return self._normalize_campaign_manifest(campaign_data)
+            campaign_data.setdefault("id", campaign_id)
+            return self._normalize_campaign_manifest(campaign_data)
 
     def create_campaign(self, name: str, channel_url: str = "") -> dict:
         """Create and persist a new canonical campaign manifest."""
         now = datetime.utcnow().replace(microsecond=0).isoformat()
         campaign_name = str(name).strip() or "Untitled Campaign"
         campaign_id = (
-            f"camp_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+            f"camp_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         )
         campaign_data = {
             "id": campaign_id,
@@ -542,7 +560,7 @@ class ConfigManager:
             raise FileNotFoundError(f"Campaign not found: {campaign_id}")
 
         campaign["name"] = str(new_name).strip() or campaign["name"]
-        campaign["updated_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
+        campaign["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         updated = self._write_campaign_manifest(campaign)
         self._sync_campaign_catalog(self.list_campaigns())
         return updated
@@ -553,7 +571,7 @@ class ConfigManager:
         if not campaign:
             raise FileNotFoundError(f"Campaign not found: {campaign_id}")
 
-        now = datetime.utcnow().replace(microsecond=0).isoformat()
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         campaign["status"] = "archived"
         campaign["updated_at"] = now
         campaign["archived_at"] = now
@@ -563,31 +581,34 @@ class ConfigManager:
 
     def update_campaign(self, campaign_id: str, **changes) -> dict:
         """Update an existing campaign manifest with additive field changes."""
-        campaign = self.get_campaign(campaign_id)
-        if not campaign:
-            raise FileNotFoundError(f"Campaign not found: {campaign_id}")
+        with self._lock:
+            campaign = self.get_campaign(campaign_id)
+            if not campaign:
+                raise FileNotFoundError(f"Campaign not found: {campaign_id}")
 
-        for key, value in changes.items():
-            if key == "sync_state" and isinstance(value, dict):
-                sync_state = campaign.get("sync_state", {}).copy()
-                sync_state.update(value)
-                campaign["sync_state"] = sync_state
-            else:
-                campaign[key] = value
+            for key, value in changes.items():
+                if key == "sync_state" and isinstance(value, dict):
+                    sync_state = campaign.get("sync_state", {}).copy()
+                    sync_state.update(value)
+                    campaign["sync_state"] = sync_state
+                else:
+                    campaign[key] = value
 
-        campaign["updated_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
-        updated = self._write_campaign_manifest(campaign)
-        self._sync_campaign_catalog(self.list_campaigns())
-        return updated
+            campaign["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+            updated = self._write_campaign_manifest(campaign)
+            self._sync_campaign_catalog(self.list_campaigns())
+            return updated
 
     def get(self, key, default=None):
         """Get configuration value"""
-        return self.config.get(key, default)
+        with self._lock:
+            return self.config.get(key, default)
 
     def set(self, key, value):
         """Set configuration value and save"""
-        self.config[key] = value
-        self.save()
+        with self._lock:
+            self.config[key] = value
+            self.save()
 
     def get_campaign_manifest_path(self, campaign_id: str) -> Path:
         """Get canonical campaign manifest path under output/campaigns."""

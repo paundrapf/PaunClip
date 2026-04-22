@@ -4,6 +4,7 @@ Storage helpers for campaign/session manifests and clip discovery.
 
 import copy
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -675,26 +676,39 @@ def normalize_session_manifest(
     return normalized
 
 
-def load_session_manifest(session_manifest_path: Path | str) -> dict:
+def load_session_manifest(session_manifest_path: Path | str) -> dict | None:
     """Load and normalize a session manifest from disk."""
     manifest_path = Path(session_manifest_path)
-    with open(manifest_path, "r", encoding="utf-8") as f:
-        session_data = json.load(f)
-
-    return normalize_session_manifest(session_data, manifest_path.parent)
+    if not manifest_path.exists():
+        return None
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            session_data = json.load(f)
+        return normalize_session_manifest(session_data, manifest_path.parent)
+    except (json.JSONDecodeError, UnicodeDecodeError, KeyError) as e:
+        from utils.logger import log_error
+        log_error(f"Corrupt session manifest: {manifest_path}", e)
+        backup = manifest_path.with_suffix('.json.corrupt')
+        manifest_path.rename(backup)
+        return None
 
 
 def write_session_manifest(session_dir: Path | str, session_data: dict) -> Path:
     """Write a normalized session manifest and return its path."""
     session_path = Path(session_dir)
     session_path.mkdir(parents=True, exist_ok=True)
-    session_manifest_path = session_path / SESSION_MANIFEST_FILENAME
+    manifest_path = session_path / SESSION_MANIFEST_FILENAME
+    temp_path = manifest_path.with_suffix('.tmp')
+
     normalized = normalize_session_manifest(session_data, session_path)
 
-    with open(session_manifest_path, "w", encoding="utf-8") as f:
+    with open(temp_path, "w", encoding="utf-8") as f:
         json.dump(normalized, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
 
-    return session_manifest_path
+    os.replace(temp_path, manifest_path)
+    return manifest_path
 
 
 def discover_session_manifests(output_dir: Path | str) -> list[Path]:

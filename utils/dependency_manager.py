@@ -140,26 +140,25 @@ def get_deno_download_url():
 
 def download_file(url: str, dest_path: Path, progress_callback=None):
     """Download file with progress tracking
-    
+
     Args:
         url: Download URL
         dest_path: Destination file path
         progress_callback: Optional callback(downloaded, total) for progress
-    
+
     Returns:
         bool: True if successful, False otherwise
     """
     try:
         debug_log(f"Downloading from: {url}")
-        
+
         # Create parent directory if not exists
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Create SSL context - try with certifi first, then unverified as fallback
+
         import ssl
-        
+
         ssl_context = None
-        
+
         # Try to use certifi certificates first
         try:
             import certifi
@@ -167,19 +166,14 @@ def download_file(url: str, dest_path: Path, progress_callback=None):
             debug_log("Using certifi SSL certificates")
         except ImportError:
             debug_log("certifi not available, trying default SSL context")
-        
+
         # If certifi not available, try default context
         if ssl_context is None:
             try:
                 ssl_context = ssl.create_default_context()
             except Exception as e:
                 debug_log(f"Default SSL context failed: {e}")
-        
-        # If still failing, use unverified context (less secure but works)
-        if ssl_context is None:
-            ssl_context = ssl._create_unverified_context()
-            debug_log("Using unverified SSL context (fallback)")
-        
+
         # Create request with User-Agent header (GitHub requires this)
         request = urllib.request.Request(
             url,
@@ -187,37 +181,44 @@ def download_file(url: str, dest_path: Path, progress_callback=None):
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
         )
-        
+
         try:
             response = urllib.request.urlopen(request, context=ssl_context, timeout=120)
         except ssl.SSLCertVerificationError:
-            # Fallback to unverified context if SSL verification fails
-            debug_log("SSL verification failed, using unverified context")
+            # Only fall back to unverified context if verified attempt fails
+            debug_log("WARNING: SSL verification failed, falling back to unverified context")
             ssl_context = ssl._create_unverified_context()
             response = urllib.request.urlopen(request, context=ssl_context, timeout=120)
-        
+
         total_size = int(response.headers.get('Content-Length', 0))
         debug_log(f"Total size: {total_size} bytes")
-        
+
         downloaded = 0
         block_size = 8192
-        
+
         with open(dest_path, 'wb') as f:
             while True:
                 buffer = response.read(block_size)
                 if not buffer:
                     break
-                
+
                 downloaded += len(buffer)
                 f.write(buffer)
-                
+
                 if progress_callback:
                     progress_callback(downloaded, total_size)
-        
+
         response.close()
+
+        # Basic integrity check: verify downloaded size matches Content-Length
+        if total_size > 0 and downloaded != total_size:
+            debug_log(f"WARNING: Download size mismatch (expected {total_size}, got {downloaded})")
+            dest_path.unlink(missing_ok=True)
+            return False
+
         debug_log(f"Downloaded to: {dest_path}")
         return True
-        
+
     except Exception as e:
         debug_log(f"Download error: {e}")
         import traceback

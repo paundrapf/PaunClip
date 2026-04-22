@@ -3,6 +3,7 @@ Runtime provider routing for task-scoped AI clients.
 """
 
 import copy
+import threading
 
 from openai import OpenAI
 
@@ -40,6 +41,7 @@ class ProviderRouter:
 
         self.env_lookup_paths = list(env_lookup_paths or [])
         self.groq_pool = GroqKeyPool.from_env_lookup_order(self.env_lookup_paths)
+        self._lock = threading.RLock()
         self._task_runtime = {}
         self._last_key_ids = {}
 
@@ -97,38 +99,39 @@ class ProviderRouter:
 
     def resolve_task_provider(self, task_name: str) -> dict:
         """Resolve the runtime provider strategy for a task."""
-        task_config = self._get_task_config(task_name)
-        resolved = {
-            "task_name": task_name,
-            "mode": "openai_api",
-            "strategy": "single",
-            "base_url": str(
-                task_config.get("base_url", "https://api.openai.com/v1")
-            ).strip()
-            or "https://api.openai.com/v1",
-            "api_key": str(task_config.get("api_key", "")).strip(),
-            "model": str(task_config.get("model", "")).strip(),
-            "pool_name": None,
-            "base_url_ref": None,
-        }
-
-        if task_name == "hook_maker":
-            resolved.update(
-                self._apply_hook_defaults(task_config, resolved["base_url"])
-            )
-
-        if self.provider_mode == "groq_rotate" and task_name in ROTATED_TASKS:
-            resolved["mode"] = "groq_rotate"
-            resolved["strategy"] = "rotate"
-            resolved["base_url"] = self.groq_pool.base_url or GROQ_DEFAULT_BASE_URL
-            resolved["pool_name"] = self.groq_pool.pool_name
-            resolved["base_url_ref"] = "BASE_URL_API_GROQ"
+        with self._lock:
+            task_config = self._get_task_config(task_name)
+            resolved = {
+                "task_name": task_name,
+                "mode": "openai_api",
+                "strategy": "single",
+                "base_url": str(
+                    task_config.get("base_url", "https://api.openai.com/v1")
+                ).strip()
+                or "https://api.openai.com/v1",
+                "api_key": str(task_config.get("api_key", "")).strip(),
+                "model": str(task_config.get("model", "")).strip(),
+                "pool_name": None,
+                "base_url_ref": None,
+            }
 
             if task_name == "hook_maker":
-                resolved = self._apply_hook_defaults(resolved, resolved["base_url"])
+                resolved.update(
+                    self._apply_hook_defaults(task_config, resolved["base_url"])
+                )
 
-        self._task_runtime[task_name] = copy.deepcopy(resolved)
-        return resolved
+            if self.provider_mode == "groq_rotate" and task_name in ROTATED_TASKS:
+                resolved["mode"] = "groq_rotate"
+                resolved["strategy"] = "rotate"
+                resolved["base_url"] = self.groq_pool.base_url or GROQ_DEFAULT_BASE_URL
+                resolved["pool_name"] = self.groq_pool.pool_name
+                resolved["base_url_ref"] = "BASE_URL_API_GROQ"
+
+                if task_name == "hook_maker":
+                    resolved = self._apply_hook_defaults(resolved, resolved["base_url"])
+
+            self._task_runtime[task_name] = copy.deepcopy(resolved)
+            return resolved
 
     def is_provider_ready(self, task_name: str) -> bool:
         resolved = self.resolve_task_provider(task_name)
@@ -138,26 +141,27 @@ class ProviderRouter:
 
     def build_client(self, task_name: str):
         """Build a runtime OpenAI-compatible client for the given task."""
-        resolved = self.resolve_task_provider(task_name)
-        timeout = 600.0 if task_name == "caption_maker" else None
+        with self._lock:
+            resolved = self.resolve_task_provider(task_name)
+            timeout = 600.0 if task_name == "caption_maker" else None
 
-        if resolved.get("mode") == "groq_rotate":
-            key_record = self.groq_pool.get_next_key(task_name)
-            self._last_key_ids[task_name] = key_record.get("key_id")
-            resolved["selected_key_id"] = key_record.get("key_id")
-            resolved["api_key"] = key_record.get("api_key")
-        elif not resolved.get("api_key"):
-            raise RuntimeError(f"{task_name} provider is not configured")
+            if resolved.get("mode") == "groq_rotate":
+                key_record = self.groq_pool.get_next_key(task_name)
+                self._last_key_ids[task_name] = key_record.get("key_id")
+                resolved["selected_key_id"] = key_record.get("key_id")
+                resolved["api_key"] = key_record.get("api_key")
+            elif not resolved.get("api_key"):
+                raise RuntimeError(f"{task_name} provider is not configured")
 
-        self._task_runtime[task_name] = copy.deepcopy(resolved)
-        client_kwargs = {
-            "api_key": resolved.get("api_key"),
-            "base_url": resolved.get("base_url", "https://api.openai.com/v1"),
-        }
-        if timeout is not None:
-            client_kwargs["timeout"] = timeout
+            self._task_runtime[task_name] = copy.deepcopy(resolved)
+            client_kwargs = {
+                "api_key": resolved.get("api_key"),
+                "base_url": resolved.get("base_url", "https://api.openai.com/v1"),
+            }
+            if timeout is not None:
+                client_kwargs["timeout"] = timeout
 
-        return OpenAI(**client_kwargs)
+            return OpenAI(**client_kwargs)
 
     def get_task_runtime_config(self, task_name: str) -> dict:
         return copy.deepcopy(
@@ -224,16 +228,19 @@ class ProviderRouter:
     def mark_rate_limited(
         self, task_name: str, retry_after_seconds: float | None = None
     ):
-        key_id = self._last_key_ids.get(task_name)
-        if key_id:
-            self.groq_pool.mark_rate_limited(key_id, retry_after_seconds)
+        with self._lock:
+            key_id = self._last_key_ids.get(task_name)
+            if key_id:
+                self.groq_pool.mark_rate_limited(key_id, retry_after_seconds)
 
     def mark_failure(self, task_name: str, error_type: str = "request_failed"):
-        key_id = self._last_key_ids.get(task_name)
-        if key_id:
-            self.groq_pool.mark_failure(key_id, error_type)
+        with self._lock:
+            key_id = self._last_key_ids.get(task_name)
+            if key_id:
+                self.groq_pool.mark_failure(key_id, error_type)
 
     def mark_success(self, task_name: str):
-        key_id = self._last_key_ids.get(task_name)
-        if key_id:
-            self.groq_pool.mark_success(key_id)
+        with self._lock:
+            key_id = self._last_key_ids.get(task_name)
+            if key_id:
+                self.groq_pool.mark_success(key_id)

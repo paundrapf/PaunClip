@@ -1,9 +1,13 @@
 """FastAPI Backend Server for PaunClip."""
 
 import asyncio
+import copy
+import ipaddress
 import json
 import logging
 import requests
+import socket
+import urllib.parse
 import base64
 import threading
 from pathlib import Path
@@ -108,6 +112,69 @@ def get_campaign_api():
     )
 
 
+def _is_safe_url(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+
+    if parsed.scheme not in ("http", "https"):
+        return False
+
+    if "@" in url or "#" in url:
+        return False
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+
+    if hostname.lower() == "localhost":
+        return False
+
+    blocked_networks = [
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.168.0.0/16"),
+        ipaddress.ip_network("127.0.0.0/8"),
+        ipaddress.ip_network("169.254.0.0/16"),
+        ipaddress.ip_network("::1/128"),
+    ]
+
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if any(ip in network for network in blocked_networks):
+            return False
+    except ValueError:
+        try:
+            addrinfo = socket.getaddrinfo(hostname, None)
+            for _, _, _, _, sockaddr in addrinfo:
+                try:
+                    ip = ipaddress.ip_address(sockaddr[0])
+                    if any(ip in network for network in blocked_networks):
+                        return False
+                except ValueError:
+                    continue
+        except socket.gaierror:
+            pass
+
+    return True
+
+
+def _sanitize_provider_config(providers: dict) -> dict:
+    sanitized = copy.deepcopy(providers)
+
+    def _mask(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k == "api_key":
+                    obj[k] = "***"
+                else:
+                    _mask(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                _mask(item)
+
+    _mask(sanitized)
+    return sanitized
+
+
 # --- SSE Progress Endpoint ---
 async def sse_generator():
     last_state = None
@@ -155,7 +222,8 @@ def get_icon():
 @app.get("/api/settings/ai")
 def get_ai_settings():
     cfg = get_cfg_manager().config
-    return cfg.get("ai_providers", {})
+    providers = cfg.get("ai_providers", {})
+    return _sanitize_provider_config(providers)
 
 
 @app.get("/api/settings/provider-type")
@@ -179,6 +247,12 @@ class AISettingsPayload(BaseModel):
 def save_ai_settings(payload: AISettingsPayload):
     cfg_mgr = get_cfg_manager()
     data = payload.model_dump()
+
+    allowed_keys = {"provider_type", "highlight_finder", "caption_maker", "hook_maker", "youtube_title_maker"}
+    for key in data.keys():
+        if key not in allowed_keys:
+            raise HTTPException(status_code=400, detail=f"Invalid provider key: {key}")
+
     cfg_mgr.config["ai_providers"] = data
     provider_type = data.get("provider_type")
     if provider_type:
@@ -201,6 +275,9 @@ class ValidateKeyPayload(BaseModel):
 
 @app.post("/api/settings/validate")
 def validate_api_key(payload: ValidateKeyPayload):
+    if not _is_safe_url(payload.base_url):
+        raise HTTPException(status_code=400, detail="Invalid URL")
+
     url = payload.base_url.rstrip("/")
     if url.endswith("/v1"):
         url = f"{url}/models"
@@ -220,6 +297,9 @@ def validate_api_key(payload: ValidateKeyPayload):
 
 @app.post("/api/settings/models")
 def get_models(payload: ValidateKeyPayload):
+    if not _is_safe_url(payload.base_url):
+        raise HTTPException(status_code=400, detail="Invalid URL")
+
     url = payload.base_url.rstrip("/")
     if url.endswith("/v1"):
         url = f"{url}/models"

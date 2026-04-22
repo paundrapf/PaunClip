@@ -16,6 +16,9 @@ DEBUG_MODE = not getattr(sys, 'frozen', False)
 # Error log file path (will be set by setup_error_logging)
 ERROR_LOG_FILE = None
 
+# Global lock for concurrent error log writes
+_error_log_lock = threading.Lock()
+
 
 def setup_error_logging(app_dir: Path):
     """Setup error logging to file
@@ -36,13 +39,23 @@ def setup_error_logging(app_dir: Path):
 
 class ErrorLogWriter:
     """Custom writer that writes to both file and devnull"""
-    
+
     def __init__(self, log_file: Path):
         self.log_file = log_file
         self.terminal = sys.__stderr__  # Keep reference to original stderr
         self._file = open(log_file, 'a', encoding='utf-8')
         self._lock = threading.Lock()
-    
+
+    def close(self):
+        if self._file and not self._file.closed:
+            try:
+                self._file.close()
+            except Exception:
+                pass
+
+    def __del__(self):
+        self.close()
+
     def write(self, message):
         """Write message to log file"""
         if message.strip():  # Only write non-empty messages
@@ -81,20 +94,21 @@ def log_error(error_msg: str, exception: Exception = None):
         return
     
     try:
-        with open(ERROR_LOG_FILE, 'a', encoding='utf-8') as f:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            f.write(f"\n{'='*80}\n")
-            f.write(f"[{timestamp}] ERROR\n")
-            f.write(f"{'='*80}\n")
-            f.write(f"{error_msg}\n")
-            
-            if exception:
-                f.write(f"\nException Type: {type(exception).__name__}\n")
-                f.write(f"Exception Message: {str(exception)}\n")
-                f.write(f"\nTraceback:\n")
-                f.write(traceback.format_exc())
-            
-            f.write(f"{'='*80}\n\n")
+        with _error_log_lock:
+            with open(ERROR_LOG_FILE, 'a', encoding='utf-8') as f:
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                f.write(f"\n{'='*80}\n")
+                f.write(f"[{timestamp}] ERROR\n")
+                f.write(f"{'='*80}\n")
+                f.write(f"{error_msg}\n")
+                
+                if exception:
+                    f.write(f"\nException Type: {type(exception).__name__}\n")
+                    f.write(f"Exception Message: {str(exception)}\n")
+                    f.write(f"\nTraceback:\n")
+                    f.write(traceback.format_exc())
+                
+                f.write(f"{'='*80}\n\n")
     except Exception:
         pass  # Silently fail if can't write to log
 

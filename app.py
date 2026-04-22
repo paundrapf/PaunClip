@@ -9,6 +9,7 @@ import subprocess
 import re
 import urllib.request
 import io
+import atexit
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
 from openai import OpenAI
@@ -74,10 +75,14 @@ from pages.session_workspace_page import SessionWorkspacePage
 # Fix for PyInstaller windowed mode (console=False)
 # When built with console=False, sys.stdout and sys.stderr are None
 # This causes 'NoneType' object has no attribute 'flush' errors
+_stdout_file = None
+_stderr_file = None
 if sys.stdout is None:
-    sys.stdout = open(os.devnull, "w")
+    _stdout_file = open(os.devnull, "w")
+    sys.stdout = _stdout_file
 if sys.stderr is None:
-    sys.stderr = open(os.devnull, "w")
+    _stderr_file = open(os.devnull, "w")
+    sys.stderr = _stderr_file
 
 APP_DIR = get_app_dir()
 BUNDLE_DIR = get_bundle_dir()
@@ -104,6 +109,7 @@ class YTShortClipperApp(ctk.CTk):
         self.current_thumbnail = None
         self.processing = False
         self.cancelled = False
+        self._cancel_event = threading.Event()
         self.token_usage = {
             "gpt_input": 0,
             "gpt_output": 0,
@@ -1553,7 +1559,13 @@ class YTShortClipperApp(ctk.CTk):
             try:
                 with open(data_file, "r", encoding="utf-8") as f:
                     clip_data = json.load(f)
-            except Exception:
+            except json.JSONDecodeError as e:
+                from utils.logger import log_error
+                log_error(f"Corrupt clip metadata: {data_file}", e)
+                clip_data = {}
+            except Exception as e:
+                from utils.logger import log_error
+                log_error(f"Error reading clip metadata: {data_file}", e)
                 clip_data = {}
 
             clip_records.append(
@@ -2185,6 +2197,7 @@ class YTShortClipperApp(ctk.CTk):
 
         self.processing = True
         self.cancelled = False
+        self._cancel_event.clear()
         self.token_usage = {
             "gpt_input": 0,
             "gpt_output": 0,
@@ -2337,7 +2350,7 @@ class YTShortClipperApp(ctk.CTk):
             if hasattr(self, "yt_dot"):
                 self.yt_dot.configure(text_color="#e74c3c")  # Red
                 self.yt_status_label_home.configure(text="Not connected")
-        except:
+        except Exception:
             self.youtube_connected = False
             if hasattr(self, "yt_dot"):
                 self.yt_dot.configure(text_color="#e74c3c")  # Red
@@ -2865,7 +2878,7 @@ class YTShortClipperApp(ctk.CTk):
         if not self.client and not self._hydrate_provider_runtime(update_ui=True):
             messagebox.showerror(
                 "Error",
-                "Configure API settings first!\nClick ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â button.",
+                "Configure API settings first!\nClick the Settings button.",
             )
             return
 
@@ -2873,7 +2886,7 @@ class YTShortClipperApp(ctk.CTk):
             num_clips = int(self.clips_var.get())
             if not 1 <= num_clips <= 10:
                 raise ValueError()
-        except:
+        except (ValueError, TypeError):
             messagebox.showerror("Error", "Clips must be 1-10!")
             return
 
@@ -2920,6 +2933,7 @@ class YTShortClipperApp(ctk.CTk):
         # Reset UI
         self.processing = True
         self.cancelled = False
+        self._cancel_event.clear()
         self.token_usage = {
             "gpt_input": 0,
             "gpt_output": 0,
@@ -3046,7 +3060,7 @@ class YTShortClipperApp(ctk.CTk):
                 token_callback=lambda a, b, c, d: self.after(
                     0, lambda: self.update_tokens(a, b, c, d)
                 ),
-                cancel_check=lambda: self.cancelled,
+                cancel_check=self._cancel_event,
             )
 
             # Enable GPU acceleration if configured
@@ -3195,7 +3209,7 @@ class YTShortClipperApp(ctk.CTk):
                 token_callback=lambda a, b, c, d: self.after(
                     0, lambda: self.update_tokens(a, b, c, d)
                 ),
-                cancel_check=lambda: self.cancelled,
+                cancel_check=self._cancel_event,
             )
 
             try:
@@ -3285,7 +3299,7 @@ class YTShortClipperApp(ctk.CTk):
                 token_callback=lambda a, b, c, d: self.after(
                     0, lambda: self.update_tokens(a, b, c, d)
                 ),
-                cancel_check=lambda: self.cancelled,
+                cancel_check=self._cancel_event,
             )
 
             result = core.find_highlights_from_local_video(
@@ -3438,7 +3452,7 @@ class YTShortClipperApp(ctk.CTk):
                 token_callback=lambda a, b, c, d: self.after(
                     0, lambda: self.update_tokens(a, b, c, d)
                 ),
-                cancel_check=lambda: self.cancelled,
+                cancel_check=self._cancel_event,
             )
 
             session_data = self._run_campaign_phase_one(core, campaign, video)
@@ -3821,6 +3835,7 @@ class YTShortClipperApp(ctk.CTk):
         # Reset UI for clipping
         self.processing = True
         self.cancelled = False
+        self._cancel_event.clear()
 
         # Reset clipping page UI
         self.pages["clipping"].reset_ui()
@@ -3934,7 +3949,7 @@ class YTShortClipperApp(ctk.CTk):
                 b,
                 c,
                 d: None,  # No token tracking for clipping
-                cancel_check=lambda: self.cancelled,
+                cancel_check=self._cancel_event,
             )
 
             # Enable GPU acceleration if configured
@@ -3989,7 +4004,7 @@ class YTShortClipperApp(ctk.CTk):
                 # Update UI
                 self.pages["clipping"].update_progress(current, total, title)
                 self.pages["clipping"].update_status(status)
-            except:
+            except Exception:
                 # Fallback: just update status
                 self.pages["clipping"].update_status(status)
         else:
@@ -3999,6 +4014,7 @@ class YTShortClipperApp(ctk.CTk):
     def cancel_processing(self):
         if messagebox.askyesno("Cancel", "Are you sure you want to cancel?"):
             self.cancelled = True
+            self._cancel_event.set()
             # Update both pages
             if "processing" in self.pages:
                 self.pages["processing"].update_status(
@@ -4178,7 +4194,7 @@ class YTShortClipperApp(ctk.CTk):
                 elif p1 < p2:
                     return -1
             return 0
-        except:
+        except Exception:
             return 0
 
     def _show_update_notification(
@@ -4216,11 +4232,28 @@ def handle_exception(exc_type, exc_value, exc_traceback):
             msg += f"Error details saved to:\n{error_log}\n\n"
         msg += "Please report this issue with the error.log file."
         mb.showerror("Unexpected Error", msg)
-    except:
+    except Exception:
         pass
 
     # Call default handler
     sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+
+def _cleanup_stdio():
+    global _stdout_file, _stderr_file
+    if _stdout_file:
+        try:
+            _stdout_file.close()
+        except Exception:
+            pass
+    if _stderr_file:
+        try:
+            _stderr_file.close()
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_stdio)
 
 
 def main():

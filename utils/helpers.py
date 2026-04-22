@@ -8,57 +8,57 @@ import shutil
 from pathlib import Path
 
 
-def get_app_dir():
+def get_app_dir() -> Path:
     """Get application directory"""
     if getattr(sys, 'frozen', False):
         return Path(sys.executable).parent
     return Path(__file__).parent.parent
 
 
-def get_bundle_dir():
+def get_bundle_dir() -> Path:
     """Get bundled resources directory"""
     if getattr(sys, 'frozen', False):
         return Path(sys._MEIPASS) if hasattr(sys, '_MEIPASS') else get_app_dir()
     return get_app_dir()
 
 
-def get_ffmpeg_path():
+def get_ffmpeg_path() -> str:
     """Get FFmpeg executable path
-    
+
     Checks in order:
     1. Bundled ffmpeg in app_dir/ffmpeg/ folder (downloaded via Library page)
     2. ffmpeg in system PATH
     3. Default "ffmpeg" command
     """
     app_dir = get_app_dir()
-    
+
     # Check bundled ffmpeg (works for both frozen and development)
     if sys.platform.startswith('win'):
         bundled = app_dir / "ffmpeg" / "ffmpeg.exe"
     else:
         bundled = app_dir / "ffmpeg" / "ffmpeg"
-    
+
     if bundled.exists():
         return str(bundled)
-    
+
     # Try to find ffmpeg in PATH
     ffmpeg_in_path = shutil.which("ffmpeg")
     if ffmpeg_in_path:
         return ffmpeg_in_path
-    
+
     # Fallback to command name
     return "ffmpeg"
 
 
-def get_ytdlp_path():
+def get_ytdlp_path() -> str:
     """Get yt-dlp executable path or check if module is available
-    
+
     Checks in order:
     1. yt-dlp Python module (preferred - bundled with PyInstaller)
     2. Bundled yt-dlp.exe (Windows)
     3. yt-dlp in system PATH
     4. Default "yt-dlp" command
-    
+
     Returns:
         str: Path to yt-dlp executable, or "yt_dlp_module" if using Python module
     """
@@ -68,22 +68,22 @@ def get_ytdlp_path():
         return "yt_dlp_module"  # Special marker to use module instead of subprocess
     except ImportError:
         pass
-    
+
     if getattr(sys, 'frozen', False):
         bundled = get_app_dir() / "yt-dlp.exe"
         if bundled.exists():
             return str(bundled)
-    
+
     # Try to find yt-dlp in PATH
     yt_dlp_path = shutil.which("yt-dlp")
     if yt_dlp_path:
         return yt_dlp_path
-    
+
     # Fallback to command name (will work if it's in system PATH)
     return "yt-dlp"
 
 
-def is_ytdlp_module_available():
+def is_ytdlp_module_available() -> bool:
     """Check if yt-dlp Python module is available"""
     try:
         import yt_dlp
@@ -92,35 +92,35 @@ def is_ytdlp_module_available():
         return False
 
 
-def get_deno_path():
+def get_deno_path() -> str | None:
     """Get Deno executable path (required for yt-dlp --remote-components)
-    
+
     Checks in order:
     1. Bundled deno in app_dir/bin/ folder (downloaded via Library page)
     2. deno in system PATH
     3. None if not found
     """
     app_dir = get_app_dir()
-    
+
     # Check bundled deno (works for both frozen and development)
     if sys.platform.startswith('win'):
         bundled = app_dir / "bin" / "deno.exe"
     else:
         bundled = app_dir / "bin" / "deno"
-    
+
     if bundled.exists():
         return str(bundled)
-    
+
     # Try to find deno in PATH
     deno_path = shutil.which("deno")
     if deno_path:
         return deno_path
-    
+
     # Not found
     return None
 
 
-def extract_video_id(url: str) -> str:
+def extract_video_id(url: str) -> str | None:
     """Extract YouTube video ID from URL"""
     patterns = [
         r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
