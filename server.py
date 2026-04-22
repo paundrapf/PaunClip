@@ -38,6 +38,7 @@ config_file = str(app_dir / "config.json")
 output_dir = str(app_dir / "output")
 
 # Mount output directory to serve master.mp4 files directly
+# TODO: add auth middleware before public deployment
 Path(output_dir).mkdir(parents=True, exist_ok=True)
 app.mount("/output", StaticFiles(directory=output_dir), name="output")
 
