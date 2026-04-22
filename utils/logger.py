@@ -4,6 +4,7 @@ Logging utilities for YT Short Clipper
 
 import sys
 import os
+import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -39,22 +40,28 @@ class ErrorLogWriter:
     def __init__(self, log_file: Path):
         self.log_file = log_file
         self.terminal = sys.__stderr__  # Keep reference to original stderr
+        self._file = open(log_file, 'a', encoding='utf-8')
+        self._lock = threading.Lock()
     
     def write(self, message):
         """Write message to log file"""
         if message.strip():  # Only write non-empty messages
             try:
-                with open(self.log_file, 'a', encoding='utf-8') as f:
+                with self._lock:
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    f.write(f"[{timestamp}] {message}")
+                    self._file.write(f"[{timestamp}] {message}")
                     if not message.endswith('\n'):
-                        f.write('\n')
+                        self._file.write('\n')
+                    self._file.flush()
             except Exception:
                 pass  # Silently fail if can't write to log
     
     def flush(self):
         """Flush - required for file-like object"""
-        pass
+        try:
+            self._file.flush()
+        except Exception:
+            pass
 
 
 def debug_log(msg):
