@@ -5,6 +5,7 @@ import json
 import logging
 import requests
 import base64
+import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -52,9 +53,9 @@ class ProgressState:
     def __init__(self):
         self.status = "idle"
         self.progress = 0.0
-        self.task_type = None
-        self.active_session_id = None
-        self.active_campaign_id = None
+        self.task_type: Optional[str] = None
+        self.active_session_id: Optional[str] = None
+        self.active_campaign_id: Optional[str] = None
         self.is_running = False
 
     def to_dict(self):
@@ -69,17 +70,21 @@ class ProgressState:
 
 
 state = ProgressState()
+_state_lock = threading.Lock()
 
 
 def _on_status_update(message: str):
-    state.status = str(message)
+    with _state_lock:
+        state.status = str(message)
 
 
 def _on_progress_update(progress: float):
     try:
-        state.progress = float(progress)
+        with _state_lock:
+            state.progress = float(progress)
     except Exception:
-        state.progress = 0.0
+        with _state_lock:
+            state.progress = 0.0
 
 
 def get_cfg_manager():
@@ -122,7 +127,8 @@ async def progress_stream():
 @app.get("/api/progress")
 def progress_poll():
     """Polling endpoint for progress."""
-    return state.to_dict()
+    with _state_lock:
+        return state.to_dict()
 
 
 # --- Assets & Settings ---
@@ -235,9 +241,10 @@ class StartProcessPayload(BaseModel):
 def run_processing_task(
     url: str, num_clips: int, add_captions: bool, add_hook: bool, subtitle_lang: str
 ):
-    state.is_running = True
-    state.status = "running"
-    state.progress = 0.0
+    with _state_lock:
+        state.is_running = True
+        state.status = "running"
+        state.progress = 0.0
     try:
         cfg = get_cfg_manager().config
         system_prompt = cfg.get("system_prompt", AutoClipperCore.get_default_prompt())
@@ -285,22 +292,26 @@ def run_processing_task(
         core.process(
             url, num_clips=num_clips, add_captions=add_captions, add_hook=add_hook
         )
-        state.status = "complete"
-        state.progress = 1.0
+        with _state_lock:
+            state.status = "complete"
+            state.progress = 1.0
     except Exception as e:
-        state.status = f"error: {e}"
+        with _state_lock:
+            state.status = f"error: {e}"
     finally:
-        state.is_running = False
-        state.task_type = None
+        with _state_lock:
+            state.is_running = False
+            state.task_type = None
 
 
 @app.post("/api/process/start")
 def start_processing(payload: StartProcessPayload, background_tasks: BackgroundTasks):
-    if state.is_running:
-        return {"status": "busy"}
+    with _state_lock:
+        if state.is_running:
+            return {"status": "busy"}
 
-    state.task_type = "phase_one"
-    state.active_session_id = None
+        state.task_type = "phase_one"
+        state.active_session_id = None
 
     background_tasks.add_task(
         run_processing_task,
@@ -347,11 +358,13 @@ def save_session_workspace(session_id: str, payload: dict):
 
 
 def run_session_render_task(session_id: str, payload: dict, retry_failed: bool):
-    state.is_running = True
+    with _state_lock:
+        state.is_running = True
     session_api = get_session_api()
     try:
-        state.status = "running"
-        state.progress = 0.0
+        with _state_lock:
+            state.status = "running"
+            state.progress = 0.0
         if retry_failed:
             workspace = session_api.retry_failed(
                 session_id=session_id,
@@ -367,26 +380,30 @@ def run_session_render_task(session_id: str, payload: dict, retry_failed: bool):
                 add_captions=bool(payload.get("add_captions", True)),
                 add_hook=bool(payload.get("add_hook", True)),
             )
-        state.status = "complete"
-        state.progress = 1.0
-        state.active_session_id = (workspace.get("session") or {}).get(
-            "session_id"
-        ) or state.active_session_id
+        with _state_lock:
+            state.status = "complete"
+            state.progress = 1.0
+            state.active_session_id = (workspace.get("session") or {}).get(
+                "session_id"
+            ) or state.active_session_id
     except Exception as e:
-        state.status = f"error: {e}"
+        with _state_lock:
+            state.status = f"error: {e}"
     finally:
-        state.is_running = False
-        state.task_type = None
+        with _state_lock:
+            state.is_running = False
+            state.task_type = None
 
 
 @app.post("/api/sessions/{session_id}/render")
 def render_session_selection(
     session_id: str, payload: dict, background_tasks: BackgroundTasks
 ):
-    if state.is_running:
-        return {"status": "busy"}
-    state.task_type = "session_render"
-    state.active_session_id = session_id
+    with _state_lock:
+        if state.is_running:
+            return {"status": "busy"}
+        state.task_type = "session_render"
+        state.active_session_id = session_id
     background_tasks.add_task(run_session_render_task, session_id, payload, False)
     return {"status": "started"}
 
@@ -395,10 +412,11 @@ def render_session_selection(
 def retry_session_failed(
     session_id: str, payload: dict, background_tasks: BackgroundTasks
 ):
-    if state.is_running:
-        return {"status": "busy"}
-    state.task_type = "session_retry"
-    state.active_session_id = session_id
+    with _state_lock:
+        if state.is_running:
+            return {"status": "busy"}
+        state.task_type = "session_retry"
+        state.active_session_id = session_id
     background_tasks.add_task(run_session_render_task, session_id, payload, True)
     return {"status": "started"}
 
@@ -489,29 +507,35 @@ def open_campaign_video_session(campaign_id: str, video_id: str):
 
 
 def run_campaign_fetch_task(campaign_id: str, channel_url: str):
-    state.is_running = True
+    with _state_lock:
+        state.is_running = True
     campaign_api = get_campaign_api()
     try:
-        state.status = "Fetching latest campaign videos..."
-        state.progress = 0.0
+        with _state_lock:
+            state.status = "Fetching latest campaign videos..."
+            state.progress = 0.0
         campaign_api.fetch_campaign_videos(campaign_id, channel_url=channel_url or None)
-        state.status = "complete"
-        state.progress = 1.0
+        with _state_lock:
+            state.status = "complete"
+            state.progress = 1.0
     except Exception as e:
-        state.status = f"error: {e}"
+        with _state_lock:
+            state.status = f"error: {e}"
     finally:
-        state.is_running = False
-        state.task_type = None
+        with _state_lock:
+            state.is_running = False
+            state.task_type = None
 
 
 @app.post("/api/campaigns/{campaign_id}/fetch")
 def fetch_campaign_videos(
     campaign_id: str, payload: dict, background_tasks: BackgroundTasks
 ):
-    if state.is_running:
-        return {"status": "busy"}
-    state.task_type = "campaign_fetch"
-    state.active_campaign_id = campaign_id
+    with _state_lock:
+        if state.is_running:
+            return {"status": "busy"}
+        state.task_type = "campaign_fetch"
+        state.active_campaign_id = campaign_id
     background_tasks.add_task(
         run_campaign_fetch_task,
         campaign_id,
@@ -521,35 +545,41 @@ def fetch_campaign_videos(
 
 
 def run_campaign_process_task(campaign_id: str, video_id: str, retry_mode: bool):
-    state.is_running = True
+    with _state_lock:
+        state.is_running = True
     campaign_api = get_campaign_api()
     try:
-        state.status = "running"
-        state.progress = 0.0
+        with _state_lock:
+            state.status = "running"
+            state.progress = 0.0
         if retry_mode:
             workspace = campaign_api.retry_campaign_video(campaign_id, video_id)
         else:
             workspace = campaign_api.process_campaign_video(campaign_id, video_id)
 
-        state.active_session_id = (workspace.get("session") or {}).get("session_id")
-        state.status = "complete"
-        state.progress = 1.0
+        with _state_lock:
+            state.active_session_id = (workspace.get("session") or {}).get("session_id")
+            state.status = "complete"
+            state.progress = 1.0
     except Exception as e:
-        state.status = f"error: {e}"
+        with _state_lock:
+            state.status = f"error: {e}"
     finally:
-        state.is_running = False
-        state.task_type = None
+        with _state_lock:
+            state.is_running = False
+            state.task_type = None
 
 
 @app.post("/api/campaigns/{campaign_id}/videos/{video_id}/process")
 def process_campaign_video(
     campaign_id: str, video_id: str, background_tasks: BackgroundTasks
 ):
-    if state.is_running:
-        return {"status": "busy"}
-    state.task_type = "campaign_process"
-    state.active_campaign_id = campaign_id
-    state.active_session_id = None
+    with _state_lock:
+        if state.is_running:
+            return {"status": "busy"}
+        state.task_type = "campaign_process"
+        state.active_campaign_id = campaign_id
+        state.active_session_id = None
     background_tasks.add_task(run_campaign_process_task, campaign_id, video_id, False)
     return {"status": "started"}
 
@@ -558,11 +588,12 @@ def process_campaign_video(
 def retry_campaign_video(
     campaign_id: str, video_id: str, background_tasks: BackgroundTasks
 ):
-    if state.is_running:
-        return {"status": "busy"}
-    state.task_type = "campaign_retry"
-    state.active_campaign_id = campaign_id
-    state.active_session_id = None
+    with _state_lock:
+        if state.is_running:
+            return {"status": "busy"}
+        state.task_type = "campaign_retry"
+        state.active_campaign_id = campaign_id
+        state.active_session_id = None
     background_tasks.add_task(run_campaign_process_task, campaign_id, video_id, True)
     return {"status": "started"}
 
