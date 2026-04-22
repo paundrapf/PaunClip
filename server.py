@@ -164,24 +164,26 @@ def get_provider_type():
 
 
 class AISettingsPayload(BaseModel):
-    _provider_type: Optional[str] = None
-    highlight_finder: Optional[Dict[str, str]] = None
-    caption_maker: Optional[Dict[str, str]] = None
-    hook_maker: Optional[Dict[str, str]] = None
+    provider_type: Optional[str] = None
+    highlight_finder: Optional[Dict[str, Any]] = None
+    caption_maker: Optional[Dict[str, Any]] = None
+    hook_maker: Optional[Dict[str, Any]] = None
+    youtube_title_maker: Optional[Dict[str, Any]] = None
 
     class Config:
         extra = "allow"
 
 
 @app.post("/api/settings/ai")
-def save_ai_settings(payload: dict):
+def save_ai_settings(payload: AISettingsPayload):
     cfg_mgr = get_cfg_manager()
-    cfg_mgr.config["ai_providers"] = payload
-    provider_type = payload.get("_provider_type")
+    data = payload.model_dump()
+    cfg_mgr.config["ai_providers"] = data
+    provider_type = data.get("provider_type")
     if provider_type:
         cfg_mgr.config["provider_type"] = provider_type
 
-    highlight_finder = payload.get("highlight_finder", {})
+    highlight_finder = data.get("highlight_finder") or {}
     cfg_mgr.config["api_key"] = highlight_finder.get("api_key", "")
     cfg_mgr.config["base_url"] = highlight_finder.get(
         "base_url", "https://api.openai.com/v1"
