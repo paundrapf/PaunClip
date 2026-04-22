@@ -817,7 +817,8 @@ class AutoClipperCore:
         }:
             file_suffix = ".wav" if settings["is_groq_tts"] else ".mp3"
 
-        tts_file = tempfile.NamedTemporaryFile(suffix=file_suffix, delete=False).name
+        with tempfile.NamedTemporaryFile(suffix=file_suffix, delete=False) as tf:
+            tts_file = tf.name
 
         audio_content = getattr(tts_response, "content", None)
         if audio_content is None and hasattr(tts_response, "read"):
@@ -2540,7 +2541,8 @@ Transcript:
             )
 
         # Extract audio as compressed mp3 to minimize file size
-        audio_file = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False).name
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tf:
+            audio_file = tf.name
         cmd = [
             self.ffmpeg_path,
             "-y",
@@ -2616,9 +2618,10 @@ Transcript:
                     return ""
 
                 chunk_start = i * chunk_duration
-                chunk_file = tempfile.NamedTemporaryFile(
+                with tempfile.NamedTemporaryFile(
                     suffix=".mp3", delete=False
-                ).name
+                ) as tf:
+                    chunk_file = tf.name
 
                 cmd = [
                     self.ffmpeg_path,
