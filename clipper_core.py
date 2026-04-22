@@ -786,7 +786,9 @@ class AutoClipperCore:
         self.log(f"  🎙 TTS voice: {settings['voice']}")
 
         try:
-            tts_response = self.tts_client.audio.speech.create(**request_kwargs)
+            tts_response = self.tts_client.audio.speech.create(
+                **request_kwargs, timeout=120.0
+            )
             if self.provider_router:
                 self.provider_router.mark_success("hook_maker")
         except Exception as error:
