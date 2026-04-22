@@ -1387,6 +1387,20 @@ Transcript:
         self.set_progress("Complete!", 1.0)
         self.log(f"\n✅ Created {total_clips} clips in: {self.output_dir}")
 
+    def _resolve_downloaded_video_path(self) -> Path | None:
+        """Discover the actual downloaded video file under temp_dir."""
+        candidates = [
+            p
+            for p in self.temp_dir.glob("source.*")
+            if p.suffix.lower() not in {".srt", ".vtt", ".json", ".part", ".ytdl"}
+        ]
+        # Prefer mp4, then webm, then mkv, then any other
+        for preferred in (".mp4", ".webm", ".mkv"):
+            for c in candidates:
+                if c.suffix.lower() == preferred:
+                    return c
+        return candidates[0] if candidates else None
+
     def download_video(self, url: str) -> tuple:
         """Download video and subtitle with progress using yt-dlp module or executable"""
         self.log("[1/4] Downloading video & subtitle...")
@@ -1796,14 +1810,14 @@ Transcript:
             last_error = str(e)
             self.log(f"  ✗ Failed: {last_error[:100]}")
 
-            partial_video_path = self.temp_dir / "source.mp4"
+            partial_video_path = self._resolve_downloaded_video_path()
             subtitle_error = (
                 self.subtitle_language
                 and self.subtitle_language != "none"
                 and "subtitle" in last_error.lower()
             )
 
-            if subtitle_error and partial_video_path.exists():
+            if subtitle_error and partial_video_path is not None and partial_video_path.exists():
                 self.log(
                     "  ⚠ Subtitle download failed, but video downloaded successfully"
                 )
@@ -1868,7 +1882,9 @@ Transcript:
             else:
                 raise Exception(f"Download failed!\n\n{last_error}")
 
-        video_path = self.temp_dir / "source.mp4"
+        video_path = self._resolve_downloaded_video_path()
+        if video_path is None:
+            raise Exception("Download succeeded but no video file was found.")
         srt_path = self.temp_dir / f"source.{self.subtitle_language}.srt"
 
         if not srt_path.exists():
@@ -2161,7 +2177,9 @@ Transcript:
                     f"Download failed after trying all methods!\n\nLast error:\n{last_error}"
                 )
 
-        video_path = self.temp_dir / "source.mp4"
+        video_path = self._resolve_downloaded_video_path()
+        if video_path is None:
+            raise Exception("Download succeeded but no video file was found.")
         srt_path = self.temp_dir / f"source.{self.subtitle_language}.srt"
 
         if not srt_path.exists():
