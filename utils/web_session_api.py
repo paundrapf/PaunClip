@@ -231,6 +231,7 @@ class WebSessionAPI:
         highlight_ids: list[str] | None = None,
         add_captions: bool = True,
         add_hook: bool = True,
+        text_style: dict | None = None,
     ) -> dict:
         current_session = self._load_session_data(
             session_id=session_id,
@@ -263,6 +264,13 @@ class WebSessionAPI:
         if not session_data.get("video_path"):
             raise ValueError("The session does not have a source video path.")
 
+        if text_style:
+            for highlight in selected_highlights:
+                if isinstance(highlight, dict):
+                    editor = highlight.setdefault("editor", {})
+                    if isinstance(editor, dict):
+                        editor["text_style"] = text_style
+
         boundary = QualityEngineServiceBoundary(self._build_core())
         boundary.composition.render_selected(
             session_data["video_path"],
@@ -270,6 +278,7 @@ class WebSessionAPI:
             Path(session_data["session_dir"]),
             add_captions=add_captions,
             add_hook=add_hook,
+            text_style=text_style,
         )
         refreshed = load_session_manifest(
             Path(session_data["session_dir"]) / "session_data.json"
@@ -285,6 +294,7 @@ class WebSessionAPI:
         session_dir: str | None = None,
         add_captions: bool = True,
         add_hook: bool = True,
+        text_style: dict | None = None,
     ) -> dict:
         session_data = self._load_session_data(
             session_id=session_id, session_dir=session_dir
@@ -308,6 +318,7 @@ class WebSessionAPI:
             highlight_ids=failed_highlight_ids,
             add_captions=add_captions,
             add_hook=add_hook,
+            text_style=text_style,
         )
 
     def get_output_dir(self) -> Path:

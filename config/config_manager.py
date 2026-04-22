@@ -116,6 +116,12 @@ class ConfigManager:
             ):
                 config["campaigns"] = []
 
+            # Add render defaults if not exists
+            if "render_defaults" not in config or not isinstance(
+                config["render_defaults"], dict
+            ):
+                config["render_defaults"] = {}
+
             return config
 
         # Default config with system prompt
@@ -154,6 +160,7 @@ class ConfigManager:
                 "segment_buffer_seconds": 3.0,
             },
             "campaigns": [],
+            "render_defaults": {},
         }
         self.save_config(config)
         return config

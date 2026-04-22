@@ -5,6 +5,7 @@ import copy
 import ipaddress
 import json
 import logging
+import os
 import requests
 import socket
 import urllib.parse
@@ -28,11 +29,24 @@ from utils.web_session_api import WebSessionAPI
 
 app = FastAPI(title="PaunClip API Server")
 
-# Allow CORS for Next.js frontend (restrict to local dev origins)
+# Allow CORS for Next.js frontend (wildcard in dev, restricted in production)
+_is_production = os.environ.get("ENVIRONMENT", "development").lower() == "production"
+if _is_production:
+    _allow_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://[::1]:3000",
+        "http://0.0.0.0:3000",
+    ]
+    _allow_credentials = True
+else:
+    _allow_origins = ["*"]
+    _allow_credentials = False
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_credentials=True,
+    allow_origins=_allow_origins,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -51,6 +65,12 @@ app.mount("/output", StaticFiles(directory=output_dir), name="output")
 def read_root():
     """Redirect to Swagger UI documentation."""
     return RedirectResponse(url="/docs")
+
+
+@app.get("/api/health")
+def health_check():
+    """Lightweight health probe for frontend connectivity checks."""
+    return {"status": "ok", "version": "0.0.18"}
 
 
 # Global Progress State
@@ -179,7 +199,7 @@ def _sanitize_provider_config(providers: dict) -> dict:
 async def sse_generator():
     last_state = None
     idle_iterations = 0
-    max_idle = 120  # Break after ~60s without state changes to prevent memory leak
+    max_idle = 999999  # Effectively infinite: keep SSE stream alive indefinitely
     while True:
         with _state_lock:
             current_state = state.to_dict()
@@ -230,6 +250,84 @@ def get_ai_settings():
 def get_provider_type():
     cfg = get_cfg_manager().config
     return {"provider_type": cfg.get("provider_type", "ytclip")}
+
+
+# --- Text Styles & Render Defaults ---
+class TextStyle(BaseModel):
+    id: str
+    name: str
+    category: str
+    animation: str
+    font_family: str
+    primary_color: str
+    accent_color: str
+    stroke_color: str
+    stroke_width: int
+    shadow_intensity: float
+    position: str
+    timing: str
+
+
+class RenderDefaultsPayload(BaseModel):
+    text_style_id: Optional[str] = None
+    font_family: Optional[str] = None
+    primary_color: Optional[str] = None
+    accent_color: Optional[str] = None
+    stroke_width: Optional[int] = None
+    position: Optional[str] = None
+    timing: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+
+class RenderSessionPayload(BaseModel):
+    session_dir: Optional[str] = None
+    highlight_ids: Optional[List[str]] = None
+    add_captions: bool = True
+    add_hook: bool = True
+    text_style: Optional[Dict[str, Any]] = None
+
+    class Config:
+        extra = "allow"
+
+
+_AVAILABLE_STYLES = [
+    TextStyle(
+        id="opus-neon",
+        name="Opus Neon",
+        category="Viral",
+        animation="word-pop",
+        font_family="Impact, Arial Black, sans-serif",
+        primary_color="#FFFFFF",
+        accent_color="#00FF88",
+        stroke_color="#000000",
+        stroke_width=4,
+        shadow_intensity=0.8,
+        position="bottom-center",
+        timing="word-by-word",
+    ),
+]
+
+
+@app.get("/api/styles")
+def get_styles():
+    return {"styles": [style.model_dump() for style in _AVAILABLE_STYLES]}
+
+
+@app.get("/api/settings/render-defaults")
+def get_render_defaults():
+    cfg = get_cfg_manager().config
+    return {"render_defaults": cfg.get("render_defaults", {})}
+
+
+@app.post("/api/settings/render-defaults")
+def save_render_defaults(payload: RenderDefaultsPayload):
+    cfg_mgr = get_cfg_manager()
+    data = payload.model_dump()
+    cfg_mgr.config["render_defaults"] = data
+    cfg_mgr.save()
+    return {"status": "saved"}
 
 
 class AISettingsPayload(BaseModel):
@@ -452,6 +550,7 @@ def run_session_render_task(session_id: str, payload: dict, retry_failed: bool):
     with _state_lock:
         state.is_running = True
     session_api = get_session_api()
+    text_style = payload.get("text_style")
     try:
         with _state_lock:
             state.status = "running"
@@ -462,6 +561,7 @@ def run_session_render_task(session_id: str, payload: dict, retry_failed: bool):
                 session_dir=payload.get("session_dir"),
                 add_captions=bool(payload.get("add_captions", True)),
                 add_hook=bool(payload.get("add_hook", True)),
+                text_style=text_style,
             )
         else:
             workspace = session_api.render_selected(
@@ -470,6 +570,7 @@ def run_session_render_task(session_id: str, payload: dict, retry_failed: bool):
                 highlight_ids=payload.get("highlight_ids"),
                 add_captions=bool(payload.get("add_captions", True)),
                 add_hook=bool(payload.get("add_hook", True)),
+                text_style=text_style,
             )
         with _state_lock:
             state.status = "complete"
@@ -488,27 +589,27 @@ def run_session_render_task(session_id: str, payload: dict, retry_failed: bool):
 
 @app.post("/api/sessions/{session_id}/render")
 def render_session_selection(
-    session_id: str, payload: dict, background_tasks: BackgroundTasks
+    session_id: str, payload: RenderSessionPayload, background_tasks: BackgroundTasks
 ):
     with _state_lock:
         if state.is_running:
             return {"status": "busy"}
         state.task_type = "session_render"
         state.active_session_id = session_id
-    background_tasks.add_task(run_session_render_task, session_id, payload, False)
+    background_tasks.add_task(run_session_render_task, session_id, payload.model_dump(), False)
     return {"status": "started"}
 
 
 @app.post("/api/sessions/{session_id}/retry")
 def retry_session_failed(
-    session_id: str, payload: dict, background_tasks: BackgroundTasks
+    session_id: str, payload: RenderSessionPayload, background_tasks: BackgroundTasks
 ):
     with _state_lock:
         if state.is_running:
             return {"status": "busy"}
         state.task_type = "session_retry"
         state.active_session_id = session_id
-    background_tasks.add_task(run_session_render_task, session_id, payload, True)
+    background_tasks.add_task(run_session_render_task, session_id, payload.model_dump(), True)
     return {"status": "started"}
 
 

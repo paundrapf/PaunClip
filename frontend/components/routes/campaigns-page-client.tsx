@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, PencilLine, RefreshCw, ShieldAlert } from "lucide-react";
+import { ArrowRight, PencilLine, RefreshCw } from "lucide-react";
 
 import { InfoGrid } from "@/components/common/info-grid";
 import { SectionCard } from "@/components/common/section-card";
@@ -67,7 +67,7 @@ export function CampaignsPageClient() {
     [campaigns, selectedCampaignId],
   );
   const queueSummary = useMemo(() => buildQueueSummary(selectedDetail), [selectedDetail]);
-  const canMutate = connection === "online" && !data.is_running;
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const loadCampaigns = useCallback(async (nextSelectedId?: string | null) => {
     setIsLoading(true);
@@ -121,10 +121,11 @@ export function CampaignsPageClient() {
   async function handleCreateCampaign(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!createName.trim() || !canMutate) {
+    if (!createName.trim()) {
       return;
     }
 
+    setIsSubmitting(true);
     setError(null);
     setStatusMessage("Creating campaign...");
 
@@ -142,14 +143,17 @@ export function CampaignsPageClient() {
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Campaign creation failed.");
       setStatusMessage(null);
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
   async function handleRenameCampaign() {
-    if (!selectedCampaign || !renameName.trim() || !canMutate) {
+    if (!selectedCampaign || !renameName.trim()) {
       return;
     }
 
+    setIsSubmitting(true);
     setError(null);
     setStatusMessage("Renaming campaign...");
 
@@ -162,11 +166,13 @@ export function CampaignsPageClient() {
     } catch (renameError) {
       setError(renameError instanceof Error ? renameError.message : "Campaign rename failed.");
       setStatusMessage(null);
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
   async function handleArchiveCampaign() {
-    if (!selectedCampaign || !canMutate) {
+    if (!selectedCampaign) {
       return;
     }
 
@@ -175,6 +181,7 @@ export function CampaignsPageClient() {
       return;
     }
 
+    setIsSubmitting(true);
     setError(null);
     setStatusMessage("Archiving campaign...");
 
@@ -187,6 +194,8 @@ export function CampaignsPageClient() {
     } catch (archiveError) {
       setError(archiveError instanceof Error ? archiveError.message : "Campaign archive failed.");
       setStatusMessage(null);
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -233,12 +242,9 @@ export function CampaignsPageClient() {
         }
       >
         {connection === "offline" ? (
-          <SurfaceCard className="border-danger/20 bg-danger/8">
-            <div className="flex items-start gap-3 text-sm leading-6 text-muted-strong">
-              <ShieldAlert className="mt-0.5 size-4 shrink-0 text-danger" />
-              <p>Mutating actions are disabled until the FastAPI backend reconnects. The page avoids inventing cached state for create, rename, or archive workflows.</p>
-            </div>
-          </SurfaceCard>
+          <div className="rounded-card border border-danger/20 bg-danger/8 px-4 py-3 text-sm leading-6 text-muted-strong">
+            Backend appears offline. You can still edit fields; actions will be sent when the connection returns.
+          </div>
         ) : null}
 
         {statusMessage ? (
@@ -260,7 +266,6 @@ export function CampaignsPageClient() {
                 <span className="font-medium text-foreground-soft">Campaign name</span>
                 <input
                   className="min-h-11 rounded-pill border border-stroke bg-panel-muted px-4 text-foreground outline-none transition focus:border-stroke-strong"
-                  disabled={!canMutate}
                   onChange={(event) => setCreateName(event.target.value)}
                   placeholder="PaunClip Shorts"
                   value={createName}
@@ -270,7 +275,6 @@ export function CampaignsPageClient() {
                 <span className="font-medium text-foreground-soft">YouTube channel URL</span>
                 <input
                   className="min-h-11 rounded-pill border border-stroke bg-panel-muted px-4 text-foreground outline-none transition focus:border-stroke-strong"
-                  disabled={!canMutate}
                   onChange={(event) => setCreateChannelUrl(event.target.value)}
                   placeholder="https://www.youtube.com/@channel"
                   value={createChannelUrl}
@@ -278,7 +282,7 @@ export function CampaignsPageClient() {
               </label>
               <button
                 className="inline-flex min-h-11 items-center justify-center gap-2 rounded-pill border border-stroke-strong bg-brand/15 px-4 text-sm font-semibold text-foreground transition hover:border-accent/50 hover:bg-accent/12 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!canMutate || !createName.trim()}
+                disabled={isSubmitting || !createName.trim()}
                 type="submit"
               >
                 Add campaign
@@ -348,7 +352,7 @@ export function CampaignsPageClient() {
                 <div className="flex flex-wrap gap-2">
                   <button
                     className="inline-flex min-h-11 items-center gap-2 rounded-pill border border-stroke px-4 text-sm font-semibold text-foreground transition hover:border-stroke-strong hover:bg-white/6 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={!canMutate}
+                    disabled={isSubmitting}
                     onClick={() => setIsRenaming(true)}
                     type="button"
                   >
@@ -357,7 +361,7 @@ export function CampaignsPageClient() {
                   </button>
                   <button
                     className="inline-flex min-h-11 items-center gap-2 rounded-pill border border-stroke px-4 text-sm font-semibold text-foreground transition hover:border-danger/40 hover:bg-danger/8 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={!canMutate}
+                    disabled={isSubmitting}
                     onClick={() => void handleArchiveCampaign()}
                     type="button"
                   >
@@ -387,7 +391,7 @@ export function CampaignsPageClient() {
                     <div className="flex flex-wrap gap-2">
                       <button
                         className="inline-flex min-h-11 items-center justify-center rounded-pill border border-stroke-strong bg-brand/15 px-4 text-sm font-semibold text-foreground transition hover:border-accent/50 hover:bg-accent/12 disabled:cursor-not-allowed disabled:opacity-50"
-                        disabled={!canMutate || !renameName.trim()}
+                        disabled={isSubmitting || !renameName.trim()}
                         onClick={() => void handleRenameCampaign()}
                         type="button"
                       >

@@ -48,7 +48,7 @@ export function SettingsPageClient() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const canMutate = connection === "online" && !data.is_running;
+  const [isSaving, setIsSaving] = useState(false);
 
   async function loadSettings() {
     setIsLoading(true);
@@ -92,7 +92,7 @@ export function SettingsPageClient() {
 
   async function handleValidate(taskKey: ProviderTaskKey) {
     const config = normalizeConfig(settings[taskKey]);
-    if (!config.base_url || !config.api_key || !canMutate) {
+    if (!config.base_url || !config.api_key) {
       setValidationState((previous) => ({
         ...previous,
         [taskKey]: "Base URL and API key are required before validation.",
@@ -120,7 +120,7 @@ export function SettingsPageClient() {
 
   async function handleLoadModels(taskKey: ProviderTaskKey) {
     const config = normalizeConfig(settings[taskKey]);
-    if (!config.base_url || !config.api_key || !canMutate) {
+    if (!config.base_url || !config.api_key) {
       setValidationState((previous) => ({
         ...previous,
         [taskKey]: "Base URL and API key are required before model discovery.",
@@ -151,10 +151,7 @@ export function SettingsPageClient() {
   }
 
   async function handleSave() {
-    if (!canMutate) {
-      return;
-    }
-
+    setIsSaving(true);
     setError(null);
     setStatusMessage("Saving AI settings...");
 
@@ -168,6 +165,8 @@ export function SettingsPageClient() {
     } catch (saveError) {
       setStatusMessage(null);
       setError(saveError instanceof Error ? saveError.message : "Settings save failed.");
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -190,6 +189,12 @@ export function SettingsPageClient() {
 
   return (
     <div className="grid gap-6">
+      {connection === "offline" ? (
+        <div className="rounded-card border border-danger/20 bg-danger/8 px-4 py-3 text-sm leading-6 text-muted-strong">
+          Backend appears offline. You can still edit settings; changes will be saved when the connection returns.
+        </div>
+      ) : null}
+
       <SectionCard
         eyebrow="Runtime configuration"
         title="Provider readiness and live settings"
@@ -201,7 +206,7 @@ export function SettingsPageClient() {
             </StatusChip>
             <button
               className="inline-flex min-h-11 items-center justify-center rounded-pill border border-stroke-strong bg-accent/10 px-4 text-sm font-semibold text-foreground transition hover:bg-accent/14 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!canMutate}
+              disabled={isSaving}
               onClick={() => void handleSave()}
               type="button"
             >
@@ -226,7 +231,6 @@ export function SettingsPageClient() {
             <button
               key={mode}
               className={`inline-flex min-h-11 items-center justify-center rounded-pill border px-4 text-sm font-semibold transition ${providerType === mode ? "border-stroke-strong bg-accent/10 text-foreground" : "border-stroke text-foreground hover:border-stroke-strong hover:bg-white/6"}`}
-              disabled={!canMutate}
               onClick={() => {
                 setProviderType(mode);
                 setSettings((previous) => ({ ...previous, _provider_type: mode }));
@@ -312,16 +316,14 @@ export function SettingsPageClient() {
 
                   <div className="flex flex-wrap gap-2">
                     <button
-                      className="inline-flex min-h-11 items-center justify-center rounded-pill border border-stroke px-4 text-sm font-semibold text-foreground transition hover:border-stroke-strong hover:bg-white/6 disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={!canMutate}
+                      className="inline-flex min-h-11 items-center justify-center rounded-pill border border-stroke px-4 text-sm font-semibold text-foreground transition hover:border-stroke-strong hover:bg-white/6"
                       onClick={() => void handleValidate(task.key)}
                       type="button"
                     >
                       Validate
                     </button>
                     <button
-                      className="inline-flex min-h-11 items-center justify-center rounded-pill border border-stroke px-4 text-sm font-semibold text-foreground transition hover:border-stroke-strong hover:bg-white/6 disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={!canMutate}
+                      className="inline-flex min-h-11 items-center justify-center rounded-pill border border-stroke px-4 text-sm font-semibold text-foreground transition hover:border-stroke-strong hover:bg-white/6"
                       onClick={() => void handleLoadModels(task.key)}
                       type="button"
                     >

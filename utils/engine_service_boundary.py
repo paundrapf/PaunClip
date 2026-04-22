@@ -1,4 +1,4 @@
-﻿from dataclasses import dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -230,6 +230,7 @@ class CompositionService:
         *,
         add_captions: bool = True,
         add_hook: bool = True,
+        text_style: dict | None = None,
     ):
         return self.core.process_selected_highlights(
             video_path,
@@ -237,6 +238,7 @@ class CompositionService:
             session_dir,
             add_captions=add_captions,
             add_hook=add_hook,
+            text_style=text_style,
         )
 
 

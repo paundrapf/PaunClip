@@ -75,7 +75,7 @@ export function CampaignDetailPageClient({ campaignId }: { campaignId: string })
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   const workerActiveHere = data.is_running && data.campaign_id === campaignId;
-  const canMutate = connection === "online" && !data.is_running;
+  const [isMutating, setIsMutating] = useState(false);
   const queueSummary = useMemo(() => computeQueueSummary(detail), [detail]);
 
   const filteredVideos = useMemo(() => {
@@ -128,6 +128,7 @@ export function CampaignDetailPageClient({ campaignId }: { campaignId: string })
   }, [loadDetail, workerActiveHere]);
 
   async function runMutation(action: Promise<unknown>, successMessage: string) {
+    setIsMutating(true);
     setError(null);
     setStatusMessage(null);
 
@@ -141,6 +142,8 @@ export function CampaignDetailPageClient({ campaignId }: { campaignId: string })
       setStatusMessage(successMessage);
     } catch (mutationError) {
       setError(mutationError instanceof Error ? mutationError.message : "Queue action failed.");
+    } finally {
+      setIsMutating(false);
     }
   }
 
@@ -178,6 +181,12 @@ export function CampaignDetailPageClient({ campaignId }: { campaignId: string })
 
   return (
     <div className="grid gap-6">
+      {connection === "offline" ? (
+        <div className="rounded-card border border-danger/20 bg-danger/8 px-4 py-3 text-sm leading-6 text-muted-strong">
+          Backend appears offline. Queue actions will resume when the connection returns.
+        </div>
+      ) : null}
+
       <SectionCard
         eyebrow="Campaign queue"
         title={detail?.campaign.name || "Campaign queue"}
@@ -198,7 +207,7 @@ export function CampaignDetailPageClient({ campaignId }: { campaignId: string })
             </button>
             <button
               className="inline-flex min-h-11 items-center gap-2 rounded-pill border border-stroke-strong bg-brand/15 px-4 text-sm font-semibold text-foreground transition hover:border-accent/50 hover:bg-accent/12 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!canMutate || !detail}
+              disabled={isMutating || !detail}
               onClick={() => detail && void runMutation(campaignsApi.fetchVideos(campaignId, { channel_url: detail.campaign.channel_url || detail.channel_fetch.channel_url }), "Fetch started. The queue will refresh while the worker is active.")}
               type="button"
             >
@@ -206,7 +215,7 @@ export function CampaignDetailPageClient({ campaignId }: { campaignId: string })
             </button>
             <button
               className="inline-flex min-h-11 items-center gap-2 rounded-pill border border-stroke-strong bg-accent/10 px-4 text-sm font-semibold text-foreground transition hover:bg-accent/14 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!canMutate || !detail}
+              disabled={isMutating || !detail}
               onClick={() => void runMutation(campaignsApi.queueAll(campaignId), "Queued all rows still marked as new.")}
               type="button"
             >
@@ -324,7 +333,7 @@ export function CampaignDetailPageClient({ campaignId }: { campaignId: string })
                           {actions.includes("queue") ? (
                             <button
                               className="inline-flex min-h-11 items-center justify-center rounded-pill border border-stroke px-4 text-foreground transition hover:border-stroke-strong hover:bg-white/6 disabled:cursor-not-allowed disabled:opacity-50"
-                              disabled={!canMutate}
+                              disabled={isMutating}
                               onClick={() => void runMutation(campaignsApi.queueVideo(campaignId, video.video_id), "Queue row updated.")}
                               type="button"
                             >
@@ -334,7 +343,7 @@ export function CampaignDetailPageClient({ campaignId }: { campaignId: string })
                           {actions.includes("process") ? (
                             <button
                               className="inline-flex min-h-11 items-center justify-center rounded-pill border border-stroke-strong bg-brand/15 px-4 text-foreground transition hover:border-accent/50 hover:bg-accent/12 disabled:cursor-not-allowed disabled:opacity-50"
-                              disabled={!canMutate}
+                              disabled={isMutating}
                               onClick={() => void runMutation(campaignsApi.processVideo(campaignId, video.video_id), "Processing started. The runtime widget will follow the active row.")}
                               type="button"
                             >
@@ -344,7 +353,7 @@ export function CampaignDetailPageClient({ campaignId }: { campaignId: string })
                           {actions.includes("skip") ? (
                             <button
                               className="inline-flex min-h-11 items-center justify-center rounded-pill border border-stroke px-4 text-foreground transition hover:border-stroke-strong hover:bg-white/6 disabled:cursor-not-allowed disabled:opacity-50"
-                              disabled={!canMutate}
+                              disabled={isMutating}
                               onClick={() => void runMutation(campaignsApi.skipVideo(campaignId, video.video_id), "Queue row marked as skipped.")}
                               type="button"
                             >
@@ -354,7 +363,7 @@ export function CampaignDetailPageClient({ campaignId }: { campaignId: string })
                           {actions.includes("retry") ? (
                             <button
                               className="inline-flex min-h-11 items-center justify-center rounded-pill border border-stroke px-4 text-foreground transition hover:border-warning/40 hover:bg-warning/10 disabled:cursor-not-allowed disabled:opacity-50"
-                              disabled={!canMutate}
+                              disabled={isMutating}
                               onClick={() => void runMutation(campaignsApi.retryVideo(campaignId, video.video_id), "Retry started for the failed row.")}
                               type="button"
                             >
@@ -433,7 +442,7 @@ export function CampaignDetailPageClient({ campaignId }: { campaignId: string })
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
                         className="inline-flex min-h-10 items-center justify-center rounded-pill border border-danger/35 px-4 text-sm font-semibold text-foreground transition hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-50"
-                        disabled={!canMutate}
+                        disabled={isMutating}
                         onClick={() => void runMutation(campaignsApi.retryVideo(campaignId, video.video_id), "Retry started for the failed row.")}
                         type="button"
                       >

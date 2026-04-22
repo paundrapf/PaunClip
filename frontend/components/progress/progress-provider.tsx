@@ -9,7 +9,9 @@ interface ProgressProviderProps {
 }
 
 export function ProgressProvider({ children }: ProgressProviderProps) {
-  useEffect(() => startProgressStream(), []);
+  useEffect(() => {
+    return startProgressStream();
+  }, []);
 
   return <>{children}</>;
 }

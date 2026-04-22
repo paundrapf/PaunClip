@@ -3918,6 +3918,7 @@ Candidates:
         revision: int | None = None,
         dirty_stages: list[str] | None = None,
         stable_clip_dir: Path | None = None,
+        text_style: dict | None = None,
     ):
         """Process a single clip: cut, portrait, hook (optional), captions (optional)"""
 
@@ -3960,6 +3961,9 @@ Candidates:
         end = highlight["end_time"].replace(",", ".")
         tracking_mode = self._resolve_tracking_mode(highlight)
         caption_settings = self._resolve_caption_render_settings(highlight)
+        if text_style and isinstance(text_style, dict):
+            caption_settings = dict(caption_settings)
+            caption_settings["text_style"] = text_style
         effective_add_captions = bool(
             add_captions and caption_settings["caption_mode"] != "off"
         )
@@ -4287,6 +4291,7 @@ Candidates:
             "caption_language": self._resolve_whisper_language() or "auto",
             "caption_mode": caption_settings["caption_mode"],
             "caption_override": caption_settings["caption_override"],
+            "text_style": caption_settings.get("text_style"),
             "has_watermark": self.watermark_settings.get("enabled", False),
             "has_credit": self.credit_watermark_settings.get("enabled", False),
             "channel_name": self.channel_name,
@@ -4295,6 +4300,7 @@ Candidates:
                 "captions_enabled": effective_add_captions,
                 "caption_mode": caption_settings["caption_mode"],
                 "caption_override": caption_settings["caption_override"],
+                "text_style": caption_settings.get("text_style"),
                 "watermark_enabled": self.watermark_settings.get("enabled", False),
                 "source_credit_enabled": self.credit_watermark_settings.get(
                     "enabled", False
@@ -6007,9 +6013,14 @@ Candidates:
         )
         caption_override = re.sub(r"\s+", " ", caption_override).strip()
 
+        text_style = editor.get("text_style") or active_settings.get("text_style") or None
+        if text_style is not None and not isinstance(text_style, dict):
+            text_style = None
+
         return {
             "caption_mode": caption_mode,
             "caption_override": caption_override,
+            "text_style": text_style,
         }
 
     def _resolve_caption_style_name(self, caption_mode: str) -> str:
@@ -8042,6 +8053,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         session_dir: Path,
         add_captions: bool = True,
         add_hook: bool = True,
+        text_style: dict | None = None,
     ):
         """Phase 2: Process only selected highlights
 
@@ -8051,6 +8063,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             session_dir: Session directory for output
             add_captions: Whether to add captions
             add_hook: Whether to add hook
+            text_style: Optional text style configuration
         """
         if not selected_highlights:
             raise Exception("No highlights selected for processing")
@@ -8183,6 +8196,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     revision=revision_number,
                     dirty_stages=dirty_stages,
                     stable_clip_dir=clip_root_dir,
+                    text_style=text_style,
                 )
                 if not render_result:
                     raise Exception("Clip rendering cancelled")
