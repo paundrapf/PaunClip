@@ -110,11 +110,19 @@ def get_campaign_api():
 # --- SSE Progress Endpoint ---
 async def sse_generator():
     last_state = None
+    idle_iterations = 0
+    max_idle = 120  # Break after ~60s without state changes to prevent memory leak
     while True:
-        current_state = state.to_dict()
+        with _state_lock:
+            current_state = state.to_dict()
         if current_state != last_state:
             yield f"data: {json.dumps(current_state)}\n\n"
             last_state = current_state
+            idle_iterations = 0
+        else:
+            idle_iterations += 1
+            if idle_iterations >= max_idle:
+                break
         await asyncio.sleep(0.5)
 
 
