@@ -3,6 +3,7 @@ Configuration manager for YT Short Clipper
 """
 
 import json
+import os
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -374,9 +375,11 @@ class ConfigManager:
         self.save_config(self.config)
 
     def save_config(self, config):
-        """Save configuration dict to file"""
-        with open(self.config_file, "w") as f:
+        """Save configuration dict to file atomically."""
+        temp_path = self.config_file.with_suffix(".tmp")
+        with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
+        os.replace(temp_path, self.config_file)
 
     def _build_campaign_catalog(self, campaigns: list[dict]) -> list[dict]:
         """Build lightweight config summaries from canonical campaign manifests."""
