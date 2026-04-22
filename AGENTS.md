@@ -182,6 +182,12 @@ python webview_app.py
 - No `.github/copilot-instructions.md` file was found.
 - README contains some stale references to missing docs/files; verify repo state before trusting docs literally.
 
+## Environment & deployment notes
+- `.env.example` references `yt-short-clipper/.env`, which is stale migration residue; use `PaunClip/.env` instead.
+- `server.py` uses open CORS (`allow_origins=["*"]`); review before any public deployment.
+- `frontend/README.md` includes generic Vercel deployment text, but full deployment requires the FastAPI backend (`server.py`) to be running.
+- OneDrive path caveat: `uvicorn --reload` fails when the repo is inside a synced folder; use `python server.py` or run uvicorn without `--reload`.
+
 ## Change strategy for agents
 - Prefer small, evidence-based changes.
 - Fix bugs minimally; do not refactor unrelated code while fixing.
