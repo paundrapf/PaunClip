@@ -1,0 +1,57 @@
+{
+  "name": "paunclip",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke:pipeline": "node --conditions react-server --import tsx scripts/smoke-local-pipeline.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.1",
+    "@prisma/client": "^6.7.0",
+    "@tanstack/react-query": "^5.74.4",
+    "@trpc/client": "^11.1.2",
+    "@trpc/react-query": "^11.1.2",
+    "@trpc/server": "^11.1.2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "ffmpeg-static": "^5.2.0",
+    "lucide-react": "^0.503.0",
+    "next": "^16.2.2",
+    "openai": "^4.96.2",
+    "p-queue": "^8.1.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "server-only": "^0.0.1",
+    "superjson": "^2.2.2",
+    "tailwind-merge": "^3.2.0",
+    "zod": "^3.24.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.4",
+    "@types/node": "^22.14.1",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "eslint": "^9.25.1",
+    "eslint-config-next": "^16.2.2",
+    "postcss": "^8.5.3",
+    "prisma": "^6.7.0",
+    "tailwindcss": "^4.1.4",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.2"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

@@ -1,0 +1,176 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Campaign {
+  id            String          @id @default(cuid())
+  name          String
+  channelUrl    String?
+  channelId     String?
+  status        String          @default("active")
+  configJson    String
+  videos        CampaignVideo[]
+  sessions      Session[]
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model CampaignVideo {
+  id              String    @id @default(cuid())
+  videoId         String
+  title           String
+  videoUrl        String
+  thumbnailUrl    String?
+  durationSeconds Int?
+  publishedAt     DateTime?
+  status          String    @default("new")
+  selected        Boolean   @default(false)
+  campaignId      String
+  campaign        Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  sessionId       String?
+  session         Session?  @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([campaignId, videoId])
+  @@index([campaignId, selected])
+  @@index([status])
+}
+
+model Session {
+  id              String      @id @default(cuid())
+  status          String      @default("created")
+  stage           String      @default("pending")
+  sourceType      String      @default("youtube")
+  sourceUrl       String?
+  sourceTitle     String?
+  sourceChannel   String?
+  durationSeconds Int?
+  downloadedPath  String?
+  thumbnailPath   String?
+  configJson      String
+  transcriptJson  String?
+  campaignId      String?
+  campaign        Campaign?   @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  campaignVideos  CampaignVideo[]
+  highlights      Highlight[]
+  clips           Clip[]
+  jobs            Job[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([status, stage])
+  @@index([campaignId])
+  @@index([createdAt])
+}
+
+model Highlight {
+  id             String   @id @default(cuid())
+  startTime      Float
+  endTime        Float
+  title          String
+  description    String?
+  viralityScore  Int?
+  selected       Boolean  @default(false)
+  hookText       String?
+  status         String   @default("pending")
+  analysisJson   String?
+  sessionId      String
+  session        Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  clip           Clip?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([sessionId, selected])
+  @@index([sessionId, viralityScore])
+}
+
+model Clip {
+  id             String    @id @default(cuid())
+  title          String
+  duration       Float
+  startTime      Float
+  endTime        Float
+  masterPath     String?
+  thumbnailPath  String?
+  fileSizeMb     Float?
+  status         String    @default("pending")
+  viralityScore  Int?
+  captionBurned  Boolean   @default(false)
+  hookAdded      Boolean   @default(false)
+  renderJson     String?
+  sessionId      String
+  session        Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  highlightId    String    @unique
+  highlight      Highlight @relation(fields: [highlightId], references: [id], onDelete: Cascade)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([sessionId, status])
+  @@index([viralityScore])
+}
+
+model Job {
+  id          String     @id @default(cuid())
+  type        String
+  status      String     @default("queued")
+  progress    Int        @default(0)
+  payloadJson String
+  errorJson   String?
+  sessionId   String?
+  session     Session?   @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  steps       JobStep[]
+  events      JobEvent[]
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([status, createdAt])
+  @@index([sessionId])
+}
+
+model JobStep {
+  id         String    @id @default(cuid())
+  jobId      String
+  job        Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  name       String
+  status     String    @default("pending")
+  progress   Int       @default(0)
+  message    String?
+  errorJson  String?
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([jobId, name])
+  @@index([jobId, status])
+}
+
+model JobEvent {
+  id        String   @id @default(cuid())
+  jobId     String
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  type      String
+  message   String
+  dataJson  String?
+  createdAt DateTime @default(now())
+
+  @@index([jobId, createdAt])
+}
+
+model AppSetting {
+  key       String   @id
+  valueJson String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
