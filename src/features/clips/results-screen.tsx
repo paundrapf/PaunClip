@@ -28,10 +28,17 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
   const [showHookBanner, setShowHookBanner] = useState(true);
   const [showLogs, setShowLogs] = useState(true);
   const [previewClipId, setPreviewClipId] = useState<string | null>(null);
+  const utils = trpc.useUtils();
   const session = trpc.session.getById.useQuery(sessionId, {
     refetchInterval: (query) => {
       const data = query.state.data;
       return data?.status === "completed" || data?.status === "failed" ? false : 2000;
+    }
+  });
+  const retrySession = trpc.session.retry.useMutation({
+    onSuccess: async () => {
+      await utils.session.getById.invalidate(sessionId);
+      await utils.session.list.invalidate();
     }
   });
 
@@ -166,9 +173,22 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                 <p className="mt-1 text-sm leading-6 text-zinc-400">{statusMessage}</p>
               </div>
             </div>
-            <Badge className={isFailed ? "border-red-500/40 bg-red-500/15 text-red-100" : undefined}>
-              {isFailed ? "failed" : `${progress}%`}
-            </Badge>
+            <div className="flex shrink-0 items-center gap-2">
+              {isFailed ? (
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={retrySession.isPending}
+                  onClick={() => retrySession.mutate(sessionId)}
+                >
+                  {retrySession.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Retry
+                </Button>
+              ) : null}
+              <Badge className={isFailed ? "border-red-500/40 bg-red-500/15 text-red-100" : undefined}>
+                {isFailed ? "failed" : `${progress}%`}
+              </Badge>
+            </div>
           </div>
           <div className="h-3 overflow-hidden rounded-full bg-zinc-900">
             <div

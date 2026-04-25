@@ -41,6 +41,34 @@ export const sessionRouter = createTRPCRouter({
     return { session, job };
   }),
 
+  retry: publicProcedure.input(z.string().min(1)).mutation(async ({ input }) => {
+    registerPipelineJobs();
+
+    const existing = await db.session.findUnique({ where: { id: input } });
+    if (!existing) {
+      throw new Error(`Session not found: ${input}`);
+    }
+
+    const session = await db.session.update({
+      where: { id: input },
+      data: {
+        status: "created",
+        stage: "pending"
+      }
+    });
+
+    const job = await enqueueJob({
+      type: "single_video_pipeline",
+      sessionId: session.id,
+      payload: {
+        sourceType: session.sourceType,
+        retry: true
+      }
+    });
+
+    return { session, job };
+  }),
+
   list: publicProcedure.query(async () => {
     return db.session.findMany({
       orderBy: { createdAt: "desc" },
