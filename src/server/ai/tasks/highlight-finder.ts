@@ -1,10 +1,19 @@
 import "server-only";
 import type OpenAI from "openai";
 import type Anthropic from "@anthropic-ai/sdk";
+import type { AIProviderConfig } from "@/shared/schemas/settings";
 import { highlightSchema, type Highlight, type Transcript } from "@/shared/schemas/session";
 import { AIProviderRouter, isOpenAIClient } from "@/server/ai/provider-router";
+import { improveHighlights } from "./highlight-quality";
 
 const highlightArraySchema = highlightSchema.array();
+
+type AIClient = OpenAI | Anthropic;
+
+type Chunk = {
+  transcript: Transcript;
+  tokenEstimate: number;
+};
 
 export async function findHighlights(params: {
   router: AIProviderRouter;
@@ -12,38 +21,145 @@ export async function findHighlights(params: {
   prompt?: string;
   targetCount?: number;
 }): Promise<Highlight[]> {
+  const targetCount = params.targetCount ?? 8;
   const config = params.router.getConfig("highlightFinder");
   const client = params.router.getClient("highlightFinder");
-  const prompt = buildHighlightPrompt(params.transcript, params.prompt, params.targetCount ?? 8);
 
   if (!config.apiKey) {
-    return fallbackHighlights(params.transcript, params.targetCount ?? 5);
+    return improveHighlights(fallbackHighlights(params.transcript, targetCount), params.transcript, targetCount);
   }
 
-  const raw = isOpenAIClient(client)
-    ? await callOpenAI(client, config.model, prompt)
-    : await callAnthropic(client, config.model, prompt);
-
-  return parseHighlights(raw, params.transcript, params.targetCount ?? 5);
+  try {
+    const highlights = await findHighlightsWithAI({
+      client,
+      config,
+      transcript: params.transcript,
+      userPrompt: params.prompt,
+      targetCount
+    });
+    if (highlights.length === 0) {
+      return improveHighlights(fallbackHighlights(params.transcript, targetCount), params.transcript, targetCount);
+    }
+    return improveHighlights(highlights, params.transcript, targetCount);
+  } catch {
+    return improveHighlights(fallbackHighlights(params.transcript, targetCount), params.transcript, targetCount);
+  }
 }
 
-function buildHighlightPrompt(transcript: Transcript, userPrompt = "", targetCount: number) {
+async function findHighlightsWithAI(params: {
+  client: AIClient;
+  config: AIProviderConfig;
+  transcript: Transcript;
+  userPrompt?: string;
+  targetCount: number;
+}) {
+  const budget = getPromptTokenBudget(params.config);
+  const transcriptTokens = estimateTranscriptTokens(params.transcript);
+  if (transcriptTokens <= budget) {
+    try {
+      const prompt = buildHighlightPrompt(
+        params.transcript,
+        params.userPrompt,
+        params.targetCount,
+        "final"
+      );
+      const raw = await callAI(params.client, params.config.model, prompt);
+      return parseHighlights(raw, params.transcript, params.targetCount, false);
+    } catch (error) {
+      if (!isPromptTooLargeError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  return findHighlightsByChunks({
+    ...params,
+    chunkBudget: Math.max(1800, Math.floor(budget * 0.55))
+  });
+}
+
+async function findHighlightsByChunks(params: {
+  client: AIClient;
+  config: AIProviderConfig;
+  transcript: Transcript;
+  userPrompt?: string;
+  targetCount: number;
+  chunkBudget: number;
+}) {
+  const chunks = splitTranscriptIntoChunks(params.transcript, params.chunkBudget);
+  const candidates: Highlight[] = [];
+  const perChunkTarget = Math.max(3, Math.ceil((params.targetCount * 1.5) / Math.max(1, chunks.length)));
+
+  for (const chunk of chunks) {
+    try {
+      const prompt = buildHighlightPrompt(
+        chunk.transcript,
+        params.userPrompt,
+        perChunkTarget,
+        "chunk"
+      );
+      const raw = await callAI(params.client, params.config.model, prompt);
+      candidates.push(...parseHighlights(raw, chunk.transcript, perChunkTarget, false));
+    } catch (error) {
+      if (isPromptTooLargeError(error) && chunk.tokenEstimate > 1800) {
+        const smallerChunks = splitTranscriptIntoChunks(chunk.transcript, Math.floor(chunk.tokenEstimate / 2));
+        for (const smallerChunk of smallerChunks) {
+          try {
+            const prompt = buildHighlightPrompt(
+              smallerChunk.transcript,
+              params.userPrompt,
+              Math.max(2, perChunkTarget - 1),
+              "chunk"
+            );
+            const raw = await callAI(params.client, params.config.model, prompt);
+            candidates.push(...parseHighlights(raw, smallerChunk.transcript, perChunkTarget, false));
+          } catch {
+            // Skip a noisy chunk instead of failing the whole session.
+          }
+        }
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    return fallbackHighlights(params.transcript, params.targetCount);
+  }
+
+  return candidates;
+}
+
+function buildHighlightPrompt(
+  transcript: Transcript,
+  userPrompt = "",
+  targetCount: number,
+  mode: "chunk" | "final"
+) {
   const compactTranscript = transcript.segments
     .map((segment) => `[${segment.start.toFixed(1)}-${segment.end.toFixed(1)}] ${segment.text}`)
-    .join("\n")
-    .slice(0, 80_000);
+    .join("\n");
 
-  return `You are an expert short-form video curator.
+  const modeInstruction =
+    mode === "chunk"
+      ? "This is one transcript chunk. Return only moments that are self-contained inside this chunk."
+      : "Return the best final moments across the whole transcript.";
 
+  return `You are an expert short-form podcast clip curator.
+
+${modeInstruction}
 Find up to ${targetCount} standalone highlight clips from this transcript.
 Return JSON only. The JSON must be an object with a "highlights" array.
 Each highlight object must have:
 startTime, endTime, title, description, viralityScore, selected, hookText.
 
 Rules:
-- startTime and endTime are seconds.
-- Clip length should usually be 15-90 seconds unless the content strongly needs more.
+- startTime and endTime are seconds from the original video.
+- Prefer complete thoughts with setup, core point, and payoff/reaction.
+- Avoid clips that start in the middle of a sentence or end before the speaker finishes.
+- Podcast/story clips should usually be 24-75 seconds.
+- Short punchline clips can be shorter only when the joke is complete.
+- viralityScore is 0-100.
 - Titles are max 10 words.
+- hookText is max 12 words and should make the first second understandable.
 - If transcript language is Indonesian, use Indonesian titles and hooks.
 - User request: ${userPrompt || "No specific request"}.
 
@@ -51,20 +167,34 @@ Transcript:
 ${compactTranscript}`;
 }
 
-async function callOpenAI(client: OpenAI, model: string, prompt: string) {
-  const response = await client.chat.completions.create({
-    model,
-    messages: [
-      {
-        role: "user",
-        content: prompt
-      }
-    ],
-    temperature: 0.2,
-    response_format: { type: "json_object" }
-  });
+async function callAI(client: AIClient, model: string, prompt: string) {
+  return isOpenAIClient(client)
+    ? callOpenAI(client, model, prompt)
+    : callAnthropic(client, model, prompt);
+}
 
-  return response.choices[0]?.message.content ?? "[]";
+async function callOpenAI(client: OpenAI, model: string, prompt: string) {
+  try {
+    const response = await client.chat.completions.create({
+      model,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+      response_format: { type: "json_object" }
+    });
+
+    return response.choices[0]?.message.content ?? "[]";
+  } catch (error) {
+    if (!isResponseFormatError(error)) {
+      throw error;
+    }
+
+    const response = await client.chat.completions.create({
+      model,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2
+    });
+    return response.choices[0]?.message.content ?? "[]";
+  }
 }
 
 async function callAnthropic(client: Anthropic, model: string, prompt: string) {
@@ -78,7 +208,12 @@ async function callAnthropic(client: Anthropic, model: string, prompt: string) {
   return block?.type === "text" ? block.text : "[]";
 }
 
-function parseHighlights(raw: string, transcript: Transcript, targetCount: number) {
+function parseHighlights(
+  raw: string,
+  transcript: Transcript,
+  targetCount: number,
+  fallbackOnError: boolean
+) {
   try {
     const parsed = JSON.parse(extractJson(raw));
     const maybeArray = Array.isArray(parsed) ? parsed : parsed.highlights;
@@ -97,7 +232,7 @@ function parseHighlights(raw: string, transcript: Transcript, targetCount: numbe
     }));
     return highlightArraySchema.parse(normalized);
   } catch {
-    return fallbackHighlights(transcript, targetCount);
+    return fallbackOnError ? fallbackHighlights(transcript, targetCount) : [];
   }
 }
 
@@ -107,7 +242,7 @@ function fallbackHighlights(transcript: Transcript, targetCount: number): Highli
     return [];
   }
 
-  const clipLength = Math.min(60, Math.max(20, duration / Math.max(1, targetCount)));
+  const clipLength = Math.min(60, Math.max(24, duration / Math.max(1, targetCount)));
   return Array.from({ length: Math.min(targetCount, Math.ceil(duration / clipLength)) }).map(
     (_, index) => {
       const startTime = Math.round(index * clipLength);
@@ -123,6 +258,73 @@ function fallbackHighlights(transcript: Transcript, targetCount: number): Highli
       };
     }
   );
+}
+
+function splitTranscriptIntoChunks(transcript: Transcript, tokenBudget: number): Chunk[] {
+  const chunks: Chunk[] = [];
+  let current = emptyTranscript(transcript);
+  let currentTokens = 0;
+
+  for (const segment of transcript.segments) {
+    const segmentTokens = estimateTextTokens(segment.text) + 10;
+    if (current.segments.length > 0 && currentTokens + segmentTokens > tokenBudget) {
+      chunks.push({ transcript: current, tokenEstimate: currentTokens });
+      current = emptyTranscript(transcript);
+      currentTokens = 0;
+    }
+    current.segments.push(segment);
+    currentTokens += segmentTokens;
+  }
+
+  if (current.segments.length > 0) {
+    chunks.push({ transcript: current, tokenEstimate: currentTokens });
+  }
+
+  return chunks;
+}
+
+function emptyTranscript(transcript: Transcript): Transcript {
+  return {
+    ...transcript,
+    segments: []
+  };
+}
+
+function getPromptTokenBudget(config: AIProviderConfig) {
+  if (config.provider === "groq") {
+    return 7600;
+  }
+  if (config.provider === "gemini" || config.provider === "anthropic") {
+    return 30_000;
+  }
+  if (config.provider === "custom") {
+    return 18_000;
+  }
+  return 24_000;
+}
+
+function estimateTranscriptTokens(transcript: Transcript) {
+  return transcript.segments.reduce(
+    (total, segment) => total + estimateTextTokens(segment.text) + 10,
+    0
+  );
+}
+
+function estimateTextTokens(text: string) {
+  const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.ceil(Math.max(wordCount * 1.35, text.length / 4));
+}
+
+function isPromptTooLargeError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /request too large|tokens per minute|context_length|maximum context|413|too many tokens/i.test(
+    message
+  );
+}
+
+function isResponseFormatError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /response_format|json_object|not support.*json|unsupported.*format/i.test(message);
 }
 
 function extractJson(value: string) {
