@@ -266,15 +266,15 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
   }
 
   return (
-    <div className="mx-auto grid min-h-screen max-w-[1500px] gap-8 px-8 py-8">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <div>
+    <div className="mx-auto grid min-h-screen w-full min-w-0 max-w-[1500px] gap-8 overflow-x-clip px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+      <header className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,520px)_auto] xl:items-start">
+        <div className="min-w-0">
           <p className="text-sm font-medium text-zinc-500">{session.data.sourceType}</p>
-          <h1 className="mt-1 text-2xl font-bold">
+          <h1 className="mt-1 max-w-full break-words text-xl font-bold leading-tight sm:text-2xl">
             {session.data.sourceTitle || session.data.sourceUrl || "Local upload"}
           </h1>
         </div>
-        <div className="flex min-w-[320px] flex-1 justify-center">
+        <div className="flex min-w-0 justify-center xl:justify-self-center">
           <label className="relative w-full max-w-xl">
             <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
             <input
@@ -285,7 +285,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
             />
           </label>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 xl:justify-end">
           <Button
             variant={allVisibleHighlightsSelected ? "primary" : "secondary"}
             size="sm"
@@ -347,11 +347,11 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
         <section
           className={
             isFailed
-              ? "rounded-lg border border-red-950 bg-red-950/20 p-5"
-              : "rounded-lg border border-zinc-800 bg-zinc-950 p-5"
+              ? "min-w-0 overflow-hidden rounded-lg border border-red-950 bg-red-950/20 p-5"
+              : "min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 p-5"
           }
         >
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex min-w-0 flex-wrap items-start justify-between gap-4">
             <div className="flex min-w-0 items-start gap-3">
               {isFailed ? (
                 <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-red-300" aria-hidden="true" />
@@ -366,7 +366,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                       ? "Processing failed"
                       : "Your video is processing"}
                 </h2>
-                <p className="mt-1 text-sm leading-6 text-zinc-400">{statusMessage}</p>
+                <p className="mt-1 break-words text-sm leading-6 text-zinc-400">{statusMessage}</p>
                 {!isFailed && !isCancelled ? (
                   <p className="mt-1 text-xs text-zinc-500">ETA estimate: {etaLabel}</p>
                 ) : null}
@@ -423,9 +423,9 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
               style={{ width: `${progress}%` }}
             />
           </div>
-          <div className="mt-5 grid gap-2 md:grid-cols-4">
+          <div className="mt-5 grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {(latestJob?.steps ?? []).map((step) => (
-              <div key={step.id} className="rounded-lg border border-zinc-800 bg-black p-3">
+              <div key={step.id} className="min-w-0 rounded-lg border border-zinc-800 bg-black p-3">
                 <p className="text-sm font-semibold">{step.name.replace(/_/g, " ")}</p>
                 <p className="mt-1 text-xs text-zinc-500">{step.status}</p>
               </div>
@@ -435,15 +435,15 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
       ) : null}
 
       {highlights.length > 0 ? (
-        <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+        <section className="min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 p-5">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div>
+            <div className="min-w-0">
               <h2 className="text-lg font-bold">Highlights</h2>
               <p className="mt-1 text-sm text-zinc-500">
                 {selectedHighlightCount} selected of {highlights.length}
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="secondary"
                 size="sm"
@@ -480,14 +480,14 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
               {selectionError}
             </p>
           ) : null}
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {highlights.map((highlight) => {
               const selected = selectedHighlightIds.includes(highlight.id);
               const duration = Math.max(0, highlight.endTime - highlight.startTime);
               return (
                 <article
                   key={highlight.id}
-                  className={`rounded-lg border p-4 transition ${
+                  className={`min-w-0 rounded-lg border p-4 transition ${
                     selected
                       ? "border-lime-300/60 bg-lime-300/10"
                       : "border-zinc-800 bg-black"
@@ -513,14 +513,14 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                       <Badge>{Math.round(duration)}s</Badge>
                     </div>
                   </div>
-                  <h3 className="line-clamp-2 text-base font-semibold">{highlight.title}</h3>
+                  <h3 className="line-clamp-2 break-words text-base font-semibold">{highlight.title}</h3>
                   {highlight.description ? (
-                    <p className="mt-2 line-clamp-3 text-sm leading-6 text-zinc-500">
+                    <p className="mt-2 line-clamp-3 break-words text-sm leading-6 text-zinc-500">
                       {highlight.description}
                     </p>
                   ) : null}
-                  <div className="mt-3 flex items-center justify-between gap-3 text-xs text-zinc-500">
-                    <span>
+                  <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-3 text-xs text-zinc-500">
+                    <span className="min-w-0 break-words">
                       {highlight.startTime.toFixed(1)}s - {highlight.endTime.toFixed(1)}s
                     </span>
                     <span>{highlight.status}</span>
@@ -533,31 +533,31 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
       ) : null}
 
       {latestJob && showLogs ? (
-        <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-          <div className="mb-4 flex items-center justify-between gap-4">
-            <div>
+        <section className="min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+          <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0">
               <h2 className="text-lg font-bold">Processing logs</h2>
               <p className="mt-1 text-sm text-zinc-500">{latestJob.status} - {progress}%</p>
             </div>
             <Badge>{latestJob.events.length} events</Badge>
           </div>
-          <div className="max-h-96 overflow-auto rounded-lg border border-zinc-900 bg-black">
+          <div className="max-h-96 min-w-0 max-w-full overflow-auto rounded-lg border border-zinc-900 bg-black">
             {latestJob.events.length === 0 ? (
               <p className="p-4 text-sm text-zinc-500">No logs yet.</p>
             ) : (
               latestJob.events.map((event) => {
                 const detail = formatEventData(event.dataJson);
                 return (
-                  <article key={event.id} className="border-b border-zinc-900 p-4 last:border-b-0">
+                  <article key={event.id} className="min-w-0 overflow-hidden border-b border-zinc-900 p-4 last:border-b-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge className={eventTone(event.type)}>{event.type}</Badge>
                       <span className="font-mono text-xs text-zinc-500">
                         {new Date(event.createdAt).toLocaleTimeString()}
                       </span>
                     </div>
-                    <p className="mt-2 text-sm leading-6 text-zinc-200">{event.message}</p>
+                    <p className="mt-2 break-words text-sm leading-6 text-zinc-200">{event.message}</p>
                     {detail ? (
-                      <pre className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg bg-zinc-950 p-3 text-xs leading-5 text-zinc-400">
+                      <pre className="mt-3 max-h-36 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-lg bg-zinc-950 p-3 text-xs leading-5 text-zinc-400">
                         {detail}
                       </pre>
                     ) : null}
@@ -570,11 +570,11 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
       ) : null}
 
       {showHookBanner ? (
-        <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-          <div className="flex items-start justify-between gap-4">
-            <div>
+        <section className="min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+          <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
               <h2 className="text-xl font-bold">Auto hook</h2>
-              <p className="mt-3 max-w-4xl font-mono text-sm leading-7 text-zinc-300">
+              <p className="mt-3 max-w-4xl break-words font-mono text-sm leading-7 text-zinc-300">
                 Hooks and captions are rendered into completed clips when the selected settings enable them.
               </p>
             </div>
@@ -586,7 +586,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
       ) : null}
 
       {clips.length === 0 ? (
-        <section className="grid place-items-center rounded-lg border border-dashed border-zinc-800 py-20 text-center">
+        <section className="grid min-w-0 place-items-center rounded-lg border border-dashed border-zinc-800 py-20 text-center">
           <div>
             <h2 className="text-lg font-semibold">No clips yet</h2>
             <p className="mt-2 text-sm text-zinc-500">
@@ -595,23 +595,23 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
           </div>
         </section>
       ) : (
-        <section className="grid gap-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
+        <section className="grid min-w-0 gap-4 overflow-hidden">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
               <h2 className="text-lg font-bold">Rendered clips</h2>
               <p className="mt-1 text-sm text-zinc-500">{clips.length} clips ready for review</p>
             </div>
             <Badge>{clips.filter((clip) => clip.status === "completed").length} completed</Badge>
           </div>
-          <div className="grid grid-cols-2 gap-6 lg:grid-cols-5">
+          <div className="grid min-w-0 grid-cols-1 justify-items-center gap-6 sm:grid-cols-[repeat(auto-fit,minmax(220px,260px))] sm:justify-start sm:justify-items-stretch">
             {clips.map((clip) => {
               const clipHighlight = (session.data?.highlights ?? []).find(
                 (highlight) => highlight.id === clip.highlightId
               );
               return (
-                <article key={clip.id} className="group grid gap-3">
+                <article key={clip.id} className="group grid w-full max-w-[280px] gap-3 sm:max-w-none">
                   <button
-                    className="relative aspect-[9/16] overflow-hidden rounded-lg bg-zinc-900 text-left"
+                    className="relative aspect-[9/16] w-full overflow-hidden rounded-lg bg-zinc-900 text-left"
                     onClick={() => setPreviewClipId(clip.id)}
                   >
                     <div className="absolute left-3 top-3 z-10">
@@ -630,22 +630,22 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                       />
                     ) : (
                       <div className="grid h-full place-items-center bg-gradient-to-b from-zinc-800 via-zinc-900 to-black px-5 text-center">
-                        <p className="rounded-lg bg-white px-3 py-2 text-sm font-black uppercase text-black">
+                        <p className="line-clamp-4 break-words rounded-lg bg-white px-3 py-2 text-sm font-black uppercase text-black">
                           {clip.title}
                         </p>
                       </div>
                     )}
                     <div className="absolute inset-x-3 bottom-3 rounded-lg bg-black/75 p-3 backdrop-blur">
-                      <p className="line-clamp-2 text-sm font-bold">{clipHighlight?.hookText ?? clip.title}</p>
+                      <p className="line-clamp-2 break-words text-sm font-bold">{clipHighlight?.hookText ?? clip.title}</p>
                       {clipHighlight?.description ? (
-                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-300">
+                        <p className="mt-1 line-clamp-2 break-words text-xs leading-5 text-zinc-300">
                           {clipHighlight.description}
                         </p>
                       ) : null}
                     </div>
                   </button>
-                  <div className="flex items-start justify-between gap-3">
-                    <h3 className="line-clamp-2 text-base font-semibold">{clip.title}</h3>
+                  <div className="flex min-w-0 items-start justify-between gap-3">
+                    <h3 className="line-clamp-2 min-w-0 break-words text-base font-semibold">{clip.title}</h3>
                     <div className="flex gap-1 opacity-80 transition group-hover:opacity-100">
                       <a
                         className="grid h-9 w-9 place-items-center rounded-lg bg-zinc-900"
@@ -671,20 +671,20 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
       )}
 
       {previewClipId ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-6">
-          <div className="grid max-h-[90vh] w-full max-w-6xl gap-5 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950 p-5 lg:grid-cols-[360px_1fr]">
+        <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/80 p-4 sm:p-6">
+          <div className="grid max-h-[90vh] w-full min-w-0 max-w-6xl gap-5 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950 p-5 lg:grid-cols-[360px_minmax(0,1fr)]">
             {editor.isLoading ? (
               <div className="grid aspect-[9/16] place-items-center rounded-lg bg-black">
                 <Loader2 className="h-8 w-8 animate-spin text-zinc-500" />
               </div>
             ) : editor.data ? (
               <>
-                <div className="grid content-start gap-3">
+                <div className="grid min-w-0 content-start gap-3">
                   {editor.data.clip.masterPath ? (
                     <video
                       src={`/api/clips/${editor.data.clip.id}/download?inline=1`}
                       controls
-                      className="aspect-[9/16] w-full rounded-lg bg-black object-contain"
+                      className="aspect-[9/16] max-h-[70vh] w-full rounded-lg bg-black object-contain"
                     />
                   ) : (
                     <div className="grid aspect-[9/16] place-items-center rounded-lg bg-black px-6 text-center text-sm text-zinc-500">
@@ -728,11 +728,11 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                   </div>
                 </div>
 
-                <div className="grid content-start gap-5">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
+                <div className="grid min-w-0 content-start gap-5">
+                  <div className="flex min-w-0 items-start justify-between gap-4">
+                    <div className="min-w-0">
                       <p className="text-sm font-medium text-zinc-500">Clip editor</p>
-                      <h2 className="mt-1 text-2xl font-bold">{editor.data.clip.title}</h2>
+                      <h2 className="mt-1 break-words text-2xl font-bold">{editor.data.clip.title}</h2>
                       <p className="mt-2 text-sm text-zinc-500">
                         {editor.data.clip.status} - {formatTimestamp(editor.data.clip.duration)}
                       </p>
@@ -832,7 +832,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                     ) : null}
                   </div>
 
-                  <div className="rounded-lg border border-zinc-800 bg-black p-4">
+                  <div className="min-w-0 rounded-lg border border-zinc-800 bg-black p-4">
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <h3 className="font-semibold">Transcript slice</h3>
                       <Badge>{editor.data.transcriptSlice.segments.length} segments</Badge>
@@ -842,7 +842,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                         <p className="text-sm text-zinc-500">No transcript segment in this range.</p>
                       ) : (
                         editor.data.transcriptSlice.segments.map((segment, index) => (
-                          <p key={`${segment.start}-${index}`} className="border-b border-zinc-900 py-2 text-sm leading-6 text-zinc-300 last:border-b-0">
+                          <p key={`${segment.start}-${index}`} className="break-words border-b border-zinc-900 py-2 text-sm leading-6 text-zinc-300 last:border-b-0">
                             <span className="mr-2 font-mono text-xs text-zinc-500">
                               {segment.start.toFixed(1)}s
                             </span>

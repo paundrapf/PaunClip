@@ -22,7 +22,7 @@ const navItems = [
 
 export function AppShell({ children, active = "/" }: { children: React.ReactNode; active?: string }) {
   return (
-    <div className="min-h-screen bg-[#070707] text-white">
+    <div className="min-h-screen overflow-x-clip bg-[#070707] text-white">
       <aside className="fixed inset-y-0 left-0 z-30 flex w-[72px] flex-col border-r border-zinc-900 bg-black/70 px-3 py-5 backdrop-blur">
         <Link
           href="/"
@@ -62,7 +62,7 @@ export function AppShell({ children, active = "/" }: { children: React.ReactNode
           </Link>
         </div>
       </aside>
-      <main className="min-h-screen pl-[72px]">{children}</main>
+      <main className="min-h-screen min-w-0 max-w-full overflow-x-clip pl-[72px]">{children}</main>
     </div>
   );
 }
