@@ -157,7 +157,7 @@ export function CampaignsScreen() {
               size="sm"
               onClick={() => setLimit(value)}
             >
-              {value === 50 ? "All latest" : `${value} latest`}
+              {`${value} latest`}
             </Button>
           ))}
           <Button

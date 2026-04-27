@@ -579,7 +579,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
               </p>
             </div>
             <Button variant="ghost" size="sm" onClick={() => setShowHookBanner(false)}>
-              Disable
+              Hide
             </Button>
           </div>
         </section>

@@ -56,6 +56,9 @@ export async function runJob(jobId: string, input: CreateJobInput) {
   const logger = createJobLogger({ jobId, sessionId: input.sessionId });
 
   await markJobRunning(jobId);
+  if (input.sessionId) {
+    await updateCampaignVideoStatus(input.sessionId, "running");
+  }
   await logger.info("Job started", { type: input.type });
   await emitJobEvent({
     jobId,
@@ -94,6 +97,10 @@ export async function runJob(jobId: string, input: CreateJobInput) {
     assertJobNotCancelled(jobId);
     await handler(context);
     await completeJob(jobId);
+    if (input.sessionId) {
+      const session = await db.session.findUnique({ where: { id: input.sessionId } });
+      await updateCampaignVideoStatus(input.sessionId, session?.status ?? "completed");
+    }
     await logger.info("Job completed", { progress: 100 });
     await emitJobEvent({
       jobId,
@@ -112,6 +119,7 @@ export async function runJob(jobId: string, input: CreateJobInput) {
             stage: "cancelled"
           }
         });
+        await updateCampaignVideoStatus(input.sessionId, "cancelled");
       }
       await logger.warn("Job cancelled", { jobId });
       await emitJobEvent({
@@ -132,6 +140,7 @@ export async function runJob(jobId: string, input: CreateJobInput) {
           stage: "failed"
         }
       });
+      await updateCampaignVideoStatus(input.sessionId, "failed");
     }
     await logger.error("Job failed", { error: serializeError(error) });
     await emitJobEvent({
@@ -164,6 +173,7 @@ export async function cancelJob(jobId: string) {
         stage: "cancelled"
       }
     });
+    await updateCampaignVideoStatus(job.sessionId, "cancelled");
   }
 
   await emitJobEvent({
@@ -174,6 +184,13 @@ export async function cancelJob(jobId: string) {
   });
 
   return cancelled;
+}
+
+async function updateCampaignVideoStatus(sessionId: string, status: string) {
+  await db.campaignVideo.updateMany({
+    where: { sessionId },
+    data: { status }
+  });
 }
 
 export function getQueueStats() {
