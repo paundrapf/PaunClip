@@ -272,6 +272,7 @@ export function SettingsScreen() {
                     loadModels.isPending ||
                     settings.isLoading;
                   const voices = preset.knownVoices ?? [];
+                  const ttsFormats = preset.supportedTtsFormats ?? ["mp3", "wav", "opus"];
                   const loadedModels = modelOptions[provider.key] ?? [];
                   const modelSelectOptions = Array.from(new Set([value.model, ...loadedModels].filter(Boolean)));
 
@@ -398,11 +399,10 @@ export function SettingsScreen() {
                               label="Format"
                               value={value.ttsFormat ?? "mp3"}
                               onChange={(next) => setProviderField(provider.key, "ttsFormat", next)}
-                              options={[
-                                { label: "MP3", value: "mp3" },
-                                { label: "WAV", value: "wav" },
-                                { label: "OPUS", value: "opus" }
-                              ]}
+                              options={ttsFormats.map((format) => ({
+                                label: format.toUpperCase(),
+                                value: format
+                              }))}
                             />
                             <label className="grid gap-2">
                               <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
@@ -424,6 +424,11 @@ export function SettingsScreen() {
                               />
                             </label>
                           </div>
+                          {value.provider === "groq" ? (
+                            <p className="text-xs leading-5 text-zinc-500">
+                              Groq Orpheus currently uses WAV output and supports bracketed vocal directions in the hook text.
+                            </p>
+                          ) : null}
                         </div>
                       ) : null}
 

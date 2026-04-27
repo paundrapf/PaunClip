@@ -32,6 +32,7 @@ export type AIProviderPreset = {
     >
   >;
   knownVoices?: string[];
+  supportedTtsFormats?: Array<NonNullable<AIProviderConfig["ttsFormat"]>>;
 };
 
 export const AI_PROVIDER_PRESETS: Record<AIProviderConfig["provider"], AIProviderPreset> = {
@@ -48,7 +49,8 @@ export const AI_PROVIDER_PRESETS: Record<AIProviderConfig["provider"], AIProvide
       hookMaker: { model: "tts-1", voice: "alloy", format: "mp3" },
       youtubeTitleMaker: { model: "gpt-4.1" }
     },
-    knownVoices: ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]
+    knownVoices: ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"],
+    supportedTtsFormats: ["mp3", "wav", "opus"]
   },
   groq: {
     provider: "groq",
@@ -60,10 +62,11 @@ export const AI_PROVIDER_PRESETS: Record<AIProviderConfig["provider"], AIProvide
     defaultsByTask: {
       highlightFinder: { model: "llama-3.3-70b-versatile" },
       captionMaker: { model: "whisper-large-v3-turbo" },
-      hookMaker: { model: "orpheus-tts", voice: "tara", format: "mp3" },
+      hookMaker: { model: "canopylabs/orpheus-v1-english", voice: "hannah", format: "wav" },
       youtubeTitleMaker: { model: "llama-3.3-70b-versatile" }
     },
-    knownVoices: ["tara", "leah", "jess", "leo", "dan", "mia", "zac", "zoe", "Fritz-PlayAI"]
+    knownVoices: ["autumn", "diana", "hannah", "austin", "daniel", "troy", "fahad", "sultan", "lulwa", "noura"],
+    supportedTtsFormats: ["wav"]
   },
   anthropic: {
     provider: "anthropic",
@@ -101,7 +104,8 @@ export const AI_PROVIDER_PRESETS: Record<AIProviderConfig["provider"], AIProvide
       captionMaker: { model: "whisper-1" },
       hookMaker: { model: "tts-1", voice: "alloy", format: "mp3" },
       youtubeTitleMaker: { model: "custom-chat-model" }
-    }
+    },
+    supportedTtsFormats: ["mp3", "wav", "opus"]
   }
 };
 
@@ -116,6 +120,11 @@ export function buildProviderConfig(
 ): AIProviderConfig {
   const preset = getProviderPreset(provider);
   const defaults = preset.defaultsByTask[task];
+  const supportedTtsFormats = preset.supportedTtsFormats ?? ["mp3", "wav", "opus"];
+  const previousTtsFormat = previous?.ttsFormat;
+  const ttsFormat = previousTtsFormat && supportedTtsFormats.includes(previousTtsFormat)
+    ? previousTtsFormat
+    : defaults?.format;
 
   return {
     provider,
@@ -124,7 +133,7 @@ export function buildProviderConfig(
     model: previous?.model || defaults?.model || "",
     systemMessage: previous?.systemMessage,
     ttsVoice: previous?.ttsVoice || defaults?.voice,
-    ttsFormat: previous?.ttsFormat || defaults?.format,
+    ttsFormat,
     ttsSpeed: previous?.ttsSpeed ?? 1
   };
 }
@@ -135,18 +144,37 @@ export function normalizeAISettings(settings: AISettings): AISettings {
       const config = settings[task];
       const preset = getProviderPreset(config.provider);
       const defaults = preset.defaultsByTask[task];
+      const supportedTtsFormats = preset.supportedTtsFormats ?? ["mp3", "wav", "opus"];
+      const ttsFormat = config.ttsFormat && supportedTtsFormats.includes(config.ttsFormat)
+        ? config.ttsFormat
+        : defaults?.format;
+      const model =
+        task === "hookMaker" && config.provider === "groq" && config.model === "orpheus-tts"
+          ? defaults?.model ?? config.model
+          : config.model || defaults?.model || "";
+      const voice =
+        task === "hookMaker" && config.provider === "groq" && isLegacyGroqTtsVoice(config.ttsVoice)
+          ? defaults?.voice
+          : config.ttsVoice || defaults?.voice;
       return [
         task,
         {
           ...config,
           baseUrl: config.baseUrl || preset.defaultBaseUrl,
-          model: config.model || defaults?.model || "",
-          ttsVoice: task === "hookMaker" ? config.ttsVoice || defaults?.voice : config.ttsVoice,
+          model,
+          ttsVoice: task === "hookMaker" ? voice : config.ttsVoice,
           ttsFormat:
-            task === "hookMaker" ? config.ttsFormat || defaults?.format || "mp3" : config.ttsFormat,
+            task === "hookMaker" ? ttsFormat || "mp3" : config.ttsFormat,
           ttsSpeed: task === "hookMaker" ? config.ttsSpeed ?? 1 : config.ttsSpeed
         }
       ];
     })
   ) as AISettings;
+}
+
+function isLegacyGroqTtsVoice(voice?: string) {
+  return Boolean(
+    voice &&
+      ["tara", "leah", "jess", "leo", "dan", "mia", "zac", "zoe", "Fritz-PlayAI"].includes(voice)
+  );
 }

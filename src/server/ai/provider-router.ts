@@ -76,6 +76,18 @@ export async function validateAIProviderConfig(
     return { ok: false, message: "Hook Maker butuh voice untuk TTS." };
   }
 
+  if (
+    task === "hookMaker" &&
+    preset.supportedTtsFormats?.length &&
+    config.ttsFormat &&
+    !preset.supportedTtsFormats.includes(config.ttsFormat)
+  ) {
+    return {
+      ok: false,
+      message: `${preset.label} Hook Maker hanya mendukung format ${preset.supportedTtsFormats.join(", ")}.`
+    };
+  }
+
   const client = createAIClient(config);
 
   if (client instanceof Anthropic) {

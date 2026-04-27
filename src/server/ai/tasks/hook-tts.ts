@@ -2,6 +2,7 @@ import "server-only";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createAIClient } from "@/server/ai/provider-router";
+import { getProviderPreset } from "@/shared/constants/ai-providers";
 import type { AIProviderConfig } from "@/shared/schemas/settings";
 
 export async function generateHookSpeech(params: {
@@ -24,11 +25,20 @@ export async function generateHookSpeech(params: {
     throw new Error("Hook Maker provider does not support OpenAI-compatible TTS.");
   }
 
+  const preset = getProviderPreset(params.config.provider);
+  const supportedFormats = preset.supportedTtsFormats ?? ["mp3", "wav", "opus"];
+  const responseFormat = params.config.ttsFormat && supportedFormats.includes(params.config.ttsFormat)
+    ? params.config.ttsFormat
+    : supportedFormats[0];
+  const input = params.config.provider === "groq"
+    ? params.text.slice(0, 200)
+    : params.text;
+
   const response = await client.audio.speech.create({
     model: params.config.model,
     voice: params.config.ttsVoice as never,
-    input: params.text,
-    response_format: params.config.ttsFormat ?? "mp3",
+    input,
+    response_format: responseFormat,
     speed: params.config.ttsSpeed
   });
 
@@ -40,6 +50,6 @@ export async function generateHookSpeech(params: {
     audioPath: params.outputPath,
     voice: params.config.ttsVoice,
     model: params.config.model,
-    format: params.config.ttsFormat ?? "mp3"
+    format: responseFormat
   };
 }
