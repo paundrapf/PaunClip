@@ -1,13 +1,20 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { db } from "@/server/db/client";
 import { AIProviderRouter } from "@/server/ai/provider-router";
 import { findHighlights } from "@/server/ai/tasks/highlight-finder";
 import { generateHookSpeech } from "@/server/ai/tasks/hook-tts";
 import { extractAudio, probeMedia } from "@/server/media/ffmpeg";
-import { downloadYoutubeVideo, getYoutubeMetadata } from "@/server/media/ytdlp";
+import {
+  downloadYoutubeAudio,
+  downloadYoutubeVideo,
+  fetchYoutubeTranscript,
+  getYoutubeMetadata
+} from "@/server/media/ytdlp";
 import { serializeError } from "@/server/logging/logger";
 import { FfmpegClipRenderer } from "@/server/rendering/ffmpeg-renderer";
 import { getSettings } from "@/server/config/settings-store";
+import { withRetry } from "@/server/jobs/retry";
 import { setJobStep } from "@/server/jobs/job-store";
 import { ensureSessionLayout, sessionPath } from "@/server/storage/paths";
 import { parseJsonWithSchema, stringifyJson } from "@/shared/schemas/primitives";
@@ -25,6 +32,8 @@ import type { JobContext } from "@/server/jobs/runner";
 
 const renderer = new FfmpegClipRenderer();
 
+type PipelineSession = Awaited<ReturnType<typeof getSessionOrThrow>>;
+
 export async function runSingleVideoPipeline(context: JobContext) {
   const sessionId = context.sessionId;
   if (!sessionId) {
@@ -37,13 +46,39 @@ export async function runSingleVideoPipeline(context: JobContext) {
 
   await step(context, "extract_audio", 20, "Extracting audio", async () => {
     const session = await getSessionOrThrow(sessionId);
-    if (!session.downloadedPath) {
-      throw new Error("No source video path available");
+    if (session.transcriptJson) {
+      await context.log("Transcript already exists; skipping audio extraction");
+      return;
     }
+
     try {
-      await extractAudio(session.downloadedPath, sessionPath(sessionId, "audio.wav"), {
-        jobId: context.jobId
-      });
+      if (session.sourceType === "youtube" && session.sourceUrl && !session.downloadedPath) {
+        const settings = await getSettings();
+        await withRetry(
+          () =>
+            downloadYoutubeAudio({
+              url: session.sourceUrl!,
+              outputDir: sessionPath(sessionId),
+              cookiesPath: settings.cookies.youtubePath ?? undefined,
+              jobId: context.jobId,
+              onLog: context.log
+            }),
+          retryOptions(context, "download_youtube_audio", 2)
+        );
+        return;
+      }
+
+      if (!session.downloadedPath) {
+        throw new Error("No source video path available");
+      }
+
+      await withRetry(
+        () =>
+          extractAudio(session.downloadedPath!, sessionPath(sessionId, "audio.wav"), {
+            jobId: context.jobId
+          }),
+        retryOptions(context, "extract_audio", 2)
+      );
     } catch (error) {
       await context.log("Audio extraction failed; PaunClip will continue with transcript fallback.", {
         error: error instanceof Error ? error.message : String(error)
@@ -79,13 +114,7 @@ export async function runSingleVideoPipeline(context: JobContext) {
   });
 
   await step(context, "finalize", 100, "Finalizing session", async () => {
-    await db.session.update({
-      where: { id: sessionId },
-      data: {
-        status: "completed",
-        stage: "completed"
-      }
-    });
+    await finalizeSession(sessionId, context);
   });
 }
 
@@ -107,13 +136,7 @@ export async function runRenderSelectedClips(context: JobContext) {
   });
 
   await step(context, "finalize", 100, "Finalizing rendered clips", async () => {
-    await db.session.update({
-      where: { id: sessionId },
-      data: {
-        status: "completed",
-        stage: "completed"
-      }
-    });
+    await finalizeSession(sessionId, context);
   });
 }
 
@@ -128,41 +151,52 @@ async function ingestSource(sessionId: string, context: JobContext) {
       throw new Error("YouTube session requires sourceUrl");
     }
     await context.log("Fetching YouTube metadata", { url: session.sourceUrl });
-    const metadata = await getYoutubeMetadata(session.sourceUrl, settings.cookies.youtubePath ?? undefined);
-    await context.log("Downloading YouTube source video", {
+    const metadata = await withRetry(
+      () => getYoutubeMetadata(session.sourceUrl!, settings.cookies.youtubePath ?? undefined),
+      retryOptions(context, "youtube_metadata", 2)
+    );
+    await context.log("YouTube metadata loaded", {
       title: metadata.title,
       channel: metadata.channel
     });
-    const sourcePath = await downloadYoutubeVideo({
-      url: session.sourceUrl,
-      outputDir: sessionPath(sessionId),
-      cookiesPath: settings.cookies.youtubePath ?? undefined,
-      jobId: context.jobId,
-      onLog: context.log,
-      onProgress: async (download) => {
-        const progress = Math.min(19, 5 + Math.round((download.percent ?? 0) * 0.14));
-        await context.progress(progress, "Downloading YouTube source video", {
-          step: "ingest_source",
-          download
-        });
-      }
-    });
-    await context.log("Probing downloaded source", { sourcePath });
-    const probe = await probeMedia(sourcePath);
+
+    const subtitleResult = await withRetry(
+      () =>
+        fetchYoutubeTranscript({
+          url: session.sourceUrl!,
+          outputDir: sessionPath(sessionId),
+          language: config.language ?? "id",
+          cookiesPath: settings.cookies.youtubePath ?? undefined,
+          jobId: context.jobId,
+          onLog: context.log
+        }),
+      retryOptions(context, "youtube_subtitle_fetch", 2)
+    );
+    const durationSeconds = Math.round(metadata.duration ?? session.durationSeconds ?? 60);
+
     await db.session.update({
       where: { id: sessionId },
       data: {
         stage: "ingesting",
         sourceTitle: metadata.title,
         sourceChannel: metadata.channel,
-        durationSeconds: Math.round(probe.durationSeconds),
-        downloadedPath: sourcePath,
+        durationSeconds,
+        thumbnailPath: metadata.thumbnail ?? session.thumbnailPath,
+        transcriptJson: subtitleResult ? stringifyJson(subtitleResult.transcript) : session.transcriptJson,
         configJson: stringifyJson({
           ...config,
-          processingEnd: config.processingEnd ?? probe.durationSeconds
+          processingEnd: config.processingEnd ?? metadata.duration ?? durationSeconds
         })
       }
     });
+    if (subtitleResult) {
+      await context.log("Transcript-first ingest succeeded; full video download is deferred until render", {
+        subtitlePath: subtitleResult.subtitlePath,
+        segments: subtitleResult.transcript.segments.length
+      });
+    } else {
+      await context.log("Transcript-first ingest did not find subtitles; audio fallback will be used");
+    }
     return;
   }
 
@@ -222,12 +256,16 @@ async function analyzeHighlights(sessionId: string, context: JobContext) {
     language,
     segments: []
   });
-  const highlights = await findHighlights({
-    router,
-    transcript,
-    prompt: config.prompt,
-    targetCount: 8
-  });
+  const highlights = await withRetry(
+    () =>
+      findHighlights({
+        router,
+        transcript,
+        prompt: config.prompt,
+        targetCount: 8
+      }),
+    retryOptions(context, "find_highlights", 2)
+  );
   await context.log("Highlight analysis completed", { count: highlights.length });
 
   await db.highlight.deleteMany({ where: { sessionId } });
@@ -257,9 +295,7 @@ async function analyzeHighlights(sessionId: string, context: JobContext) {
 
 async function renderHighlights(sessionId: string, context: JobContext) {
   const session = await getSessionOrThrow(sessionId);
-  if (!session.downloadedPath) {
-    throw new Error("No source video path available");
-  }
+  const sourcePath = await ensureSourceVideoForRendering(session, context);
 
   const settings = await getSettings();
   const config = parseJsonWithSchema(sessionConfigSchema, session.configJson, defaultConfig());
@@ -295,11 +331,12 @@ async function renderHighlights(sessionId: string, context: JobContext) {
 
   let renderedCount = 0;
   let skippedCount = 0;
+  let failedCount = 0;
   for (const highlightRecord of highlights) {
     const existingClip = await db.clip.findUnique({
       where: { highlightId: highlightRecord.id }
     });
-    if (existingClip) {
+    if (existingClip?.status === "completed") {
       skippedCount += 1;
       await context.log("Clip already exists for highlight; skipping render", {
         clipId: existingClip.id,
@@ -328,52 +365,161 @@ async function renderHighlights(sessionId: string, context: JobContext) {
       log: context.log
     });
 
-    const output = await renderer.render({
-      sessionId,
-      jobId: context.jobId,
-      sourcePath: session.downloadedPath,
-      highlightId: highlightRecord.id,
-      highlight,
-      transcript,
-      captionStyle: captionPreset.config,
-      hookAudioPath
-    });
-    await context.log("Clip rendered", {
-      clipId: output.clipId,
-      title: highlight.title,
-      duration: output.duration
-    });
-
-    await db.clip.create({
-      data: {
-        id: output.clipId,
+    try {
+      const output = await withRetry(
+        () =>
+          renderer.render({
+            sessionId,
+            jobId: context.jobId,
+            sourcePath,
+            highlightId: highlightRecord.id,
+            highlight,
+            transcript,
+            captionStyle: captionPreset.config,
+            hookAudioPath
+          }),
+        retryOptions(context, "render_clip", 2)
+      );
+      await context.log("Clip rendered", {
+        clipId: output.clipId,
         title: highlight.title,
-        duration: output.duration,
-        startTime: highlight.startTime,
-        endTime: highlight.endTime,
-        masterPath: output.masterPath,
-        thumbnailPath: output.thumbnailPath,
-        fileSizeMb: output.fileSizeMb,
-        status: "completed",
-        viralityScore: highlight.viralityScore,
-        captionBurned: output.captionBurned,
-        hookAdded: output.hookAdded,
-        sessionId,
-        highlightId: highlightRecord.id
-      }
-    });
-    renderedCount += 1;
+        duration: output.duration
+      });
 
-    await db.highlight.update({
-      where: { id: highlightRecord.id },
-      data: { status: "rendered" }
-    });
+      await db.clip.upsert({
+        where: { highlightId: highlightRecord.id },
+        create: {
+          id: output.clipId,
+          title: highlight.title,
+          duration: output.duration,
+          startTime: highlight.startTime,
+          endTime: highlight.endTime,
+          masterPath: output.masterPath,
+          thumbnailPath: output.thumbnailPath,
+          fileSizeMb: output.fileSizeMb,
+          status: "completed",
+          viralityScore: highlight.viralityScore,
+          captionBurned: output.captionBurned,
+          hookAdded: output.hookAdded,
+          sessionId,
+          highlightId: highlightRecord.id
+        },
+        update: {
+          title: highlight.title,
+          duration: output.duration,
+          startTime: highlight.startTime,
+          endTime: highlight.endTime,
+          masterPath: output.masterPath,
+          thumbnailPath: output.thumbnailPath,
+          fileSizeMb: output.fileSizeMb,
+          status: "completed",
+          viralityScore: highlight.viralityScore,
+          captionBurned: output.captionBurned,
+          hookAdded: output.hookAdded,
+          renderJson: null
+        }
+      });
+      renderedCount += 1;
+
+      await db.highlight.update({
+        where: { id: highlightRecord.id },
+        data: { status: "rendered" }
+      });
+    } catch (error) {
+      failedCount += 1;
+      const serialized = serializeError(error);
+      await context.log("Clip render failed; continuing with remaining clips", {
+        highlightId: highlightRecord.id,
+        title: highlight.title,
+        error: serialized
+      });
+
+      await db.clip.upsert({
+        where: { highlightId: highlightRecord.id },
+        create: {
+          id: `clip_${randomUUID()}`,
+          title: highlight.title,
+          duration: Math.max(0.1, highlight.endTime - highlight.startTime),
+          startTime: highlight.startTime,
+          endTime: highlight.endTime,
+          status: "failed",
+          viralityScore: highlight.viralityScore,
+          captionBurned: false,
+          hookAdded: false,
+          renderJson: stringifyJson({
+            failedAt: new Date().toISOString(),
+            error: serialized
+          }),
+          sessionId,
+          highlightId: highlightRecord.id
+        },
+        update: {
+          status: "failed",
+          renderJson: stringifyJson({
+            failedAt: new Date().toISOString(),
+            error: serialized
+          })
+        }
+      });
+
+      await db.highlight.update({
+        where: { id: highlightRecord.id },
+        data: {
+          status: "failed",
+          analysisJson: stringifyJson({ renderError: serialized })
+        }
+      });
+    }
   }
 
   await context.log("Selected highlight rendering finished", {
     renderedCount,
-    skippedCount
+    skippedCount,
+    failedCount
   });
+}
+
+async function ensureSourceVideoForRendering(session: PipelineSession, context: JobContext) {
+  if (session.downloadedPath) {
+    return session.downloadedPath;
+  }
+
+  if (session.sourceType !== "youtube" || !session.sourceUrl) {
+    throw new Error("No source video path available");
+  }
+
+  const settings = await getSettings();
+  await context.log("Downloading full YouTube source video for rendering", {
+    url: session.sourceUrl
+  });
+  const sourcePath = await withRetry(
+    () =>
+      downloadYoutubeVideo({
+        url: session.sourceUrl!,
+        outputDir: sessionPath(session.id),
+        cookiesPath: settings.cookies.youtubePath ?? undefined,
+        jobId: context.jobId,
+        onLog: context.log,
+        onProgress: async (download) => {
+          const progress = Math.min(89, 70 + Math.round((download.percent ?? 0) * 0.18));
+          await context.progress(progress, "Downloading source video for rendering", {
+            step: "render_clips",
+            download
+          });
+        }
+      }),
+    retryOptions(context, "download_youtube_video", 2)
+  );
+  await context.log("Probing downloaded source", { sourcePath });
+  const probe = await withRetry(() => probeMedia(sourcePath), retryOptions(context, "probe_media", 2));
+  await db.session.update({
+    where: { id: session.id },
+    data: {
+      downloadedPath: sourcePath,
+      durationSeconds: Math.round(probe.durationSeconds || session.durationSeconds || 60)
+    }
+  });
+  return sourcePath;
 }
 
 async function prepareHookAudio(params: {
@@ -402,11 +548,26 @@ async function prepareHookAudio(params: {
   );
 
   try {
-    const result = await generateHookSpeech({
-      text: params.hookText,
-      config: params.hookConfig,
-      outputPath
-    });
+    const result = await withRetry(
+      () =>
+        generateHookSpeech({
+          text: params.hookText!,
+          config: params.hookConfig,
+          outputPath
+        }),
+      {
+        label: "generate_hook_speech",
+        attempts: 2,
+        onRetry: async ({ attempt, maxAttempts, delayMs, error }) =>
+          params.log("Hook Maker retry scheduled", {
+            highlightId: params.highlightId,
+            attempt,
+            maxAttempts,
+            delayMs,
+            error: serializeError(error)
+          })
+      }
+    );
     await params.log("Hook Maker audio generated", {
       highlightId: params.highlightId,
       model: result.model,
@@ -473,6 +634,57 @@ async function getSessionConfig(sessionId: string) {
   return parseJsonWithSchema(sessionConfigSchema, session.configJson, defaultConfig());
 }
 
+async function finalizeSession(sessionId: string, context: JobContext) {
+  const [completedClips, failedClips] = await Promise.all([
+    db.clip.count({ where: { sessionId, status: "completed" } }),
+    db.clip.count({ where: { sessionId, status: "failed" } })
+  ]);
+  const status =
+    failedClips > 0 && completedClips > 0
+      ? "partially_failed"
+      : failedClips > 0
+        ? "failed"
+        : "completed";
+
+  await db.session.update({
+    where: { id: sessionId },
+    data: {
+      status,
+      stage: status
+    }
+  });
+  await context.log("Session finalized", {
+    status,
+    completedClips,
+    failedClips
+  });
+}
+
+function retryOptions(context: JobContext, label: string, attempts = 3) {
+  return {
+    label,
+    attempts,
+    onRetry: async ({
+      attempt,
+      maxAttempts,
+      delayMs,
+      error
+    }: {
+      attempt: number;
+      maxAttempts: number;
+      delayMs: number;
+      error: unknown;
+    }) =>
+      context.log("Retry scheduled", {
+        label,
+        attempt,
+        maxAttempts,
+        delayMs,
+        error: serializeError(error)
+      })
+  };
+}
+
 async function transcribeOrFallback(params: {
   sessionId: string;
   audioPath: string;
@@ -496,11 +708,25 @@ async function transcribeOrFallback(params: {
     await params.log("Transcribing audio with configured AI provider", {
       language: params.language
     });
-    return await transcribeAudioWithOpenAICompatible({
-      audioPath: params.audioPath,
-      config: params.captionConfig,
-      language: params.language
-    });
+    return await withRetry(
+      () =>
+        transcribeAudioWithOpenAICompatible({
+          audioPath: params.audioPath,
+          config: params.captionConfig,
+          language: params.language
+        }),
+      {
+        label: "ai_transcription",
+        attempts: 2,
+        onRetry: async ({ attempt, maxAttempts, delayMs, error }) =>
+          params.log("AI transcription retry scheduled", {
+            attempt,
+            maxAttempts,
+            delayMs,
+            error: serializeError(error)
+          })
+      }
+    );
   } catch (error) {
     await params.log("AI transcription failed; using fallback transcript", {
       error: serializeError(error)

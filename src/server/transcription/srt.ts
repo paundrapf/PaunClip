@@ -25,8 +25,52 @@ export function parseSrt(input: string, language = "id"): Transcript {
       .trim();
 
     segments.push({
-      start: parseSrtTime(rawStart),
-      end: parseSrtTime(rawEnd),
+      start: parseCaptionTime(rawStart),
+      end: parseCaptionTime(rawEnd),
+      text,
+      words: []
+    });
+  }
+
+  return { language, segments };
+}
+
+export function parseVtt(input: string, language = "id"): Transcript {
+  const blocks = input
+    .replace(/^\uFEFF/, "")
+    .replace(/\r/g, "")
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .filter((block) => !/^(WEBVTT|NOTE|STYLE|REGION)(\s|$)/i.test(block));
+
+  const segments: TranscriptSegment[] = [];
+
+  for (const block of blocks) {
+    const lines = block.split("\n").filter(Boolean);
+    const timingLine = lines.find((line) => line.includes("-->"));
+    if (!timingLine) {
+      continue;
+    }
+
+    const [rawStart, rawEndWithSettings] = timingLine.split("-->").map((value) => value.trim());
+    const rawEnd = rawEndWithSettings.split(/\s+/)[0] ?? rawEndWithSettings;
+    const text = lines
+      .slice(lines.indexOf(timingLine) + 1)
+      .join(" ")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!text) {
+      continue;
+    }
+
+    segments.push({
+      start: parseCaptionTime(rawStart),
+      end: parseCaptionTime(rawEnd),
       text,
       words: []
     });
@@ -66,8 +110,10 @@ export function sliceTranscript(transcript: Transcript, start: number, end: numb
   };
 }
 
-function parseSrtTime(value: string) {
-  const [hours, minutes, rest] = value.split(":");
+function parseCaptionTime(value: string) {
+  const parts = value.trim().split(":");
+  const [hours, minutes, rest] =
+    parts.length === 3 ? parts : ["0", parts[0] ?? "0", parts[1] ?? "0"];
   const [seconds, millis = "0"] = rest.replace(",", ".").split(".");
   return (
     Number(hours) * 3600 +

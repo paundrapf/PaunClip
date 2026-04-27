@@ -1,7 +1,9 @@
 import "server-only";
-import { readdir, unlink } from "node:fs/promises";
+import { readFile, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { ACCEPTED_VIDEO_EXTENSIONS } from "@/shared/constants/app";
+import type { Transcript } from "@/shared/schemas/session";
+import { parseSrt, parseVtt } from "@/server/transcription/srt";
 import { ProcessError, runProcess, truncateOutput, type ProcessLine } from "./process";
 import { getFfmpegCommand, getYtdlpCommand } from "./tool-resolver";
 
@@ -25,6 +27,12 @@ type DownloadAttemptResult = DownloadAttempt & {
   output?: string;
 };
 
+type YoutubeSubtitleResult = {
+  transcript: Transcript;
+  subtitlePath: string;
+  source: "manual" | "auto";
+};
+
 type DownloadLog = (message: string, data?: Record<string, unknown>) => Promise<void> | void;
 type DownloadProgress = (progress: {
   percent?: number;
@@ -45,6 +53,7 @@ export class YoutubeDownloadError extends Error {
 }
 
 const videoExtensions = new Set<string>(ACCEPTED_VIDEO_EXTENSIONS);
+const subtitleExtensions = new Set([".srt", ".vtt"]);
 const youtubeChallengeArgs = [
   "--js-runtimes",
   "node",
@@ -190,6 +199,153 @@ export async function downloadYoutubeVideo(params: {
   throw createYoutubeDownloadError(attemptResults);
 }
 
+export async function fetchYoutubeTranscript(params: {
+  url: string;
+  outputDir: string;
+  language: string;
+  cookiesPath?: string;
+  jobId?: string;
+  onLog?: DownloadLog;
+}): Promise<YoutubeSubtitleResult | null> {
+  await cleanPreviousSubtitleFiles(params.outputDir);
+  const outputTemplate = path.join(params.outputDir, "subtitle.%(ext)s");
+  const subLangs = buildSubtitleLanguageList(params.language);
+
+  await params.onLog?.("Fetching YouTube subtitles before downloading source video", {
+    language: params.language,
+    subLangs
+  });
+
+  try {
+    await runProcess(
+      getYtdlpCommand(),
+      [
+        "--no-playlist",
+        "--skip-download",
+        "--write-subs",
+        "--write-auto-subs",
+        "--sub-langs",
+        subLangs,
+        "--sub-format",
+        "srt/vtt/best",
+        ...youtubeChallengeArgs,
+        "-o",
+        outputTemplate,
+        ...(params.cookiesPath ? ["--cookies", params.cookiesPath] : []),
+        params.url
+      ],
+      {
+        timeoutMs: 180_000,
+        idleTimeoutMs: 60_000,
+        heartbeatMs: 15_000,
+        jobId: params.jobId,
+        onHeartbeat: ({ elapsedMs, idleMs }) =>
+          params.onLog?.("yt-dlp subtitle heartbeat", {
+            elapsedSeconds: Math.round(elapsedMs / 1000),
+            idleSeconds: Math.round(idleMs / 1000)
+          }),
+        onLine: async (event) => {
+          if (shouldLogYtdlpLine(event.line)) {
+            await params.onLog?.("yt-dlp subtitle output", {
+              stream: event.stream,
+              line: truncateOutput(event.line, 500)
+            });
+          }
+        }
+      }
+    );
+  } catch (error) {
+    await params.onLog?.("YouTube subtitle fetch failed; PaunClip will use transcription fallback", {
+      error:
+        error instanceof ProcessError
+          ? truncateOutput(error.result.stderr || error.result.stdout)
+          : error instanceof Error
+            ? error.message
+            : String(error)
+    });
+    return null;
+  }
+
+  const subtitlePath = await findDownloadedSubtitle(params.outputDir);
+  if (!subtitlePath) {
+    await params.onLog?.("No YouTube subtitle file found; PaunClip will use transcription fallback");
+    return null;
+  }
+
+  const transcript = await parseSubtitleFile(subtitlePath, params.language);
+  if (transcript.segments.length === 0) {
+    await params.onLog?.("YouTube subtitle file was empty; PaunClip will use transcription fallback", {
+      subtitlePath
+    });
+    return null;
+  }
+
+  await params.onLog?.("YouTube transcript loaded from subtitles", {
+    subtitlePath,
+    segments: transcript.segments.length
+  });
+
+  return {
+    transcript,
+    subtitlePath,
+    source: "auto"
+  };
+}
+
+export async function downloadYoutubeAudio(params: {
+  url: string;
+  outputDir: string;
+  cookiesPath?: string;
+  jobId?: string;
+  onLog?: DownloadLog;
+}) {
+  await cleanPreviousAudioFiles(params.outputDir);
+  const outputTemplate = path.join(params.outputDir, "audio.%(ext)s");
+  await params.onLog?.("Downloading YouTube audio for transcription fallback");
+
+  await runProcess(
+    getYtdlpCommand(),
+    [
+      "--no-playlist",
+      "--newline",
+      ...youtubeChallengeArgs,
+      "-f",
+      "ba/bestaudio/b",
+      "--extract-audio",
+      "--audio-format",
+      "wav",
+      "--ffmpeg-location",
+      getFfmpegCommand(),
+      "-o",
+      outputTemplate,
+      ...(params.cookiesPath ? ["--cookies", params.cookiesPath] : []),
+      params.url
+    ],
+    {
+      timeoutMs: 20 * 60_000,
+      idleTimeoutMs: 90_000,
+      heartbeatMs: 15_000,
+      jobId: params.jobId,
+      onHeartbeat: ({ elapsedMs, idleMs }) =>
+        params.onLog?.("yt-dlp audio heartbeat", {
+          elapsedSeconds: Math.round(elapsedMs / 1000),
+          idleSeconds: Math.round(idleMs / 1000)
+        }),
+      onLine: async (event) => {
+        if (shouldLogYtdlpLine(event.line)) {
+          await params.onLog?.("yt-dlp audio output", {
+            stream: event.stream,
+            line: truncateOutput(event.line, 500)
+          });
+        }
+      }
+    }
+  );
+
+  const audioPath = path.join(params.outputDir, "audio.wav");
+  return audioPath;
+}
+
 export async function fetchChannelVideos(params: {
   channelUrl: string;
   limit: number;
@@ -238,6 +394,24 @@ async function cleanPreviousSourceFiles(outputDir: string) {
   );
 }
 
+async function cleanPreviousSubtitleFiles(outputDir: string) {
+  const files = await readdir(outputDir).catch(() => []);
+  await Promise.all(
+    files
+      .filter((file) => file.startsWith("subtitle."))
+      .map((file) => unlink(path.join(outputDir, file)).catch(() => undefined))
+  );
+}
+
+async function cleanPreviousAudioFiles(outputDir: string) {
+  const files = await readdir(outputDir).catch(() => []);
+  await Promise.all(
+    files
+      .filter((file) => file.startsWith("audio."))
+      .map((file) => unlink(path.join(outputDir, file)).catch(() => undefined))
+  );
+}
+
 async function findDownloadedSource(outputDir: string) {
   const files = await readdir(outputDir);
   const source = files.find((file) => {
@@ -245,6 +419,48 @@ async function findDownloadedSource(outputDir: string) {
     return parsed.name === "source" && videoExtensions.has(parsed.ext.toLowerCase());
   });
   return source ? path.join(outputDir, source) : null;
+}
+
+async function findDownloadedSubtitle(outputDir: string) {
+  const files = await readdir(outputDir);
+  const candidates = files.filter((file) => {
+    const parsed = path.parse(file);
+    return (
+      (parsed.name === "subtitle" || parsed.name.startsWith("subtitle.")) &&
+      subtitleExtensions.has(parsed.ext.toLowerCase())
+    );
+  });
+  const subtitle = candidates.sort((a, b) => scoreSubtitleName(b) - scoreSubtitleName(a))[0];
+  return subtitle ? path.join(outputDir, subtitle) : null;
+}
+
+async function parseSubtitleFile(subtitlePath: string, language: string) {
+  const content = await readFile(subtitlePath, "utf8");
+  const ext = path.extname(subtitlePath).toLowerCase();
+  return ext === ".vtt" ? parseVtt(content, language) : parseSrt(content, language);
+}
+
+function buildSubtitleLanguageList(language: string) {
+  const normalized = language.trim().toLowerCase() || "id";
+  const roots = new Set([normalized, normalized.split("-")[0] ?? normalized, "id", "en"]);
+  return Array.from(roots)
+    .filter(Boolean)
+    .flatMap((lang) => [lang, `${lang}.*`])
+    .join(",");
+}
+
+function scoreSubtitleName(fileName: string) {
+  let score = 0;
+  if (fileName.endsWith(".srt")) {
+    score += 10;
+  }
+  if (/\.(id|id-[^.]+)\./i.test(fileName)) {
+    score += 5;
+  }
+  if (/\.(en|en-[^.]+)\./i.test(fileName)) {
+    score += 2;
+  }
+  return score;
 }
 
 function createYoutubeDownloadError(attempts: DownloadAttemptResult[]) {
