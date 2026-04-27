@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Check, Clock, Loader2, Play, Upload, WandSparkles } from "lucide-react";
+import { Check, Clock, Layers3, Loader2, Play, Upload, WandSparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -87,7 +87,7 @@ export function WorkflowScreen() {
         </div>
         <Button variant="primary" onClick={() => void start()} disabled={isWorking}>
           {isWorking ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
-          Get clips in 1 click
+          {config.renderMode === "review" ? "Analyze first" : "Get clips in 1 click"}
         </Button>
       </header>
 
@@ -218,6 +218,36 @@ export function WorkflowScreen() {
                   </span>
                 </button>
               </label>
+            </div>
+
+            <div className="grid gap-3 rounded-lg border border-zinc-800 bg-black p-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-sm font-semibold">Render flow</h2>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {config.renderMode === "review"
+                      ? "Analysis stops before rendering."
+                      : "Selected highlights render automatically."}
+                  </p>
+                </div>
+                <Layers3 className="h-5 w-5 text-zinc-500" aria-hidden="true" />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant={config.renderMode === "auto" ? "primary" : "secondary"}
+                  onClick={() => updateConfig("renderMode", "auto")}
+                >
+                  Auto render
+                </Button>
+                <Button
+                  type="button"
+                  variant={config.renderMode === "review" ? "primary" : "secondary"}
+                  onClick={() => updateConfig("renderMode", "review")}
+                >
+                  Review first
+                </Button>
+              </div>
             </div>
 
             <label className="grid gap-2">

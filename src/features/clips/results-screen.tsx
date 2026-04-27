@@ -6,6 +6,8 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
+  CheckSquare,
+  Clapperboard,
   Download,
   Filter,
   Loader2,
@@ -13,6 +15,7 @@ import {
   Scissors,
   Search,
   SlidersHorizontal,
+  Square,
   Terminal,
   X
 } from "lucide-react";
@@ -22,21 +25,37 @@ import { trpc } from "@/features/trpc/client";
 
 export function ResultsScreen({ sessionId }: { sessionId: string }) {
   const [search, setSearch] = useState("");
-  const [selectionMode, setSelectionMode] = useState(false);
   const [highScoreOnly, setHighScoreOnly] = useState(false);
   const [sortMode, setSortMode] = useState<"score" | "duration" | "recent">("score");
   const [showHookBanner, setShowHookBanner] = useState(true);
   const [showLogs, setShowLogs] = useState(true);
   const [previewClipId, setPreviewClipId] = useState<string | null>(null);
+  const [localSelectedHighlightIds, setLocalSelectedHighlightIds] = useState<string[] | null>(null);
   const utils = trpc.useUtils();
   const session = trpc.session.getById.useQuery(sessionId, {
     refetchInterval: (query) => {
       const data = query.state.data;
-      return ["completed", "failed", "cancelled"].includes(data?.status ?? "") ? false : 2000;
+      return ["completed", "failed", "cancelled", "ready"].includes(data?.status ?? "")
+        ? false
+        : 2000;
     }
   });
   const retrySession = trpc.session.retry.useMutation({
     onSuccess: async () => {
+      await utils.session.getById.invalidate(sessionId);
+      await utils.session.list.invalidate();
+    }
+  });
+  const setHighlightSelection = trpc.session.setHighlightSelection.useMutation({
+    onSuccess: async () => {
+      setLocalSelectedHighlightIds(null);
+      await utils.session.getById.invalidate(sessionId);
+      await utils.session.list.invalidate();
+    }
+  });
+  const renderSelected = trpc.session.renderSelected.useMutation({
+    onSuccess: async () => {
+      setLocalSelectedHighlightIds(null);
       await utils.session.getById.invalidate(sessionId);
       await utils.session.list.invalidate();
     }
@@ -64,6 +83,24 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
       });
   }, [highScoreOnly, search, session.data?.clips, sortMode]);
 
+  const highlights = useMemo(() => {
+    const raw = session.data?.highlights ?? [];
+    return raw
+      .filter((highlight) => highlight.title.toLowerCase().includes(search.toLowerCase()))
+      .filter((highlight) => !highScoreOnly || (highlight.viralityScore ?? 0) >= 80)
+      .sort((a, b) => (b.viralityScore ?? 0) - (a.viralityScore ?? 0));
+  }, [highScoreOnly, search, session.data?.highlights]);
+
+  const serverSelectedHighlightIds = useMemo(
+    () =>
+      (session.data?.highlights ?? [])
+        .filter((highlight) => highlight.selected)
+        .map((highlight) => highlight.id)
+        .sort(),
+    [session.data?.highlights]
+  );
+  const selectedHighlightIds = localSelectedHighlightIds ?? serverSelectedHighlightIds;
+
   const latestJob = session.data?.jobs[0];
   const latestErrorEvent = latestJob?.events.find((event) => event.type === "error");
   const latestSignalEvent =
@@ -71,11 +108,51 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
     latestJob?.events.find((event) => ["progress", "log", "status"].includes(event.type));
   const isFailed = session.data?.status === "failed" || latestJob?.status === "failed";
   const isCancelled = session.data?.status === "cancelled" || latestJob?.status === "cancelled";
+  const isReadyToRender =
+    session.data?.status === "ready" || session.data?.stage === "ready_to_render";
   const isRunning = latestJob?.status === "running" || latestJob?.status === "queued";
-  const statusMessage = latestSignalEvent?.message ?? session.data?.stage ?? "Waiting for job";
+  const statusMessage = isReadyToRender
+    ? "Highlights are ready for review"
+    : latestSignalEvent?.message ?? session.data?.stage ?? "Waiting for job";
   const progress =
-    latestJob?.progress ?? (session.data?.status === "completed" ? 100 : session.isLoading ? 0 : 0);
+    latestJob?.progress ??
+    (session.data?.status === "completed" || isReadyToRender ? 100 : session.isLoading ? 0 : 0);
   const previewClip = clips.find((clip) => clip.id === previewClipId) ?? null;
+  const selectedHighlightCount = selectedHighlightIds.length;
+  const allVisibleHighlightsSelected =
+    highlights.length > 0 &&
+    highlights.every((highlight) => selectedHighlightIds.includes(highlight.id));
+  const canRenderSelected = highlights.length > 0 && selectedHighlightCount > 0 && !isRunning;
+  const selectionError =
+    setHighlightSelection.error?.message ?? renderSelected.error?.message ?? "";
+
+  function persistHighlightSelection(nextIds: string[]) {
+    setLocalSelectedHighlightIds(nextIds);
+    setHighlightSelection.mutate({
+      sessionId,
+      highlightIds: nextIds
+    });
+  }
+
+  function toggleHighlight(highlightId: string) {
+    const nextIds = selectedHighlightIds.includes(highlightId)
+      ? selectedHighlightIds.filter((id) => id !== highlightId)
+      : [...selectedHighlightIds, highlightId];
+    persistHighlightSelection(nextIds);
+  }
+
+  function renderSelectedHighlights() {
+    renderSelected.mutate({
+      sessionId,
+      highlightIds: selectedHighlightIds
+    });
+  }
+
+  function toggleVisibleHighlightSelection() {
+    persistHighlightSelection(
+      allVisibleHighlightsSelected ? [] : highlights.map((highlight) => highlight.id)
+    );
+  }
 
   if (session.isLoading) {
     return (
@@ -121,13 +198,29 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
         </div>
         <div className="flex items-center gap-2">
           <Button
-            variant={selectionMode ? "primary" : "secondary"}
+            variant={allVisibleHighlightsSelected ? "primary" : "secondary"}
             size="sm"
-            onClick={() => setSelectionMode((value) => !value)}
+            disabled={highlights.length === 0 || setHighlightSelection.isPending}
+            onClick={toggleVisibleHighlightSelection}
           >
             <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
-            Select
+            {allVisibleHighlightsSelected ? "Clear" : "Select all"}
           </Button>
+          {highlights.length > 0 ? (
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!canRenderSelected || renderSelected.isPending}
+              onClick={renderSelectedHighlights}
+            >
+              {renderSelected.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Clapperboard className="h-4 w-4" aria-hidden="true" />
+              )}
+              Render selected
+            </Button>
+          ) : null}
           {latestJob ? (
             <Button
               variant={showLogs ? "secondary" : "ghost"}
@@ -161,7 +254,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
         </div>
       </header>
 
-      {session.data.status !== "completed" ? (
+      {session.data.status !== "completed" || isReadyToRender ? (
         <section
           className={
             isFailed
@@ -176,7 +269,9 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
               ) : null}
               <div className="min-w-0">
                 <h2 className="text-xl font-bold">
-                  {isCancelled
+                  {isReadyToRender
+                    ? "Highlights ready"
+                    : isCancelled
                     ? "Processing cancelled"
                     : isFailed
                       ? "Processing failed"
@@ -208,8 +303,25 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                   Cancel
                 </Button>
               ) : null}
+              {isReadyToRender ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={!canRenderSelected || renderSelected.isPending}
+                  onClick={renderSelectedHighlights}
+                >
+                  {renderSelected.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Render selected
+                </Button>
+              ) : null}
               <Badge className={isFailed ? "border-red-500/40 bg-red-500/15 text-red-100" : undefined}>
-                {session.data.status === "cancelled" ? "cancelled" : isFailed ? "failed" : `${progress}%`}
+                {isReadyToRender
+                  ? "ready"
+                  : session.data.status === "cancelled"
+                    ? "cancelled"
+                    : isFailed
+                      ? "failed"
+                      : `${progress}%`}
               </Badge>
             </div>
           </div>
@@ -226,6 +338,104 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                 <p className="mt-1 text-xs text-zinc-500">{step.status}</p>
               </div>
             ))}
+          </div>
+        </section>
+      ) : null}
+
+      {highlights.length > 0 ? (
+        <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold">Highlights</h2>
+              <p className="mt-1 text-sm text-zinc-500">
+                {selectedHighlightCount} selected of {highlights.length}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={setHighlightSelection.isPending}
+                onClick={() => persistHighlightSelection(highlights.map((highlight) => highlight.id))}
+              >
+                Select all
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={setHighlightSelection.isPending}
+                onClick={() => persistHighlightSelection([])}
+              >
+                Clear
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={!canRenderSelected || renderSelected.isPending}
+                onClick={renderSelectedHighlights}
+              >
+                {renderSelected.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Clapperboard className="h-4 w-4" aria-hidden="true" />
+                )}
+                Render selected
+              </Button>
+            </div>
+          </div>
+          {selectionError ? (
+            <p className="mb-4 rounded-lg border border-red-950 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+              {selectionError}
+            </p>
+          ) : null}
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {highlights.map((highlight) => {
+              const selected = selectedHighlightIds.includes(highlight.id);
+              const duration = Math.max(0, highlight.endTime - highlight.startTime);
+              return (
+                <article
+                  key={highlight.id}
+                  className={`rounded-lg border p-4 transition ${
+                    selected
+                      ? "border-lime-300/60 bg-lime-300/10"
+                      : "border-zinc-800 bg-black"
+                  }`}
+                >
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <button
+                      className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-zinc-900 text-zinc-200 ring-1 ring-zinc-800"
+                      aria-label={selected ? "Deselect highlight" : "Select highlight"}
+                      disabled={setHighlightSelection.isPending}
+                      onClick={() => toggleHighlight(highlight.id)}
+                    >
+                      {selected ? (
+                        <CheckSquare className="h-5 w-5 text-lime-300" aria-hidden="true" />
+                      ) : (
+                        <Square className="h-5 w-5" aria-hidden="true" />
+                      )}
+                    </button>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Badge className="border-lime-300/40 bg-lime-300 text-black">
+                        {highlight.viralityScore ?? 50}
+                      </Badge>
+                      <Badge>{Math.round(duration)}s</Badge>
+                    </div>
+                  </div>
+                  <h3 className="line-clamp-2 text-base font-semibold">{highlight.title}</h3>
+                  {highlight.description ? (
+                    <p className="mt-2 line-clamp-3 text-sm leading-6 text-zinc-500">
+                      {highlight.description}
+                    </p>
+                  ) : null}
+                  <div className="mt-3 flex items-center justify-between gap-3 text-xs text-zinc-500">
+                    <span>
+                      {highlight.startTime.toFixed(1)}s - {highlight.endTime.toFixed(1)}s
+                    </span>
+                    <span>{highlight.status}</span>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         </section>
       ) : null}
@@ -300,9 +510,6 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                 className="relative aspect-[9/16] overflow-hidden rounded-lg bg-zinc-900 text-left"
                 onClick={() => setPreviewClipId(clip.id)}
               >
-                {selectionMode ? (
-                  <span className="absolute left-3 top-3 z-20 grid h-7 w-7 place-items-center rounded-full border border-white bg-black/70" />
-                ) : null}
                 <div className="absolute left-3 top-3 z-10">
                   <Badge className="border-lime-300/40 bg-lime-300 text-black">
                     {clip.viralityScore ?? 50}
