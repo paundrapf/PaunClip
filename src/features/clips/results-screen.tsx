@@ -47,7 +47,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
   const session = trpc.session.getById.useQuery(sessionId, {
     refetchInterval: (query) => {
       const data = query.state.data;
-      return ["completed", "failed", "cancelled", "ready"].includes(data?.status ?? "")
+      return ["completed", "failed", "partially_failed", "cancelled", "ready"].includes(data?.status ?? "")
         ? false
         : 2000;
     }
@@ -159,7 +159,10 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
   const latestSignalEvent =
     latestErrorEvent ??
     latestJob?.events.find((event) => ["progress", "log", "status"].includes(event.type));
-  const isFailed = session.data?.status === "failed" || latestJob?.status === "failed";
+  const isFailed =
+    session.data?.status === "failed" ||
+    session.data?.status === "partially_failed" ||
+    latestJob?.status === "failed";
   const isCancelled = session.data?.status === "cancelled" || latestJob?.status === "cancelled";
   const isReadyToRender =
     session.data?.status === "ready" || session.data?.stage === "ready_to_render";
@@ -170,6 +173,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
   const progress =
     latestJob?.progress ??
     (session.data?.status === "completed" || isReadyToRender ? 100 : session.isLoading ? 0 : 0);
+  const etaLabel = progress > 0 && progress < 100 ? estimateEta(progress) : "ready";
   const selectedHighlightCount = selectedHighlightIds.length;
   const allVisibleHighlightsSelected =
     highlights.length > 0 &&
@@ -363,6 +367,9 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                       : "Your video is processing"}
                 </h2>
                 <p className="mt-1 text-sm leading-6 text-zinc-400">{statusMessage}</p>
+                {!isFailed && !isCancelled ? (
+                  <p className="mt-1 text-xs text-zinc-500">ETA estimate: {etaLabel}</p>
+                ) : null}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
@@ -588,56 +595,78 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
           </div>
         </section>
       ) : (
-        <section className="grid grid-cols-2 gap-6 lg:grid-cols-5">
-          {clips.map((clip) => (
-            <article key={clip.id} className="group grid gap-3">
-              <button
-                className="relative aspect-[9/16] overflow-hidden rounded-lg bg-zinc-900 text-left"
-                onClick={() => setPreviewClipId(clip.id)}
-              >
-                <div className="absolute left-3 top-3 z-10">
-                  <Badge className="border-lime-300/40 bg-lime-300 text-black">
-                    {clip.viralityScore ?? 50}
-                  </Badge>
-                </div>
-                <div className="absolute right-3 top-3 z-10">
-                  <Badge>{Math.round(clip.duration)}s</Badge>
-                </div>
-                {clip.thumbnailPath ? (
-                  <img
-                    src={`/api/clips/${clip.id}/thumbnail`}
-                    alt=""
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="grid h-full place-items-center bg-gradient-to-b from-zinc-800 via-zinc-900 to-black px-5 text-center">
-                    <p className="rounded-lg bg-white px-3 py-2 text-sm font-black uppercase text-black">
-                      {clip.title}
-                    </p>
-                  </div>
-                )}
-              </button>
-              <div className="flex items-start justify-between gap-3">
-                <h3 className="line-clamp-2 text-base font-semibold">{clip.title}</h3>
-                <div className="flex gap-1 opacity-80 transition group-hover:opacity-100">
-                  <a
-                    className="grid h-9 w-9 place-items-center rounded-lg bg-zinc-900"
-                    aria-label="Download clip"
-                    href={`/api/clips/${clip.id}/download`}
-                  >
-                    <Download className="h-4 w-4" aria-hidden="true" />
-                  </a>
+        <section className="grid gap-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold">Rendered clips</h2>
+              <p className="mt-1 text-sm text-zinc-500">{clips.length} clips ready for review</p>
+            </div>
+            <Badge>{clips.filter((clip) => clip.status === "completed").length} completed</Badge>
+          </div>
+          <div className="grid grid-cols-2 gap-6 lg:grid-cols-5">
+            {clips.map((clip) => {
+              const clipHighlight = (session.data?.highlights ?? []).find(
+                (highlight) => highlight.id === clip.highlightId
+              );
+              return (
+                <article key={clip.id} className="group grid gap-3">
                   <button
-                    className="grid h-9 w-9 place-items-center rounded-lg bg-zinc-900"
-                    aria-label="Edit clip"
+                    className="relative aspect-[9/16] overflow-hidden rounded-lg bg-zinc-900 text-left"
                     onClick={() => setPreviewClipId(clip.id)}
                   >
-                    <Scissors className="h-4 w-4" aria-hidden="true" />
+                    <div className="absolute left-3 top-3 z-10">
+                      <Badge className="border-lime-300/40 bg-lime-300 text-black">
+                        {clip.viralityScore ?? 50}
+                      </Badge>
+                    </div>
+                    <div className="absolute right-3 top-3 z-10">
+                      <Badge>{formatTimestamp(clip.duration)}</Badge>
+                    </div>
+                    {clip.thumbnailPath ? (
+                      <img
+                        src={`/api/clips/${clip.id}/thumbnail`}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="grid h-full place-items-center bg-gradient-to-b from-zinc-800 via-zinc-900 to-black px-5 text-center">
+                        <p className="rounded-lg bg-white px-3 py-2 text-sm font-black uppercase text-black">
+                          {clip.title}
+                        </p>
+                      </div>
+                    )}
+                    <div className="absolute inset-x-3 bottom-3 rounded-lg bg-black/75 p-3 backdrop-blur">
+                      <p className="line-clamp-2 text-sm font-bold">{clipHighlight?.hookText ?? clip.title}</p>
+                      {clipHighlight?.description ? (
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-300">
+                          {clipHighlight.description}
+                        </p>
+                      ) : null}
+                    </div>
                   </button>
-                </div>
-              </div>
-            </article>
-          ))}
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="line-clamp-2 text-base font-semibold">{clip.title}</h3>
+                    <div className="flex gap-1 opacity-80 transition group-hover:opacity-100">
+                      <a
+                        className="grid h-9 w-9 place-items-center rounded-lg bg-zinc-900"
+                        aria-label="Download clip"
+                        href={`/api/clips/${clip.id}/download`}
+                      >
+                        <Download className="h-4 w-4" aria-hidden="true" />
+                      </a>
+                      <button
+                        className="grid h-9 w-9 place-items-center rounded-lg bg-zinc-900"
+                        aria-label="Edit clip"
+                        onClick={() => setPreviewClipId(clip.id)}
+                      >
+                        <Scissors className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
         </section>
       )}
 
@@ -871,4 +900,17 @@ function formatTimestamp(totalSeconds: number) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = Math.round(totalSeconds % 60);
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function estimateEta(progress: number) {
+  if (progress < 20) {
+    return "warming up";
+  }
+  if (progress < 60) {
+    return "a few minutes";
+  }
+  if (progress < 90) {
+    return "under 2 minutes";
+  }
+  return "final pass";
 }

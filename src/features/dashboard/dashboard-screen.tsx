@@ -5,14 +5,13 @@ import Link from "next/link";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import {
-  AudioWaveform,
   Captions,
   CheckCircle2,
-  Crop,
+  Database,
   Flame,
-  ImagePlus,
   Link as LinkIcon,
   Loader2,
+  Settings,
   Scissors,
   Sparkles,
   Upload
@@ -24,13 +23,12 @@ import { trpc } from "@/features/trpc/client";
 import { sessionConfigSchema } from "@/shared/schemas/session";
 
 const tools = [
-  { label: "Long to shorts", icon: Sparkles, color: "text-lime-300", href: "/workflow" },
-  { label: "AI Captions", icon: Captions, color: "text-emerald-300", href: "/workflow" },
-  { label: "Video editor", icon: Scissors, color: "text-sky-300", href: "/projects" },
-  { label: "Enhance speech", icon: AudioWaveform, color: "text-cyan-300", href: "/settings" },
-  { label: "AI Reframe", icon: Crop, color: "text-blue-300", href: "/workflow" },
-  { label: "AI B-Roll", icon: ImagePlus, color: "text-indigo-300", href: "/campaigns" },
-  { label: "AI hook", icon: Flame, color: "text-amber-300", href: "/workflow" }
+  { label: "New workflow", icon: Sparkles, color: "text-lime-300", href: "/workflow" },
+  { label: "Projects", icon: Scissors, color: "text-sky-300", href: "/projects" },
+  { label: "Campaigns", icon: Flame, color: "text-amber-300", href: "/campaigns" },
+  { label: "Caption styles", icon: Captions, color: "text-emerald-300", href: "/settings" },
+  { label: "AI settings", icon: Settings, color: "text-cyan-300", href: "/settings" },
+  { label: "Storage", icon: Database, color: "text-blue-300", href: "/settings" }
 ];
 
 const defaultConfig = sessionConfigSchema.parse({});
@@ -40,7 +38,6 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<"all" | "saved">("all");
   const sessions = trpc.session.list.useQuery(undefined, { refetchInterval: 3000 });
   const createSession = trpc.session.create.useMutation({
     onSuccess: ({ session }) => router.push(`/results/${session.id}`)
@@ -95,15 +92,15 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
           </h1>
         </div>
         <div className="flex items-center gap-3">
-          <Badge>{visibleSessions.length} sessions</Badge>
+          <Badge>{visibleSessions.length} projects</Badge>
           <Button variant="secondary" size="sm" onClick={() => router.push("/settings")}>
             Settings
           </Button>
         </div>
       </header>
 
-      <section className="grid flex-1 place-items-center py-10">
-        <div className="w-full max-w-3xl rounded-lg border border-zinc-800 bg-black/60 p-9 shadow-2xl shadow-black/30">
+      <section className="grid flex-1 gap-5 py-10 xl:grid-cols-[1fr_360px]">
+        <div className="rounded-lg border border-zinc-800 bg-black/60 p-7 shadow-2xl shadow-black/30">
           <form
             className="grid gap-5"
             onSubmit={(event) => {
@@ -163,10 +160,23 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
             </div>
           </form>
         </div>
+        <aside className="grid content-start gap-3 rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="font-semibold">Workspace pulse</h2>
+            <Badge>local</Badge>
+          </div>
+          <Metric label="Completed clips" value={String(sumClips(visibleSessions))} />
+          <Metric label="Running jobs" value={String(countRunningJobs(visibleSessions))} />
+          <Metric label="Failed sessions" value={String(countFailedSessions(visibleSessions))} />
+          <Button variant="secondary" onClick={() => router.push("/settings")}>
+            <Database className="h-4 w-4" aria-hidden="true" />
+            Storage settings
+          </Button>
+        </aside>
       </section>
 
       <section className="grid gap-9 pb-10">
-        <div className="grid grid-cols-2 gap-5 md:grid-cols-4 xl:grid-cols-7">
+        <div className="grid grid-cols-2 gap-5 md:grid-cols-3 xl:grid-cols-6">
           {tools.map((tool) => {
             const Icon = tool.icon;
             return (
@@ -185,19 +195,11 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
         </div>
 
         <div className="flex items-center justify-between border-t border-zinc-900 pt-6">
-          <div className="flex gap-6 text-sm font-semibold">
-            <button
-              className={tab === "all" ? "text-white" : "text-zinc-500"}
-              onClick={() => setTab("all")}
-            >
-              All projects ({visibleSessions.length})
-            </button>
-            <button
-              className={tab === "saved" ? "text-white" : "text-zinc-500"}
-              onClick={() => setTab("saved")}
-            >
-              Saved projects (0)
-            </button>
+          <div>
+            <h2 className="text-lg font-semibold">Projects</h2>
+            <p className="mt-1 text-sm text-zinc-500">
+              {visibleSessions.length} sessions in this workspace
+            </p>
           </div>
           <div className="flex gap-3">
             <Badge>Auto-save</Badge>
@@ -205,9 +207,9 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
           </div>
         </div>
 
-        {tab === "saved" ? (
+        {visibleSessions.length === 0 ? (
           <div className="rounded-lg border border-dashed border-zinc-800 py-12 text-center text-sm text-zinc-500">
-            Saved projects will appear here after clip feedback is implemented.
+            New projects will appear here after you paste a YouTube link or upload a video.
           </div>
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -225,7 +227,7 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
                         {session.sourceTitle || session.sourceUrl || session.id}
                       </h3>
                       <p className="mt-2 text-sm text-zinc-500">
-                        {session.sourceType} · {session.stage}
+                        {session.sourceType} - {session.stage}
                       </p>
                     </div>
                     <Badge>{latestJob?.progress ?? 0}%</Badge>
@@ -244,4 +246,29 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
       </section>
     </div>
   );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-black p-4">
+      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</p>
+      <p className="mt-2 text-2xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function sumClips(sessions: Array<{ clips: unknown[] }>) {
+  return sessions.reduce((total, session) => total + session.clips.length, 0);
+}
+
+function countRunningJobs(sessions: Array<{ jobs: Array<{ status: string }> }>) {
+  return sessions.filter((session) =>
+    ["queued", "running"].includes(session.jobs[0]?.status ?? "")
+  ).length;
+}
+
+function countFailedSessions(sessions: Array<{ status: string }>) {
+  return sessions.filter((session) =>
+    ["failed", "partially_failed"].includes(session.status)
+  ).length;
 }
