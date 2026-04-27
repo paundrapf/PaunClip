@@ -13,9 +13,15 @@ import {
 } from "@/server/media/ytdlp";
 import { serializeError } from "@/server/logging/logger";
 import { FfmpegClipRenderer } from "@/server/rendering/ffmpeg-renderer";
+import {
+  buildClipRenderMetadata,
+  buildClipRenderSignature,
+  readClipRenderMetadata
+} from "@/server/rendering/render-signature";
 import { getSettings } from "@/server/config/settings-store";
 import { withRetry } from "@/server/jobs/retry";
 import { setJobStep } from "@/server/jobs/job-store";
+import { fileExists } from "@/server/storage/files";
 import { ensureSessionLayout, sessionPath } from "@/server/storage/paths";
 import { parseJsonWithSchema, stringifyJson } from "@/shared/schemas/primitives";
 import {
@@ -137,6 +143,23 @@ export async function runRenderSelectedClips(context: JobContext) {
 
   await step(context, "finalize", 100, "Finalizing rendered clips", async () => {
     await finalizeSession(sessionId, context);
+  });
+}
+
+export async function runRerenderClip(context: JobContext) {
+  const clipId = typeof context.payload.clipId === "string" ? context.payload.clipId : "";
+  if (!clipId) {
+    throw new Error("Clip id is required for rerender_clip jobs");
+  }
+
+  await step(context, "render_clips", 40, "Rerendering clip", async () => {
+    await rerenderClip(clipId, context);
+  });
+
+  await step(context, "finalize", 100, "Finalizing rerender", async () => {
+    if (context.sessionId) {
+      await finalizeSession(context.sessionId, context);
+    }
   });
 }
 
@@ -336,16 +359,6 @@ async function renderHighlights(sessionId: string, context: JobContext) {
     const existingClip = await db.clip.findUnique({
       where: { highlightId: highlightRecord.id }
     });
-    if (existingClip?.status === "completed") {
-      skippedCount += 1;
-      await context.log("Clip already exists for highlight; skipping render", {
-        clipId: existingClip.id,
-        highlightId: highlightRecord.id,
-        title: highlightRecord.title
-      });
-      continue;
-    }
-
     const highlight: Highlight = {
       startTime: highlightRecord.startTime,
       endTime: highlightRecord.endTime,
@@ -355,6 +368,29 @@ async function renderHighlights(sessionId: string, context: JobContext) {
       selected: highlightRecord.selected,
       hookText: highlightRecord.hookText ?? undefined
     };
+    const renderSignature = buildClipRenderSignature({
+      sourcePath,
+      highlight,
+      transcript,
+      captionStyle: captionPreset.config,
+      aspectRatio: config.aspectRatio,
+      hook: buildHookSignature(config.autoHook, highlight.hookText, settings.aiProviders.hookMaker)
+    });
+    const existingMetadata = readClipRenderMetadata(existingClip?.renderJson);
+    if (
+      existingClip?.status === "completed" &&
+      existingClip.masterPath &&
+      existingMetadata.signature === renderSignature &&
+      (await fileExists(existingClip.masterPath))
+    ) {
+      skippedCount += 1;
+      await context.log("Render cache hit; skipping clip render", {
+        clipId: existingClip.id,
+        highlightId: highlightRecord.id,
+        title: highlightRecord.title
+      });
+      continue;
+    }
 
     const hookAudioPath = await prepareHookAudio({
       sessionId,
@@ -366,11 +402,14 @@ async function renderHighlights(sessionId: string, context: JobContext) {
     });
 
     try {
+      const versionId = existingClip ? createRenderVersionId() : undefined;
       const output = await withRetry(
         () =>
           renderer.render({
             sessionId,
             jobId: context.jobId,
+            clipId: existingClip?.id,
+            versionId,
             sourcePath,
             highlightId: highlightRecord.id,
             highlight,
@@ -401,6 +440,12 @@ async function renderHighlights(sessionId: string, context: JobContext) {
           viralityScore: highlight.viralityScore,
           captionBurned: output.captionBurned,
           hookAdded: output.hookAdded,
+          renderJson: stringifyJson(
+            buildClipRenderMetadata({
+              signature: renderSignature,
+              versionId
+            })
+          ),
           sessionId,
           highlightId: highlightRecord.id
         },
@@ -416,7 +461,12 @@ async function renderHighlights(sessionId: string, context: JobContext) {
           viralityScore: highlight.viralityScore,
           captionBurned: output.captionBurned,
           hookAdded: output.hookAdded,
-          renderJson: null
+          renderJson: stringifyJson(
+            buildClipRenderMetadata({
+              signature: renderSignature,
+              versionId
+            })
+          )
         }
       });
       renderedCount += 1;
@@ -447,6 +497,7 @@ async function renderHighlights(sessionId: string, context: JobContext) {
           captionBurned: false,
           hookAdded: false,
           renderJson: stringifyJson({
+            signature: renderSignature,
             failedAt: new Date().toISOString(),
             error: serialized
           }),
@@ -456,6 +507,7 @@ async function renderHighlights(sessionId: string, context: JobContext) {
         update: {
           status: "failed",
           renderJson: stringifyJson({
+            signature: renderSignature,
             failedAt: new Date().toISOString(),
             error: serialized
           })
@@ -520,6 +572,173 @@ async function ensureSourceVideoForRendering(session: PipelineSession, context: 
     }
   });
   return sourcePath;
+}
+
+async function rerenderClip(clipId: string, context: JobContext) {
+  const clip = await db.clip.findUnique({
+    where: { id: clipId },
+    include: {
+      highlight: true,
+      session: true
+    }
+  });
+  if (!clip) {
+    throw new Error(`Clip not found: ${clipId}`);
+  }
+
+  const settings = await getSettings();
+  const config = parseJsonWithSchema(sessionConfigSchema, clip.session.configJson, defaultConfig());
+  const language = config.language ?? "id";
+  const transcript = parseJsonWithSchema(transcriptSchema, clip.session.transcriptJson, {
+    language,
+    segments: []
+  });
+  const metadata = readClipRenderMetadata(clip.renderJson);
+  const captionStyleId = metadata.draft?.captionStyleId ?? config.captionStyleId;
+  const captionPreset =
+    settings.captionPresets.find((preset) => preset.id === captionStyleId) ??
+    settings.captionPresets[0];
+  if (!captionPreset) {
+    throw new Error("No caption preset configured");
+  }
+
+  const sourcePath = await ensureSourceVideoForRendering(clip.session, context);
+  const highlight: Highlight = {
+    startTime: clip.startTime,
+    endTime: clip.endTime,
+    title: clip.title,
+    description: clip.highlight.description ?? undefined,
+    viralityScore: clip.viralityScore ?? undefined,
+    selected: clip.highlight.selected,
+    hookText: clip.highlight.hookText ?? undefined
+  };
+  const signature = buildClipRenderSignature({
+    sourcePath,
+    highlight,
+    transcript,
+    captionStyle: captionPreset.config,
+    aspectRatio: config.aspectRatio,
+    hook: buildHookSignature(config.autoHook, highlight.hookText, settings.aiProviders.hookMaker)
+  });
+
+  if (clip.status === "completed" && clip.masterPath && metadata.signature === signature && (await fileExists(clip.masterPath))) {
+    await db.clip.update({
+      where: { id: clip.id },
+      data: {
+        renderJson: stringifyJson(
+          buildClipRenderMetadata({
+            signature,
+            versionId: metadata.versionId,
+            draft: metadata.draft,
+            cacheHit: true
+          })
+        )
+      }
+    });
+    await context.log("Rerender skipped because clip render cache is still valid", {
+      clipId: clip.id
+    });
+    return;
+  }
+
+  await db.clip.update({
+    where: { id: clip.id },
+    data: { status: "rendering" }
+  });
+
+  const hookAudioPath = await prepareHookAudio({
+    sessionId: clip.sessionId,
+    highlightId: clip.highlightId,
+    hookText: highlight.hookText,
+    enabled: config.autoHook,
+    hookConfig: settings.aiProviders.hookMaker,
+    log: context.log
+  });
+  const versionId = createRenderVersionId();
+  let output: Awaited<ReturnType<typeof renderer.render>>;
+  try {
+    output = await withRetry(
+      () =>
+        renderer.render({
+          sessionId: clip.sessionId,
+          jobId: context.jobId,
+          clipId: clip.id,
+          versionId,
+          sourcePath,
+          highlightId: clip.highlightId,
+          highlight,
+          transcript,
+          captionStyle: captionPreset.config,
+          hookAudioPath
+        }),
+      retryOptions(context, "rerender_clip", 2)
+    );
+  } catch (error) {
+    const serialized = serializeError(error);
+    await db.clip.update({
+      where: { id: clip.id },
+      data: {
+        status: "failed",
+        renderJson: stringifyJson({
+          signature,
+          versionId,
+          failedAt: new Date().toISOString(),
+          error: serialized
+        })
+      }
+    });
+    throw error;
+  }
+
+  await db.clip.update({
+    where: { id: clip.id },
+    data: {
+      title: highlight.title,
+      duration: output.duration,
+      startTime: highlight.startTime,
+      endTime: highlight.endTime,
+      masterPath: output.masterPath,
+      thumbnailPath: output.thumbnailPath,
+      fileSizeMb: output.fileSizeMb,
+      status: "completed",
+      captionBurned: output.captionBurned,
+      hookAdded: output.hookAdded,
+      renderJson: stringifyJson(
+        buildClipRenderMetadata({
+          signature,
+          versionId
+        })
+      )
+    }
+  });
+  await db.highlight.update({
+    where: { id: clip.highlightId },
+    data: { status: "rendered" }
+  });
+  await context.log("Clip rerendered safely", {
+    clipId: clip.id,
+    versionId,
+    masterPath: output.masterPath
+  });
+}
+
+function buildHookSignature(
+  enabled: boolean | undefined,
+  hookText: string | undefined,
+  hookConfig: Awaited<ReturnType<typeof getSettings>>["aiProviders"]["hookMaker"]
+) {
+  return {
+    enabled: Boolean(enabled && hookText),
+    text: hookText ?? "",
+    provider: hookConfig.provider,
+    model: hookConfig.model,
+    voice: hookConfig.ttsVoice,
+    format: hookConfig.ttsFormat
+  };
+}
+
+function createRenderVersionId() {
+  return `v_${Date.now()}_${randomUUID().slice(0, 8)}`;
 }
 
 async function prepareHookAudio(params: {

@@ -17,8 +17,10 @@ import type { ClipRenderer, RenderClipInput } from "./types";
 
 export class FfmpegClipRenderer implements ClipRenderer {
   async render(input: RenderClipInput) {
-    const clipId = `clip_${randomUUID()}`;
-    const clipDir = sessionPath(input.sessionId, "clips", clipId);
+    const clipId = input.clipId ?? `clip_${randomUUID()}`;
+    const clipDir = input.versionId
+      ? sessionPath(input.sessionId, "clips", clipId, "versions", input.versionId)
+      : sessionPath(input.sessionId, "clips", clipId);
     await mkdir(clipDir, { recursive: true });
 
     const rawPath = path.join(clipDir, "raw.mp4");

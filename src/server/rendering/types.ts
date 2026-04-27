@@ -4,6 +4,8 @@ import type { Highlight, Transcript } from "@/shared/schemas/session";
 export type RenderClipInput = {
   sessionId: string;
   jobId?: string;
+  clipId?: string;
+  versionId?: string;
   sourcePath: string;
   highlightId: string;
   highlight: Highlight;

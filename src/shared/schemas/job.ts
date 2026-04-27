@@ -8,6 +8,7 @@ export const jobStepNameSchema = z.enum(JOB_STEP_NAMES);
 export const jobTypeSchema = z.enum([
   "single_video_pipeline",
   "render_selected_clips",
+  "rerender_clip",
   "campaign_fetch",
   "campaign_batch_pipeline",
   "cleanup"
