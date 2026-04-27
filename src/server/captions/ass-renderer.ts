@@ -6,12 +6,18 @@ type AssRenderOptions = {
   width: number;
   height: number;
   style: CaptionStyle;
+  hookText?: string;
 };
 
 export function buildAssSubtitles(transcript: Transcript, options: AssRenderOptions) {
   const style = toAssStyle(options.style, options.width, options.height);
-  const events = transcript.segments
+  const hookStyle = toHookStyle(options.width, options.height);
+  const captionEvents = transcript.segments
+    .filter((segment) => segment.text.trim() && segment.end > segment.start)
     .map((segment) => buildDialogue(segment, options.style))
+    .join("\n");
+  const events = [buildHookDialogue(options.hookText, transcript), captionEvents]
+    .filter(Boolean)
     .join("\n");
 
   return `[Script Info]
@@ -24,6 +30,7 @@ PlayResY: ${options.height}
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
 ${style}
+${hookStyle}
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
@@ -33,20 +40,21 @@ ${events}
 
 function buildDialogue(segment: TranscriptSegment, style: CaptionStyle) {
   const text = buildEventText(segment, style);
-  return `Dialogue: 0,${formatAssTime(segment.start)},${formatAssTime(
+  return `Dialogue: 1,${formatAssTime(segment.start)},${formatAssTime(
     segment.end
   )},Default,,0,0,0,,${text}`;
 }
 
 function toAssStyle(style: CaptionStyle, width: number, height: number) {
-  const fontSize = Math.round(height * style.fontSize);
+  const fontSize = clamp(Math.round(height * style.fontSize), 46, 88);
   const alignment = style.position === "top" ? 8 : style.position === "center" ? 5 : 2;
-  const marginV = style.position === "bottom" ? Math.round(height * 0.09) : Math.round(height * 0.08);
+  const marginV =
+    style.position === "bottom" ? Math.round(height * 0.135) : Math.round(height * 0.085);
   const fontName = style.fontFamily.split(",")[0]?.replace(/["']/g, "") || "Arial";
   const borderStyle = style.backgroundType === "pill" || style.backgroundType === "rectangle" ? 3 : 1;
-  const outline = style.strokeWidth ?? 0;
+  const outline = Math.min(style.strokeWidth ?? 0, 4);
   const shadow = style.shadow ? Math.max(1, Math.round(style.shadow.blur / 4)) : 0;
-  const spacing = style.letterSpacing ?? 0;
+  const spacing = Math.min(style.letterSpacing ?? 0, 1);
 
   return [
     "Style: Default",
@@ -75,6 +83,46 @@ function toAssStyle(style: CaptionStyle, width: number, height: number) {
   ].join(",");
 }
 
+function toHookStyle(width: number, height: number) {
+  return [
+    "Style: Hook",
+    "Arial Black",
+    clamp(Math.round(height * 0.044), 48, 76),
+    assColor("#ffffff"),
+    assColor("#b7ff3c"),
+    assColor("#000000"),
+    assColor("#111111", 18),
+    -1,
+    0,
+    0,
+    0,
+    100,
+    100,
+    0,
+    0,
+    3,
+    2,
+    1,
+    8,
+    Math.round(width * 0.1),
+    Math.round(width * 0.1),
+    Math.round(height * 0.08),
+    1
+  ].join(",");
+}
+
+function buildHookDialogue(hookText: string | undefined, transcript: Transcript) {
+  const text = compactHookText(hookText);
+  const duration = transcript.segments.at(-1)?.end ?? 0;
+  if (!text || duration < 3) {
+    return "";
+  }
+
+  return `Dialogue: 2,0:00:00.00,${formatAssTime(Math.min(2, duration))},Hook,,0,0,0,,{\\fad(80,160)}${escapeAssText(
+    text.toUpperCase()
+  )}`;
+}
+
 function buildEventText(segment: TranscriptSegment, style: CaptionStyle) {
   const prefix = buildAnimationOverride(style, segment.end - segment.start);
   if (
@@ -85,12 +133,17 @@ function buildEventText(segment: TranscriptSegment, style: CaptionStyle) {
     return `${prefix}${buildKaraokeText(segment, style)}`;
   }
 
-  const text = transformText(segment.text, style.textTransform);
+  const text = lineBreakCaption(transformText(segment.text, style.textTransform));
   return `${prefix}${escapeAssText(text)}`;
 }
 
 function buildKaraokeText(segment: TranscriptSegment, style: CaptionStyle) {
-  return segment.words
+  const words = segment.words.length > 0 ? segment.words : segment.text.split(/\s+/).map((word) => ({
+    word,
+    start: segment.start,
+    end: segment.end
+  }));
+  return words
     .map((word) => {
       const start = Math.max(segment.start, word.start);
       const end = Math.max(start + 0.05, word.end);
@@ -150,6 +203,28 @@ function escapeAssText(value: string) {
   return value.replace(/\\/g, "\\\\").replace(/\{/g, "\\{").replace(/\}/g, "\\}").replace(/\n/g, "\\N");
 }
 
+function lineBreakCaption(value: string) {
+  const words = value.split(/\s+/).filter(Boolean);
+  if (words.length <= 4) {
+    return words.join(" ");
+  }
+  const midpoint = Math.ceil(words.length / 2);
+  return `${words.slice(0, midpoint).join(" ")}\n${words.slice(midpoint).join(" ")}`;
+}
+
+function compactHookText(value: string | undefined) {
+  if (!value) {
+    return "";
+  }
+
+  return value
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .slice(0, 10)
+    .join(" ");
+}
+
 function formatAssTime(value: number) {
   const hours = Math.floor(value / 3600);
   const minutes = Math.floor((value % 3600) / 60);
@@ -165,6 +240,10 @@ function assColor(hex: string, alpha = 0) {
   const b = normalized.slice(4, 6);
   const a = alpha.toString(16).padStart(2, "0");
   return `&H${a}${b}${g}${r}`;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function pad(value: number) {

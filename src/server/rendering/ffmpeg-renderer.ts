@@ -12,6 +12,7 @@ import {
 import { buildAssSubtitles } from "@/server/captions/ass-renderer";
 import { getFileSizeMb } from "@/server/storage/files";
 import { sessionPath } from "@/server/storage/paths";
+import { normalizeTranscriptForShorts } from "@/server/transcription/normalize-transcript";
 import { sliceTranscript } from "@/server/transcription/srt";
 import type { ClipRenderer, RenderClipInput } from "./types";
 
@@ -36,15 +37,14 @@ export class FfmpegClipRenderer implements ClipRenderer {
     });
     await centerCropPortrait(rawPath, portraitPath, { jobId: input.jobId });
 
-    const clipTranscript = sliceTranscript(
-      input.transcript,
-      input.highlight.startTime,
-      input.highlight.endTime
+    const clipTranscript = normalizeTranscriptForShorts(
+      sliceTranscript(input.transcript, input.highlight.startTime, input.highlight.endTime)
     );
     const ass = buildAssSubtitles(clipTranscript, {
       width: 1080,
       height: 1920,
-      style: input.captionStyle
+      style: input.captionStyle,
+      hookText: input.highlight.hookText
     });
     await writeFile(assPath, ass, "utf8");
 

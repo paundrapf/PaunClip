@@ -32,6 +32,7 @@ import {
   type Transcript
 } from "@/shared/schemas/session";
 import { transcribeAudioWithOpenAICompatible } from "@/server/transcription/openai-transcriber";
+import { normalizeTranscriptForShorts } from "@/server/transcription/normalize-transcript";
 import { parseSrt } from "@/server/transcription/srt";
 import { createFallbackTranscript } from "@/server/transcription/fallback";
 import type { JobContext } from "@/server/jobs/runner";
@@ -196,6 +197,9 @@ async function ingestSource(sessionId: string, context: JobContext) {
       retryOptions(context, "youtube_subtitle_fetch", 2)
     );
     const durationSeconds = Math.round(metadata.duration ?? session.durationSeconds ?? 60);
+    const normalizedSubtitleTranscript = subtitleResult
+      ? normalizeTranscriptForShorts(subtitleResult.transcript, { language: config.language ?? "id" })
+      : undefined;
 
     await db.session.update({
       where: { id: sessionId },
@@ -205,7 +209,9 @@ async function ingestSource(sessionId: string, context: JobContext) {
         sourceChannel: metadata.channel,
         durationSeconds,
         thumbnailPath: metadata.thumbnail ?? session.thumbnailPath,
-        transcriptJson: subtitleResult ? stringifyJson(subtitleResult.transcript) : session.transcriptJson,
+        transcriptJson: normalizedSubtitleTranscript
+          ? stringifyJson(normalizedSubtitleTranscript)
+          : session.transcriptJson,
         configJson: stringifyJson({
           ...config,
           processingEnd: config.processingEnd ?? metadata.duration ?? durationSeconds
@@ -259,12 +265,13 @@ async function transcribeSession(sessionId: string, context: JobContext) {
         captionConfig: settings.aiProviders.captionMaker,
         log: context.log
       });
+  const normalizedTranscript = normalizeTranscriptForShorts(transcript, { language });
 
   await db.session.update({
     where: { id: sessionId },
     data: {
       stage: "transcribing",
-      transcriptJson: stringifyJson(transcript)
+      transcriptJson: stringifyJson(normalizedTranscript)
     }
   });
 }
@@ -275,9 +282,15 @@ async function analyzeHighlights(sessionId: string, context: JobContext) {
   const router = new AIProviderRouter(settings.aiProviders);
   const config = parseJsonWithSchema(sessionConfigSchema, session.configJson, defaultConfig());
   const language = config.language ?? "id";
-  const transcript = parseJsonWithSchema(transcriptSchema, session.transcriptJson, {
+  const transcript = normalizeTranscriptForShorts(parseJsonWithSchema(transcriptSchema, session.transcriptJson, {
     language,
     segments: []
+  }), { language });
+  await db.session.update({
+    where: { id: sessionId },
+    data: {
+      transcriptJson: stringifyJson(transcript)
+    }
   });
   const highlights = await withRetry(
     () =>
@@ -323,10 +336,10 @@ async function renderHighlights(sessionId: string, context: JobContext) {
   const settings = await getSettings();
   const config = parseJsonWithSchema(sessionConfigSchema, session.configJson, defaultConfig());
   const language = config.language ?? "id";
-  const transcript = parseJsonWithSchema(transcriptSchema, session.transcriptJson, {
+  const transcript = normalizeTranscriptForShorts(parseJsonWithSchema(transcriptSchema, session.transcriptJson, {
     language,
     segments: []
-  });
+  }), { language });
   const captionPreset =
     settings.captionPresets.find((preset) => preset.id === config.captionStyleId) ??
     settings.captionPresets[0];
@@ -589,10 +602,10 @@ async function rerenderClip(clipId: string, context: JobContext) {
   const settings = await getSettings();
   const config = parseJsonWithSchema(sessionConfigSchema, clip.session.configJson, defaultConfig());
   const language = config.language ?? "id";
-  const transcript = parseJsonWithSchema(transcriptSchema, clip.session.transcriptJson, {
+  const transcript = normalizeTranscriptForShorts(parseJsonWithSchema(transcriptSchema, clip.session.transcriptJson, {
     language,
     segments: []
-  });
+  }), { language });
   const metadata = readClipRenderMetadata(clip.renderJson);
   const captionStyleId = metadata.draft?.captionStyleId ?? config.captionStyleId;
   const captionPreset =
