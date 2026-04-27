@@ -1,6 +1,6 @@
 import "server-only";
 import { z } from "zod";
-import { getQueueStats } from "@/server/jobs/runner";
+import { cancelJob, getQueueStats } from "@/server/jobs/runner";
 import { getJob } from "@/server/jobs/job-store";
 import { createTRPCRouter, publicProcedure } from "../trpc";
 
@@ -11,5 +11,9 @@ export const jobRouter = createTRPCRouter({
 
   queueStats: publicProcedure.query(() => {
     return getQueueStats();
+  }),
+
+  cancel: publicProcedure.input(z.string().min(1)).mutation(async ({ input }) => {
+    return cancelJob(input);
   })
 });

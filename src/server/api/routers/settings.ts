@@ -1,13 +1,27 @@
 import "server-only";
 import { z } from "zod";
-import { AIProviderRouter } from "@/server/ai/provider-router";
+import { loadAIProviderModels, validateAIProviderConfig } from "@/server/ai/provider-router";
 import { getSettings, maskSettings, saveSettings } from "@/server/config/settings-store";
+import { getSystemHealth } from "@/server/system/health";
+import {
+  AI_PROVIDER_PRESETS,
+  AI_PROVIDER_TASKS,
+  getProviderPreset
+} from "@/shared/constants/ai-providers";
 import { aiProviderConfigSchema, appSettingsSchema, aiSettingsSchema } from "@/shared/schemas/settings";
 import { createTRPCRouter, publicProcedure } from "../trpc";
+
+const taskSchema = z.enum(AI_PROVIDER_TASKS);
 
 export const settingsRouter = createTRPCRouter({
   get: publicProcedure.query(async () => {
     return maskSettings(await getSettings());
+  }),
+
+  presets: publicProcedure.query(() => AI_PROVIDER_PRESETS),
+
+  health: publicProcedure.query(async () => {
+    return getSystemHealth();
   }),
 
   update: publicProcedure.input(appSettingsSchema).mutation(async ({ input }) => {
@@ -27,7 +41,7 @@ export const settingsRouter = createTRPCRouter({
   updateProvider: publicProcedure
     .input(
       z.object({
-        task: z.enum(["highlightFinder", "captionMaker", "hookMaker", "youtubeTitleMaker"]),
+        task: taskSchema,
         config: aiProviderConfigSchema
       })
     )
@@ -64,12 +78,46 @@ export const settingsRouter = createTRPCRouter({
   validateProvider: publicProcedure
     .input(
       z.object({
-        task: z.enum(["highlightFinder", "captionMaker", "hookMaker", "youtubeTitleMaker"])
+        task: taskSchema,
+        config: aiProviderConfigSchema
       })
     )
     .mutation(async ({ input }) => {
       const settings = await getSettings();
-      const router = new AIProviderRouter(settings.aiProviders);
-      return router.validate(input.task);
+      return validateAIProviderConfig(
+        input.task,
+        mergeMaskedApiKey(input.config, settings.aiProviders[input.task].apiKey)
+      );
+    }),
+
+  loadProviderModels: publicProcedure
+    .input(
+      z.object({
+        task: taskSchema,
+        config: aiProviderConfigSchema
+      })
+    )
+    .mutation(async ({ input }) => {
+      const settings = await getSettings();
+      return loadAIProviderModels(
+        mergeMaskedApiKey(input.config, settings.aiProviders[input.task].apiKey)
+      );
+    }),
+
+  providerVoices: publicProcedure
+    .input(
+      z.object({
+        provider: aiProviderConfigSchema.shape.provider
+      })
+    )
+    .query(({ input }) => {
+      return getProviderPreset(input.provider).knownVoices ?? [];
     })
 });
+
+function mergeMaskedApiKey(config: z.infer<typeof aiProviderConfigSchema>, previousKey: string) {
+  return {
+    ...config,
+    apiKey: config.apiKey === "********" ? previousKey : config.apiKey
+  };
+}

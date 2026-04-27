@@ -1,11 +1,12 @@
 import "server-only";
-import ffmpegStatic from "ffmpeg-static";
 import path from "node:path";
-import { env } from "@/server/config/env";
-import { runProcess } from "./process";
+import { runProcess, type ProcessLine } from "./process";
+import { getFfmpegCommand, getFfprobeCommand } from "./tool-resolver";
 
-const ffmpegPath = env.FFMPEG_PATH || ffmpegStatic || "ffmpeg";
-const ffprobePath = env.FFPROBE_PATH || "ffprobe";
+type MediaProcessOptions = {
+  jobId?: string;
+  onLine?: (event: ProcessLine) => void;
+};
 
 export type MediaProbe = {
   durationSeconds: number;
@@ -17,7 +18,7 @@ export type MediaProbe = {
 export async function probeMedia(inputPath: string): Promise<MediaProbe> {
   try {
     const result = await runProcess(
-      ffprobePath,
+      getFfprobeCommand(),
       [
         "-v",
         "error",
@@ -51,8 +52,12 @@ export async function probeMedia(inputPath: string): Promise<MediaProbe> {
   }
 }
 
-export async function extractAudio(inputPath: string, outputPath: string) {
-  await runProcess(ffmpegPath, [
+export async function extractAudio(
+  inputPath: string,
+  outputPath: string,
+  options: MediaProcessOptions = {}
+) {
+  await runProcess(getFfmpegCommand(), [
     "-y",
     "-i",
     inputPath,
@@ -64,11 +69,17 @@ export async function extractAudio(inputPath: string, outputPath: string) {
     "-c:a",
     "pcm_s16le",
     outputPath
-  ]);
+  ], { jobId: options.jobId, onLine: options.onLine });
 }
 
-export async function cutSegment(inputPath: string, outputPath: string, start: number, end: number) {
-  await runProcess(ffmpegPath, [
+export async function cutSegment(
+  inputPath: string,
+  outputPath: string,
+  start: number,
+  end: number,
+  options: MediaProcessOptions = {}
+) {
+  await runProcess(getFfmpegCommand(), [
     "-y",
     "-ss",
     String(start),
@@ -81,11 +92,15 @@ export async function cutSegment(inputPath: string, outputPath: string, start: n
     "-avoid_negative_ts",
     "make_zero",
     outputPath
-  ]);
+  ], { jobId: options.jobId, onLine: options.onLine });
 }
 
-export async function centerCropPortrait(inputPath: string, outputPath: string) {
-  await runProcess(ffmpegPath, [
+export async function centerCropPortrait(
+  inputPath: string,
+  outputPath: string,
+  options: MediaProcessOptions = {}
+) {
+  await runProcess(getFfmpegCommand(), [
     "-y",
     "-i",
     inputPath,
@@ -102,13 +117,18 @@ export async function centerCropPortrait(inputPath: string, outputPath: string) 
     "-b:a",
     "160k",
     outputPath
-  ]);
+  ], { jobId: options.jobId, onLine: options.onLine });
 }
 
-export async function burnAssSubtitles(inputPath: string, assPath: string, outputPath: string) {
+export async function burnAssSubtitles(
+  inputPath: string,
+  assPath: string,
+  outputPath: string,
+  options: MediaProcessOptions = {}
+) {
   const assDir = path.dirname(assPath);
   const assFileName = path.basename(assPath);
-  await runProcess(ffmpegPath, [
+  await runProcess(getFfmpegCommand(), [
     "-y",
     "-i",
     inputPath,
@@ -123,11 +143,44 @@ export async function burnAssSubtitles(inputPath: string, assPath: string, outpu
     "-c:a",
     "copy",
     outputPath
-  ], { cwd: assDir });
+  ], { cwd: assDir, jobId: options.jobId, onLine: options.onLine });
 }
 
-export async function generateThumbnail(inputPath: string, outputPath: string, atSeconds: number) {
-  await runProcess(ffmpegPath, [
+export async function mixHookAudio(
+  inputPath: string,
+  hookAudioPath: string,
+  outputPath: string,
+  options: MediaProcessOptions = {}
+) {
+  await runProcess(getFfmpegCommand(), [
+    "-y",
+    "-i",
+    inputPath,
+    "-i",
+    hookAudioPath,
+    "-filter_complex",
+    "[0:a]volume=0.35[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]",
+    "-map",
+    "0:v",
+    "-map",
+    "[a]",
+    "-c:v",
+    "copy",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "160k",
+    outputPath
+  ], { jobId: options.jobId, onLine: options.onLine });
+}
+
+export async function generateThumbnail(
+  inputPath: string,
+  outputPath: string,
+  atSeconds: number,
+  options: MediaProcessOptions = {}
+) {
+  await runProcess(getFfmpegCommand(), [
     "-y",
     "-ss",
     String(atSeconds),
@@ -138,7 +191,7 @@ export async function generateThumbnail(inputPath: string, outputPath: string, a
     "-q:v",
     "2",
     outputPath
-  ]);
+  ], { jobId: options.jobId, onLine: options.onLine });
 }
 
 function parseFps(value?: string) {
@@ -154,7 +207,7 @@ function parseFps(value?: string) {
 
 async function probeMediaWithFfmpeg(inputPath: string): Promise<MediaProbe> {
   try {
-    await runProcess(ffmpegPath, ["-i", inputPath], { timeoutMs: 60_000 });
+    await runProcess(getFfmpegCommand(), ["-i", inputPath], { timeoutMs: 60_000 });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const durationMatch = message.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);

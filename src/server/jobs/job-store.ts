@@ -67,6 +67,17 @@ export async function failJob(jobId: string, error: unknown) {
   });
 }
 
+export async function cancelJobRecord(jobId: string, message = "Job cancelled") {
+  return db.job.update({
+    where: { id: jobId },
+    data: {
+      status: "cancelled",
+      errorJson: stringifyJson({ name: "JobCancelledError", message }),
+      finishedAt: new Date()
+    }
+  });
+}
+
 export async function interruptStaleRunningJobs() {
   await db.job.updateMany({
     where: { status: "running" },

@@ -17,7 +17,8 @@ export const SESSION_STAGES = [
   "rendering",
   "completed",
   "failed",
-  "partially_failed"
+  "partially_failed",
+  "cancelled"
 ] as const;
 
 export const JOB_STATUSES = [

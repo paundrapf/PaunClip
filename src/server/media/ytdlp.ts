@@ -1,9 +1,9 @@
 import "server-only";
 import { readdir, unlink } from "node:fs/promises";
 import path from "node:path";
-import { env } from "@/server/config/env";
 import { ACCEPTED_VIDEO_EXTENSIONS } from "@/shared/constants/app";
-import { ProcessError, runProcess, truncateOutput } from "./process";
+import { ProcessError, runProcess, truncateOutput, type ProcessLine } from "./process";
+import { getFfmpegCommand, getYtdlpCommand } from "./tool-resolver";
 
 export type YoutubeMetadata = {
   id: string;
@@ -26,6 +26,12 @@ type DownloadAttemptResult = DownloadAttempt & {
 };
 
 type DownloadLog = (message: string, data?: Record<string, unknown>) => Promise<void> | void;
+type DownloadProgress = (progress: {
+  percent?: number;
+  speed?: string;
+  eta?: string;
+  line: string;
+}) => Promise<void> | void;
 
 export class YoutubeDownloadError extends Error {
   constructor(
@@ -57,7 +63,7 @@ export async function getYoutubeMetadata(url: string, cookiesPath?: string) {
     ...(cookiesPath ? ["--cookies", cookiesPath] : []),
     url
   ];
-  const result = await runProcess(env.YTDLP_PATH, args, { timeoutMs: 120_000 });
+  const result = await runProcess(getYtdlpCommand(), args, { timeoutMs: 120_000 });
   return JSON.parse(result.stdout) as YoutubeMetadata;
 }
 
@@ -65,7 +71,9 @@ export async function downloadYoutubeVideo(params: {
   url: string;
   outputDir: string;
   cookiesPath?: string;
+  jobId?: string;
   onLog?: DownloadLog;
+  onProgress?: DownloadProgress;
 }) {
   const outputTemplate = path.join(params.outputDir, "source.%(ext)s");
   const attempts: DownloadAttempt[] = [
@@ -74,7 +82,11 @@ export async function downloadYoutubeVideo(params: {
       format: "bv*[height<=1080]+ba/b[height<=1080]/b"
     },
     {
-      label: "best merged video/audio",
+      label: "720p merged video/audio fallback",
+      format: "bv*[height<=720]+ba/b[height<=720]/b"
+    },
+    {
+      label: "best separated video/audio fallback",
       format: "bv*+ba/b"
     },
     {
@@ -92,14 +104,17 @@ export async function downloadYoutubeVideo(params: {
     });
 
     try {
+      let lastProgressPercent = -1;
       await runProcess(
-        env.YTDLP_PATH,
+        getYtdlpCommand(),
         [
           "--no-playlist",
-          "--no-progress",
+          "--newline",
           ...youtubeChallengeArgs,
           "-f",
           attempt.format,
+          "--ffmpeg-location",
+          getFfmpegCommand(),
           "--merge-output-format",
           "mp4",
           "--remux-video",
@@ -109,7 +124,36 @@ export async function downloadYoutubeVideo(params: {
           ...(params.cookiesPath ? ["--cookies", params.cookiesPath] : []),
           params.url
         ],
-        { timeoutMs: 30 * 60_000 }
+        {
+          timeoutMs: 30 * 60_000,
+          idleTimeoutMs: 90_000,
+          heartbeatMs: 15_000,
+          jobId: params.jobId,
+          onHeartbeat: ({ elapsedMs, idleMs }) =>
+            params.onLog?.("yt-dlp download heartbeat", {
+              elapsedSeconds: Math.round(elapsedMs / 1000),
+              idleSeconds: Math.round(idleMs / 1000),
+              label: attempt.label
+            }),
+          onLine: async (event) => {
+            const progress = parseYtdlpProgress(event);
+            if (!progress) {
+              if (shouldLogYtdlpLine(event.line)) {
+                await params.onLog?.("yt-dlp output", {
+                  stream: event.stream,
+                  line: truncateOutput(event.line, 500)
+                });
+              }
+              return;
+            }
+
+            const percent = progress.percent ?? 0;
+            if (Math.floor(percent) > Math.floor(lastProgressPercent)) {
+              lastProgressPercent = percent;
+              await params.onProgress?.(progress);
+            }
+          }
+        }
       );
 
       const sourcePath = await findDownloadedSource(params.outputDir);
@@ -152,7 +196,7 @@ export async function fetchChannelVideos(params: {
   cookiesPath?: string;
 }) {
   const result = await runProcess(
-    env.YTDLP_PATH,
+    getYtdlpCommand(),
     [
       "--flat-playlist",
       "--dump-single-json",
@@ -231,5 +275,32 @@ function createYoutubeDownloadError(attempts: DownloadAttemptResult[]) {
     `${reason} Detail terakhir: ${lastOutput ?? "tidak ada output dari yt-dlp."}`,
     attempts,
     advice
+  );
+}
+
+function parseYtdlpProgress(event: ProcessLine) {
+  if (!event.line.includes("[download]")) {
+    return null;
+  }
+
+  const percentMatch = event.line.match(/\[download\]\s+(\d+(?:\.\d+)?)%/i);
+  if (!percentMatch) {
+    return null;
+  }
+
+  const speedMatch = event.line.match(/\bat\s+([^\s]+\/s)/i);
+  const etaMatch = event.line.match(/\bETA\s+([^\s]+)/i);
+
+  return {
+    percent: Number(percentMatch[1]),
+    speed: speedMatch?.[1],
+    eta: etaMatch?.[1],
+    line: event.line
+  };
+}
+
+function shouldLogYtdlpLine(line: string) {
+  return /\[youtube\]|warning|error|download destination|merging formats|deleting original|has already been downloaded|extracting url/i.test(
+    line
   );
 }

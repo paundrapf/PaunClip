@@ -1,12 +1,13 @@
 import "server-only";
-import { mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   burnAssSubtitles,
   centerCropPortrait,
   cutSegment,
-  generateThumbnail
+  generateThumbnail,
+  mixHookAudio
 } from "@/server/media/ffmpeg";
 import { buildAssSubtitles } from "@/server/captions/ass-renderer";
 import { getFileSizeMb } from "@/server/storage/files";
@@ -23,12 +24,15 @@ export class FfmpegClipRenderer implements ClipRenderer {
     const rawPath = path.join(clipDir, "raw.mp4");
     const portraitPath = path.join(clipDir, "portrait.mp4");
     const assPath = path.join(clipDir, "captions.ass");
+    const captionedPath = path.join(clipDir, "captioned.mp4");
     const masterPath = path.join(clipDir, "master.mp4");
     const thumbnailPath = path.join(clipDir, "thumbnail.jpg");
     const duration = input.highlight.endTime - input.highlight.startTime;
 
-    await cutSegment(input.sourcePath, rawPath, input.highlight.startTime, input.highlight.endTime);
-    await centerCropPortrait(rawPath, portraitPath);
+    await cutSegment(input.sourcePath, rawPath, input.highlight.startTime, input.highlight.endTime, {
+      jobId: input.jobId
+    });
+    await centerCropPortrait(rawPath, portraitPath, { jobId: input.jobId });
 
     const clipTranscript = sliceTranscript(
       input.transcript,
@@ -42,15 +46,38 @@ export class FfmpegClipRenderer implements ClipRenderer {
     });
     await writeFile(assPath, ass, "utf8");
 
-    await burnAssSubtitles(portraitPath, assPath, masterPath);
-    await generateThumbnail(masterPath, thumbnailPath, Math.max(0.5, duration / 2));
+    let captionBurned = true;
+    try {
+      await burnAssSubtitles(portraitPath, assPath, captionedPath, { jobId: input.jobId });
+    } catch {
+      captionBurned = false;
+      await copyFile(portraitPath, captionedPath);
+    }
+
+    let hookAdded = false;
+    if (input.hookAudioPath) {
+      try {
+        await mixHookAudio(captionedPath, input.hookAudioPath, masterPath, { jobId: input.jobId });
+        hookAdded = true;
+      } catch {
+        await copyFile(captionedPath, masterPath);
+      }
+    } else {
+      await copyFile(captionedPath, masterPath);
+    }
+
+    await generateThumbnail(masterPath, thumbnailPath, Math.max(0.5, duration / 2), {
+      jobId: input.jobId
+    });
 
     return {
       clipId,
       masterPath,
       thumbnailPath,
       duration,
-      fileSizeMb: await getFileSizeMb(masterPath)
+      fileSizeMb: await getFileSizeMb(masterPath),
+      captionBurned,
+      hookAdded
     };
   }
 }

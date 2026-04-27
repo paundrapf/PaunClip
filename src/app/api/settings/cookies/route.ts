@@ -1,14 +1,16 @@
 import { writeFile } from "node:fs/promises";
 import { NextResponse } from "next/server";
 import { getSettings, saveSettings } from "@/server/config/settings-store";
+import { validateYoutubeCookiesText } from "@/server/media/youtube-cookies";
 import { configPath } from "@/server/storage/paths";
 
 export async function POST(request: Request) {
   const text = await request.text();
 
-  if (!text.includes("Netscape HTTP Cookie File") && !text.includes(".youtube.com")) {
+  const validation = validateYoutubeCookiesText(text);
+  if (!validation.ok && validation.severity === "error") {
     return NextResponse.json(
-      { error: "Invalid cookies.txt content. Expected Netscape cookies format." },
+      { error: validation.message, validation },
       { status: 400 }
     );
   }
@@ -25,5 +27,5 @@ export async function POST(request: Request) {
     }
   });
 
-  return NextResponse.json({ ok: true, cookiesPath });
+  return NextResponse.json({ ok: true, cookiesPath, validation });
 }

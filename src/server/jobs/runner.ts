@@ -2,8 +2,15 @@ import "server-only";
 import PQueue from "p-queue";
 import { db } from "@/server/db/client";
 import { createJobLogger, serializeError } from "@/server/logging/logger";
+import {
+  assertJobNotCancelled,
+  clearJobCancellation,
+  JobCancelledError,
+  requestJobCancellation
+} from "@/server/jobs/process-registry";
 import { createJobInputSchema, type CreateJobInput, type JobType } from "@/shared/schemas/job";
 import {
+  cancelJobRecord,
   completeJob,
   createJob,
   emitJobEvent,
@@ -41,6 +48,11 @@ export async function runJob(jobId: string, input: CreateJobInput) {
   if (!handler) {
     throw new Error(`No job handler registered for ${input.type}`);
   }
+  const existing = await db.job.findUnique({ where: { id: jobId } });
+  if (existing?.status === "cancelled") {
+    return;
+  }
+  clearJobCancellation(jobId);
   const logger = createJobLogger({ jobId, sessionId: input.sessionId });
 
   await markJobRunning(jobId);
@@ -57,6 +69,7 @@ export async function runJob(jobId: string, input: CreateJobInput) {
     payload: input.payload,
     sessionId: input.sessionId,
     progress: async (progress, message, data) => {
+      assertJobNotCancelled(jobId);
       await updateJobProgress(jobId, progress);
       await emitJobEvent({
         jobId,
@@ -66,6 +79,7 @@ export async function runJob(jobId: string, input: CreateJobInput) {
       });
     },
     log: async (message, data) => {
+      assertJobNotCancelled(jobId);
       await emitJobEvent({
         jobId,
         type: "log",
@@ -77,6 +91,7 @@ export async function runJob(jobId: string, input: CreateJobInput) {
   };
 
   try {
+    assertJobNotCancelled(jobId);
     await handler(context);
     await completeJob(jobId);
     await logger.info("Job completed", { progress: 100 });
@@ -87,6 +102,27 @@ export async function runJob(jobId: string, input: CreateJobInput) {
       data: { progress: 100 }
     });
   } catch (error) {
+    if (error instanceof JobCancelledError) {
+      await cancelJobRecord(jobId, "Job cancelled by user");
+      if (input.sessionId) {
+        await db.session.update({
+          where: { id: input.sessionId },
+          data: {
+            status: "cancelled",
+            stage: "cancelled"
+          }
+        });
+      }
+      await logger.warn("Job cancelled", { jobId });
+      await emitJobEvent({
+        jobId,
+        type: "status",
+        message: "Job cancelled",
+        data: { status: "cancelled" }
+      });
+      return;
+    }
+
     await failJob(jobId, error);
     if (input.sessionId) {
       await db.session.update({
@@ -105,6 +141,39 @@ export async function runJob(jobId: string, input: CreateJobInput) {
       data: { error: serializeError(error) }
     });
   }
+}
+
+export async function cancelJob(jobId: string) {
+  const job = await db.job.findUnique({ where: { id: jobId } });
+  if (!job) {
+    throw new Error(`Job not found: ${jobId}`);
+  }
+
+  if (["completed", "failed", "cancelled", "interrupted"].includes(job.status)) {
+    return job;
+  }
+
+  requestJobCancellation(jobId);
+  const cancelled = await cancelJobRecord(jobId, "Job cancelled by user");
+
+  if (job.sessionId) {
+    await db.session.update({
+      where: { id: job.sessionId },
+      data: {
+        status: "cancelled",
+        stage: "cancelled"
+      }
+    });
+  }
+
+  await emitJobEvent({
+    jobId,
+    type: "status",
+    message: "Job cancellation requested",
+    data: { status: "cancelled" }
+  });
+
+  return cancelled;
 }
 
 export function getQueueStats() {

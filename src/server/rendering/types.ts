@@ -3,11 +3,13 @@ import type { Highlight, Transcript } from "@/shared/schemas/session";
 
 export type RenderClipInput = {
   sessionId: string;
+  jobId?: string;
   sourcePath: string;
   highlightId: string;
   highlight: Highlight;
   transcript: Transcript;
   captionStyle: CaptionStyle;
+  hookAudioPath?: string;
 };
 
 export type RenderClipOutput = {
@@ -16,6 +18,8 @@ export type RenderClipOutput = {
   thumbnailPath: string;
   duration: number;
   fileSizeMb: number;
+  captionBurned: boolean;
+  hookAdded: boolean;
 };
 
 export interface ClipRenderer {

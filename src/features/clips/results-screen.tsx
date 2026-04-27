@@ -32,10 +32,16 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
   const session = trpc.session.getById.useQuery(sessionId, {
     refetchInterval: (query) => {
       const data = query.state.data;
-      return data?.status === "completed" || data?.status === "failed" ? false : 2000;
+      return ["completed", "failed", "cancelled"].includes(data?.status ?? "") ? false : 2000;
     }
   });
   const retrySession = trpc.session.retry.useMutation({
+    onSuccess: async () => {
+      await utils.session.getById.invalidate(sessionId);
+      await utils.session.list.invalidate();
+    }
+  });
+  const cancelJob = trpc.job.cancel.useMutation({
     onSuccess: async () => {
       await utils.session.getById.invalidate(sessionId);
       await utils.session.list.invalidate();
@@ -64,6 +70,8 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
     latestErrorEvent ??
     latestJob?.events.find((event) => ["progress", "log", "status"].includes(event.type));
   const isFailed = session.data?.status === "failed" || latestJob?.status === "failed";
+  const isCancelled = session.data?.status === "cancelled" || latestJob?.status === "cancelled";
+  const isRunning = latestJob?.status === "running" || latestJob?.status === "queued";
   const statusMessage = latestSignalEvent?.message ?? session.data?.stage ?? "Waiting for job";
   const progress =
     latestJob?.progress ?? (session.data?.status === "completed" ? 100 : session.isLoading ? 0 : 0);
@@ -168,7 +176,11 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
               ) : null}
               <div className="min-w-0">
                 <h2 className="text-xl font-bold">
-                  {isFailed ? "Processing failed" : "Your video is processing"}
+                  {isCancelled
+                    ? "Processing cancelled"
+                    : isFailed
+                      ? "Processing failed"
+                      : "Your video is processing"}
                 </h2>
                 <p className="mt-1 text-sm leading-6 text-zinc-400">{statusMessage}</p>
               </div>
@@ -185,8 +197,19 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                   Retry
                 </Button>
               ) : null}
+              {isRunning && latestJob ? (
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={cancelJob.isPending}
+                  onClick={() => cancelJob.mutate(latestJob.id)}
+                >
+                  {cancelJob.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Cancel
+                </Button>
+              ) : null}
               <Badge className={isFailed ? "border-red-500/40 bg-red-500/15 text-red-100" : undefined}>
-                {isFailed ? "failed" : `${progress}%`}
+                {session.data.status === "cancelled" ? "cancelled" : isFailed ? "failed" : `${progress}%`}
               </Badge>
             </div>
           </div>

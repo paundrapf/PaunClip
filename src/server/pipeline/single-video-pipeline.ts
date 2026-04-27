@@ -2,6 +2,7 @@ import "server-only";
 import { db } from "@/server/db/client";
 import { AIProviderRouter } from "@/server/ai/provider-router";
 import { findHighlights } from "@/server/ai/tasks/highlight-finder";
+import { generateHookSpeech } from "@/server/ai/tasks/hook-tts";
 import { extractAudio, probeMedia } from "@/server/media/ffmpeg";
 import { downloadYoutubeVideo, getYoutubeMetadata } from "@/server/media/ytdlp";
 import { serializeError } from "@/server/logging/logger";
@@ -40,7 +41,9 @@ export async function runSingleVideoPipeline(context: JobContext) {
       throw new Error("No source video path available");
     }
     try {
-      await extractAudio(session.downloadedPath, sessionPath(sessionId, "audio.wav"));
+      await extractAudio(session.downloadedPath, sessionPath(sessionId, "audio.wav"), {
+        jobId: context.jobId
+      });
     } catch (error) {
       await context.log("Audio extraction failed; PaunClip will continue with transcript fallback.", {
         error: error instanceof Error ? error.message : String(error)
@@ -91,7 +94,15 @@ async function ingestSource(sessionId: string, context: JobContext) {
       url: session.sourceUrl,
       outputDir: sessionPath(sessionId),
       cookiesPath: settings.cookies.youtubePath ?? undefined,
-      onLog: context.log
+      jobId: context.jobId,
+      onLog: context.log,
+      onProgress: async (download) => {
+        const progress = Math.min(19, 5 + Math.round((download.percent ?? 0) * 0.14));
+        await context.progress(progress, "Downloading YouTube source video", {
+          step: "ingest_source",
+          download
+        });
+      }
     });
     await context.log("Probing downloaded source", { sourcePath });
     const probe = await probeMedia(sourcePath);
@@ -246,13 +257,24 @@ async function renderHighlights(sessionId: string, context: JobContext) {
       hookText: highlightRecord.hookText ?? undefined
     };
 
+    const hookAudioPath = await prepareHookAudio({
+      sessionId,
+      highlightId: highlightRecord.id,
+      hookText: highlight.hookText,
+      enabled: config.autoHook,
+      hookConfig: settings.aiProviders.hookMaker,
+      log: context.log
+    });
+
     const output = await renderer.render({
       sessionId,
+      jobId: context.jobId,
       sourcePath: session.downloadedPath,
       highlightId: highlightRecord.id,
       highlight,
       transcript,
-      captionStyle: captionPreset.config
+      captionStyle: captionPreset.config,
+      hookAudioPath
     });
     await context.log("Clip rendered", {
       clipId: output.clipId,
@@ -272,7 +294,8 @@ async function renderHighlights(sessionId: string, context: JobContext) {
         fileSizeMb: output.fileSizeMb,
         status: "completed",
         viralityScore: highlight.viralityScore,
-        captionBurned: true,
+        captionBurned: output.captionBurned,
+        hookAdded: output.hookAdded,
         sessionId,
         highlightId: highlightRecord.id
       }
@@ -282,6 +305,53 @@ async function renderHighlights(sessionId: string, context: JobContext) {
       where: { id: highlightRecord.id },
       data: { status: "rendered" }
     });
+  }
+}
+
+async function prepareHookAudio(params: {
+  sessionId: string;
+  highlightId: string;
+  hookText?: string;
+  enabled?: boolean;
+  hookConfig: Awaited<ReturnType<typeof getSettings>>["aiProviders"]["hookMaker"];
+  log: JobContext["log"];
+}) {
+  if (!params.enabled || !params.hookText) {
+    return undefined;
+  }
+
+  if (!params.hookConfig.apiKey && params.hookConfig.provider !== "custom") {
+    await params.log("Hook Maker skipped; no API key configured", {
+      highlightId: params.highlightId
+    });
+    return undefined;
+  }
+
+  const outputPath = sessionPath(
+    params.sessionId,
+    "hooks",
+    `${params.highlightId}.${params.hookConfig.ttsFormat ?? "mp3"}`
+  );
+
+  try {
+    const result = await generateHookSpeech({
+      text: params.hookText,
+      config: params.hookConfig,
+      outputPath
+    });
+    await params.log("Hook Maker audio generated", {
+      highlightId: params.highlightId,
+      model: result.model,
+      voice: result.voice,
+      format: result.format
+    });
+    return result.audioPath;
+  } catch (error) {
+    await params.log("Hook Maker failed; clip will render without hook audio", {
+      highlightId: params.highlightId,
+      error: serializeError(error)
+    });
+    return undefined;
   }
 }
 
