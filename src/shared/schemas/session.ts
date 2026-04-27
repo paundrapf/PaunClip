@@ -17,6 +17,7 @@ export const sessionConfigSchema = z
     prompt: z.string().default(""),
     captionStyleId: z.string().default("karaoke"),
     aspectRatio: aspectRatioSchema.default("9:16"),
+    renderMode: z.enum(["auto", "review"]).default("auto"),
     processingStart: secondsSchema.default(0),
     processingEnd: secondsSchema.optional(),
     faceTrackingMode: z.enum(["center_crop", "mediapipe"]).default("center_crop"),

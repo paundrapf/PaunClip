@@ -9,6 +9,11 @@ import { createSessionInputSchema, sessionConfigSchema } from "@/shared/schemas/
 import { parseJsonWithSchema, stringifyJson } from "@/shared/schemas/primitives";
 import { createTRPCRouter, publicProcedure } from "../trpc";
 
+const highlightSelectionSchema = z.object({
+  sessionId: z.string().min(1),
+  highlightIds: z.array(z.string().min(1)).max(25)
+});
+
 export const sessionRouter = createTRPCRouter({
   create: publicProcedure.input(createSessionInputSchema).mutation(async ({ input }) => {
     registerPipelineJobs();
@@ -69,6 +74,57 @@ export const sessionRouter = createTRPCRouter({
     return { session, job };
   }),
 
+  setHighlightSelection: publicProcedure
+    .input(highlightSelectionSchema)
+    .mutation(async ({ input }) => {
+      return setSelectedHighlights(input.sessionId, input.highlightIds);
+    }),
+
+  renderSelected: publicProcedure
+    .input(
+      z.object({
+        sessionId: z.string().min(1),
+        highlightIds: z.array(z.string().min(1)).max(25).optional()
+      })
+    )
+    .mutation(async ({ input }) => {
+      registerPipelineJobs();
+
+      const existing = await db.session.findUnique({ where: { id: input.sessionId } });
+      if (!existing) {
+        throw new Error(`Session not found: ${input.sessionId}`);
+      }
+
+      if (input.highlightIds) {
+        await setSelectedHighlights(input.sessionId, input.highlightIds);
+      }
+
+      const selectedCount = await db.highlight.count({
+        where: { sessionId: input.sessionId, selected: true }
+      });
+      if (selectedCount === 0) {
+        throw new Error("Select at least one highlight before rendering clips.");
+      }
+
+      const session = await db.session.update({
+        where: { id: input.sessionId },
+        data: {
+          status: "created",
+          stage: "rendering"
+        }
+      });
+
+      const job = await enqueueJob({
+        type: "render_selected_clips",
+        sessionId: input.sessionId,
+        payload: {
+          highlightIds: input.highlightIds
+        }
+      });
+
+      return { session, job };
+    }),
+
   list: publicProcedure.query(async () => {
     return db.session.findMany({
       orderBy: { createdAt: "desc" },
@@ -115,4 +171,30 @@ async function resolveUploadedSource(uploadId: string) {
     throw new Error(`Uploaded source not found: ${uploadId}`);
   }
   return uploadPath(uploadId, source);
+}
+
+async function setSelectedHighlights(sessionId: string, highlightIds: string[]) {
+  const session = await db.session.findUnique({ where: { id: sessionId } });
+  if (!session) {
+    throw new Error(`Session not found: ${sessionId}`);
+  }
+
+  return db.$transaction(async (tx) => {
+    await tx.highlight.updateMany({
+      where: { sessionId },
+      data: { selected: false }
+    });
+
+    if (highlightIds.length > 0) {
+      await tx.highlight.updateMany({
+        where: { sessionId, id: { in: highlightIds } },
+        data: { selected: true }
+      });
+    }
+
+    return tx.highlight.findMany({
+      where: { sessionId },
+      orderBy: [{ viralityScore: "desc" }, { createdAt: "asc" }]
+    });
+  });
 }

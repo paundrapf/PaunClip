@@ -14,6 +14,7 @@ export const SESSION_STAGES = [
   "ingesting",
   "transcribing",
   "analyzing",
+  "ready_to_render",
   "rendering",
   "completed",
   "failed",

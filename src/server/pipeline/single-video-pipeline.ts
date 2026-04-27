@@ -59,11 +59,54 @@ export async function runSingleVideoPipeline(context: JobContext) {
     await analyzeHighlights(sessionId, context);
   });
 
+  const config = await getSessionConfig(sessionId);
+  if (config.renderMode === "review") {
+    await step(context, "finalize", 100, "Waiting for clip selection", async () => {
+      await db.session.update({
+        where: { id: sessionId },
+        data: {
+          status: "ready",
+          stage: "ready_to_render"
+        }
+      });
+      await context.log("Analysis ready for review; rendering is paused until clips are selected");
+    });
+    return;
+  }
+
   await step(context, "render_clips", 90, "Rendering clips", async () => {
     await renderHighlights(sessionId, context);
   });
 
   await step(context, "finalize", 100, "Finalizing session", async () => {
+    await db.session.update({
+      where: { id: sessionId },
+      data: {
+        status: "completed",
+        stage: "completed"
+      }
+    });
+  });
+}
+
+export async function runRenderSelectedClips(context: JobContext) {
+  const sessionId = context.sessionId;
+  if (!sessionId) {
+    throw new Error("Session id is required for selected clip rendering");
+  }
+
+  await step(context, "render_clips", 20, "Rendering selected clips", async () => {
+    await db.session.update({
+      where: { id: sessionId },
+      data: {
+        status: "created",
+        stage: "rendering"
+      }
+    });
+    await renderHighlights(sessionId, context);
+  });
+
+  await step(context, "finalize", 100, "Finalizing rendered clips", async () => {
     await db.session.update({
       where: { id: sessionId },
       data: {
@@ -238,6 +281,10 @@ async function renderHighlights(sessionId: string, context: JobContext) {
     take: 10
   });
   await context.log("Rendering selected highlights", { count: highlights.length });
+  if (highlights.length === 0) {
+    await context.log("No selected highlights found; rendering skipped");
+    return;
+  }
 
   await db.session.update({
     where: { id: sessionId },
@@ -246,7 +293,22 @@ async function renderHighlights(sessionId: string, context: JobContext) {
     }
   });
 
+  let renderedCount = 0;
+  let skippedCount = 0;
   for (const highlightRecord of highlights) {
+    const existingClip = await db.clip.findUnique({
+      where: { highlightId: highlightRecord.id }
+    });
+    if (existingClip) {
+      skippedCount += 1;
+      await context.log("Clip already exists for highlight; skipping render", {
+        clipId: existingClip.id,
+        highlightId: highlightRecord.id,
+        title: highlightRecord.title
+      });
+      continue;
+    }
+
     const highlight: Highlight = {
       startTime: highlightRecord.startTime,
       endTime: highlightRecord.endTime,
@@ -300,12 +362,18 @@ async function renderHighlights(sessionId: string, context: JobContext) {
         highlightId: highlightRecord.id
       }
     });
+    renderedCount += 1;
 
     await db.highlight.update({
       where: { id: highlightRecord.id },
       data: { status: "rendered" }
     });
   }
+
+  await context.log("Selected highlight rendering finished", {
+    renderedCount,
+    skippedCount
+  });
 }
 
 async function prepareHookAudio(params: {
@@ -393,10 +461,16 @@ function defaultConfig(): SessionConfig {
     prompt: "",
     captionStyleId: "karaoke",
     aspectRatio: "9:16",
+    renderMode: "auto",
     processingStart: 0,
     faceTrackingMode: "center_crop",
     language: "id"
   };
+}
+
+async function getSessionConfig(sessionId: string) {
+  const session = await getSessionOrThrow(sessionId);
+  return parseJsonWithSchema(sessionConfigSchema, session.configJson, defaultConfig());
 }
 
 async function transcribeOrFallback(params: {
