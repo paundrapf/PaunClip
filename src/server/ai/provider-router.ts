@@ -5,6 +5,7 @@ import type { AIProviderConfig, AISettings } from "@/shared/schemas/settings";
 import {
   AI_PROVIDER_TASKS,
   getProviderPreset,
+  normalizeOpenAICompatibleBaseUrl,
   type AIProviderTask
 } from "@/shared/constants/ai-providers";
 
@@ -109,8 +110,25 @@ export async function validateAIProviderConfig(
     };
   }
 
-  await client.models.list();
-  return { ok: true, message: `${preset.label} reachable dan model list bisa diakses.` };
+  try {
+    await client.models.list();
+    return { ok: true, message: `${preset.label} reachable dan model list bisa diakses.` };
+  } catch (error) {
+    if (capability !== "chat") {
+      throw error;
+    }
+
+    await client.chat.completions.create({
+      model: config.model,
+      messages: [{ role: "user", content: "Reply with OK." }],
+      temperature: 0,
+      max_tokens: 8
+    });
+    return {
+      ok: true,
+      message: `${preset.label} chat completion valid. Model list tidak tersedia, tapi model bisa dipakai.`
+    };
+  }
 }
 
 export async function loadAIProviderModels(config: AIProviderConfig) {
@@ -126,8 +144,12 @@ export async function loadAIProviderModels(config: AIProviderConfig) {
     return models.data.map((model) => model.id).sort();
   }
 
-  const models = await client.models.list();
-  return models.data.map((model) => model.id).sort();
+  try {
+    const models = await client.models.list();
+    return models.data.map((model) => model.id).sort();
+  } catch {
+    return config.model ? [config.model] : Object.values(preset.defaultsByTask).map((item) => item.model);
+  }
 }
 
 export function isOpenAIClient(client: OpenAI | Anthropic): client is OpenAI {
@@ -143,6 +165,6 @@ export function createAIClient(config: AIProviderConfig) {
 
   return new OpenAI({
     apiKey: config.apiKey || "missing-key",
-    baseURL: config.baseUrl || undefined
+    baseURL: config.baseUrl ? normalizeOpenAICompatibleBaseUrl(config.baseUrl) : undefined
   });
 }

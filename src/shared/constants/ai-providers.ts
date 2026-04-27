@@ -128,7 +128,7 @@ export function buildProviderConfig(
 
   return {
     provider,
-    baseUrl: previous?.baseUrl || preset.defaultBaseUrl,
+    baseUrl: normalizeOpenAICompatibleBaseUrl(previous?.baseUrl || preset.defaultBaseUrl),
     apiKey: previous?.apiKey ?? "",
     model: previous?.model || defaults?.model || "",
     systemMessage: previous?.systemMessage,
@@ -160,7 +160,7 @@ export function normalizeAISettings(settings: AISettings): AISettings {
         task,
         {
           ...config,
-          baseUrl: config.baseUrl || preset.defaultBaseUrl,
+          baseUrl: normalizeOpenAICompatibleBaseUrl(config.baseUrl || preset.defaultBaseUrl),
           model,
           ttsVoice: task === "hookMaker" ? voice : config.ttsVoice,
           ttsFormat:
@@ -170,6 +170,37 @@ export function normalizeAISettings(settings: AISettings): AISettings {
       ];
     })
   ) as AISettings;
+}
+
+export function normalizeOpenAICompatibleBaseUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  try {
+    const url = new URL(trimmed);
+    url.search = "";
+    url.hash = "";
+    let pathname = url.pathname.replace(/\/+$/g, "");
+    const endpointSuffixes = [
+      "/chat/completions",
+      "/completions",
+      "/responses",
+      "/audio/speech",
+      "/audio/transcriptions",
+      "/models"
+    ];
+    const lowerPathname = pathname.toLowerCase();
+    const suffix = endpointSuffixes.find((candidate) => lowerPathname.endsWith(candidate));
+    if (suffix) {
+      pathname = pathname.slice(0, -suffix.length);
+    }
+    url.pathname = pathname || "/";
+    return url.toString().replace(/\/$/g, "");
+  } catch {
+    return trimmed.replace(/\/+$/g, "");
+  }
 }
 
 function isLegacyGroqTtsVoice(voice?: string) {

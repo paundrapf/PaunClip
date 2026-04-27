@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildProviderConfig, normalizeAISettings } from "@/shared/constants/ai-providers";
+import {
+  buildProviderConfig,
+  normalizeAISettings,
+  normalizeOpenAICompatibleBaseUrl
+} from "@/shared/constants/ai-providers";
 
 describe("buildProviderConfig", () => {
   it("uses a TTS model and voice for Groq Hook Maker", () => {
@@ -36,5 +40,14 @@ describe("buildProviderConfig", () => {
     expect(settings.hookMaker.model).toBe("canopylabs/orpheus-v1-english");
     expect(settings.hookMaker.ttsVoice).toBe("hannah");
     expect(settings.hookMaker.ttsFormat).toBe("wav");
+  });
+
+  it("normalizes full OpenAI-compatible endpoint URLs into base URLs", () => {
+    expect(
+      normalizeOpenAICompatibleBaseUrl("https://opencode.ai/zen/go/v1/chat/completions")
+    ).toBe("https://opencode.ai/zen/go/v1");
+    expect(normalizeOpenAICompatibleBaseUrl("https://api.openai.com/v1/models")).toBe(
+      "https://api.openai.com/v1"
+    );
   });
 });
