@@ -8,10 +8,13 @@ import {
   AlertTriangle,
   CheckSquare,
   Clapperboard,
+  Copy,
   Download,
   Filter,
   Loader2,
   MoreHorizontal,
+  RefreshCw,
+  Save,
   Scissors,
   Search,
   SlidersHorizontal,
@@ -22,6 +25,15 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/features/trpc/client";
+
+type ClipEditorDraft = {
+  clipId: string;
+  title: string;
+  startTime: string;
+  endTime: string;
+  hookText: string;
+  captionStyleId: string;
+};
 
 export function ResultsScreen({ sessionId }: { sessionId: string }) {
   const [search, setSearch] = useState("");
@@ -60,12 +72,37 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
       await utils.session.list.invalidate();
     }
   });
+  const updateClipDraft = trpc.clip.updateDraft.useMutation({
+    onSuccess: async (_clip, variables) => {
+      await utils.clip.editorData.invalidate(variables.clipId);
+      await utils.session.getById.invalidate(sessionId);
+      await utils.session.list.invalidate();
+    }
+  });
+  const rerenderClip = trpc.clip.rerender.useMutation({
+    onSuccess: async (_result, clipId) => {
+      await utils.clip.editorData.invalidate(clipId);
+      await utils.session.getById.invalidate(sessionId);
+      await utils.session.list.invalidate();
+    }
+  });
+  const duplicateClip = trpc.clip.duplicate.useMutation({
+    onSuccess: async (clip) => {
+      setPreviewClipId(clip.id);
+      await utils.session.getById.invalidate(sessionId);
+      await utils.session.list.invalidate();
+    }
+  });
   const cancelJob = trpc.job.cancel.useMutation({
     onSuccess: async () => {
       await utils.session.getById.invalidate(sessionId);
       await utils.session.list.invalidate();
     }
   });
+  const editor = trpc.clip.editorData.useQuery(previewClipId ?? "", {
+    enabled: Boolean(previewClipId)
+  });
+  const [draft, setDraft] = useState<ClipEditorDraft | null>(null);
 
   const clips = useMemo(() => {
     const raw = session.data?.clips ?? [];
@@ -100,6 +137,22 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
     [session.data?.highlights]
   );
   const selectedHighlightIds = localSelectedHighlightIds ?? serverSelectedHighlightIds;
+  const editorDraft = useMemo<ClipEditorDraft | null>(() => {
+    if (!editor.data) {
+      return null;
+    }
+    if (draft?.clipId === editor.data.clip.id) {
+      return draft;
+    }
+    return {
+      clipId: editor.data.clip.id,
+      title: editor.data.clip.title,
+      startTime: editor.data.clip.startTime.toFixed(1),
+      endTime: editor.data.clip.endTime.toFixed(1),
+      hookText: editor.data.highlight.hookText ?? "",
+      captionStyleId: editor.data.selectedCaptionStyleId
+    };
+  }, [draft, editor.data]);
 
   const latestJob = session.data?.jobs[0];
   const latestErrorEvent = latestJob?.events.find((event) => event.type === "error");
@@ -117,7 +170,6 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
   const progress =
     latestJob?.progress ??
     (session.data?.status === "completed" || isReadyToRender ? 100 : session.isLoading ? 0 : 0);
-  const previewClip = clips.find((clip) => clip.id === previewClipId) ?? null;
   const selectedHighlightCount = selectedHighlightIds.length;
   const allVisibleHighlightsSelected =
     highlights.length > 0 &&
@@ -152,6 +204,39 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
     persistHighlightSelection(
       allVisibleHighlightsSelected ? [] : highlights.map((highlight) => highlight.id)
     );
+  }
+
+  function saveClipDraft() {
+    if (!editorDraft) {
+      return;
+    }
+    updateClipDraft.mutate({
+      clipId: editorDraft.clipId,
+      title: editorDraft.title.trim() || "Untitled clip",
+      startTime: Number(editorDraft.startTime),
+      endTime: Number(editorDraft.endTime),
+      hookText: editorDraft.hookText.trim() || undefined,
+      captionStyleId: editorDraft.captionStyleId || undefined
+    });
+  }
+
+  function updateEditorDraft(patch: Partial<Omit<ClipEditorDraft, "clipId">>) {
+    if (!editorDraft) {
+      return;
+    }
+    setDraft({ ...editorDraft, ...patch });
+  }
+
+  function rerenderCurrentClip() {
+    if (previewClipId) {
+      rerenderClip.mutate(previewClipId);
+    }
+  }
+
+  function duplicateCurrentClip() {
+    if (previewClipId) {
+      duplicateClip.mutate(previewClipId);
+    }
   }
 
   if (session.isLoading) {
@@ -445,7 +530,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
           <div className="mb-4 flex items-center justify-between gap-4">
             <div>
               <h2 className="text-lg font-bold">Processing logs</h2>
-              <p className="mt-1 text-sm text-zinc-500">{latestJob.status} · {progress}%</p>
+              <p className="mt-1 text-sm text-zinc-500">{latestJob.status} - {progress}%</p>
             </div>
             <Badge>{latestJob.events.length} events</Badge>
           </div>
@@ -556,45 +641,200 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
         </section>
       )}
 
-      {previewClip ? (
+      {previewClipId ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-6">
-          <div className="grid max-h-[90vh] w-full max-w-5xl gap-5 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950 p-5 lg:grid-cols-[360px_1fr]">
-            <video
-              src={`/api/clips/${previewClip.id}/download?inline=1`}
-              controls
-              className="aspect-[9/16] w-full rounded-lg bg-black object-contain"
-            />
-            <div className="grid content-start gap-5">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-2xl font-bold">{previewClip.title}</h2>
-                  <p className="mt-2 text-sm text-zinc-500">
-                    {previewClip.startTime.toFixed(1)}s - {previewClip.endTime.toFixed(1)}s
-                  </p>
+          <div className="grid max-h-[90vh] w-full max-w-6xl gap-5 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950 p-5 lg:grid-cols-[360px_1fr]">
+            {editor.isLoading ? (
+              <div className="grid aspect-[9/16] place-items-center rounded-lg bg-black">
+                <Loader2 className="h-8 w-8 animate-spin text-zinc-500" />
+              </div>
+            ) : editor.data ? (
+              <>
+                <div className="grid content-start gap-3">
+                  {editor.data.clip.masterPath ? (
+                    <video
+                      src={`/api/clips/${editor.data.clip.id}/download?inline=1`}
+                      controls
+                      className="aspect-[9/16] w-full rounded-lg bg-black object-contain"
+                    />
+                  ) : (
+                    <div className="grid aspect-[9/16] place-items-center rounded-lg bg-black px-6 text-center text-sm text-zinc-500">
+                      Render this draft to create a video preview.
+                    </div>
+                  )}
+                  <div className="grid grid-cols-3 gap-2">
+                    <a
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black"
+                      href={`/api/clips/${editor.data.clip.id}/download`}
+                    >
+                      <Download className="h-4 w-4" />
+                      HD
+                    </a>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={duplicateClip.isPending}
+                      onClick={duplicateCurrentClip}
+                    >
+                      {duplicateClip.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                      Copy
+                    </Button>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      disabled={rerenderClip.isPending || updateClipDraft.isPending}
+                      onClick={rerenderCurrentClip}
+                    >
+                      {rerenderClip.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4" />
+                      )}
+                      Render
+                    </Button>
+                  </div>
                 </div>
-                <Button variant="ghost" size="icon" aria-label="Close preview" onClick={() => setPreviewClipId(null)}>
-                  <X className="h-5 w-5" />
-                </Button>
+
+                <div className="grid content-start gap-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-medium text-zinc-500">Clip editor</p>
+                      <h2 className="mt-1 text-2xl font-bold">{editor.data.clip.title}</h2>
+                      <p className="mt-2 text-sm text-zinc-500">
+                        {editor.data.clip.status} - {formatTimestamp(editor.data.clip.duration)}
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Close editor"
+                      onClick={() => setPreviewClipId(null)}
+                    >
+                      <X className="h-5 w-5" />
+                    </Button>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="grid gap-2">
+                      <span className="text-xs font-semibold uppercase text-zinc-500">Title</span>
+                      <input
+                        value={editorDraft?.title ?? ""}
+                        onChange={(event) => updateEditorDraft({ title: event.target.value })}
+                        className="h-11 rounded-lg border border-zinc-800 bg-black px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="grid gap-2">
+                      <span className="text-xs font-semibold uppercase text-zinc-500">Caption preset</span>
+                      <select
+                        value={editorDraft?.captionStyleId ?? ""}
+                        onChange={(event) => updateEditorDraft({ captionStyleId: event.target.value })}
+                        className="h-11 rounded-lg border border-zinc-800 bg-black px-3 text-sm outline-none"
+                      >
+                        {editor.data.captionPresets.map((preset) => (
+                          <option key={preset.id} value={preset.id}>
+                            {preset.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="grid gap-2">
+                      <span className="text-xs font-semibold uppercase text-zinc-500">Start</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={editorDraft?.startTime ?? ""}
+                        onChange={(event) => updateEditorDraft({ startTime: event.target.value })}
+                        className="h-11 rounded-lg border border-zinc-800 bg-black px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="grid gap-2">
+                      <span className="text-xs font-semibold uppercase text-zinc-500">End</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={editorDraft?.endTime ?? ""}
+                        onChange={(event) => updateEditorDraft({ endTime: event.target.value })}
+                        className="h-11 rounded-lg border border-zinc-800 bg-black px-3 text-sm outline-none"
+                      />
+                    </label>
+                  </div>
+
+                  <label className="grid gap-2">
+                    <span className="text-xs font-semibold uppercase text-zinc-500">Hook text</span>
+                    <textarea
+                      value={editorDraft?.hookText ?? ""}
+                      onChange={(event) => updateEditorDraft({ hookText: event.target.value })}
+                      rows={3}
+                      className="resize-none rounded-lg border border-zinc-800 bg-black px-3 py-3 text-sm leading-6 outline-none"
+                    />
+                  </label>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="primary"
+                      disabled={
+                        updateClipDraft.isPending ||
+                        !editorDraft ||
+                        !Number.isFinite(Number(editorDraft.startTime)) ||
+                        !Number.isFinite(Number(editorDraft.endTime)) ||
+                        Number(editorDraft.endTime) <= Number(editorDraft.startTime)
+                      }
+                      onClick={saveClipDraft}
+                    >
+                      {updateClipDraft.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Save className="h-4 w-4" />
+                      )}
+                      Save draft
+                    </Button>
+                    {(updateClipDraft.error || rerenderClip.error || duplicateClip.error) ? (
+                      <p className="text-sm text-red-300">
+                        {updateClipDraft.error?.message ??
+                          rerenderClip.error?.message ??
+                          duplicateClip.error?.message}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="rounded-lg border border-zinc-800 bg-black p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <h3 className="font-semibold">Transcript slice</h3>
+                      <Badge>{editor.data.transcriptSlice.segments.length} segments</Badge>
+                    </div>
+                    <div className="max-h-56 overflow-auto pr-2">
+                      {editor.data.transcriptSlice.segments.length === 0 ? (
+                        <p className="text-sm text-zinc-500">No transcript segment in this range.</p>
+                      ) : (
+                        editor.data.transcriptSlice.segments.map((segment, index) => (
+                          <p key={`${segment.start}-${index}`} className="border-b border-zinc-900 py-2 text-sm leading-6 text-zinc-300 last:border-b-0">
+                            <span className="mr-2 font-mono text-xs text-zinc-500">
+                              {segment.start.toFixed(1)}s
+                            </span>
+                            {segment.text}
+                          </p>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="col-span-full grid min-h-80 place-items-center text-center">
+                <div>
+                  <h2 className="text-xl font-bold">Clip not found</h2>
+                  <Button className="mt-4" variant="secondary" onClick={() => setPreviewClipId(null)}>
+                    Close
+                  </Button>
+                </div>
               </div>
-              <div className="flex flex-wrap gap-3">
-                <a
-                  className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-white px-5 text-sm font-semibold text-black"
-                  href={`/api/clips/${previewClip.id}/download`}
-                >
-                  <Download className="h-4 w-4" />
-                  Download HD
-                </a>
-                <Button variant="secondary" onClick={() => setSortMode("score")}>
-                  Sort by score
-                </Button>
-              </div>
-              <div className="rounded-lg border border-zinc-800 bg-black p-4">
-                <h3 className="font-semibold">Clip data</h3>
-                <pre className="mt-3 overflow-auto text-xs text-zinc-400">
-                  {JSON.stringify(previewClip, null, 2)}
-                </pre>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       ) : null}
@@ -625,4 +865,10 @@ function eventTone(type: string) {
     return "border-lime-300/40 bg-lime-300 text-black";
   }
   return "";
+}
+
+function formatTimestamp(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.round(totalSeconds % 60);
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
