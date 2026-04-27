@@ -56,6 +56,7 @@ export function SettingsScreen() {
   const cookiesRef = useRef<HTMLInputElement>(null);
   const settings = trpc.settings.get.useQuery();
   const health = trpc.settings.health.useQuery(undefined, { refetchInterval: 15_000 });
+  const storageStats = trpc.settings.storageStats.useQuery(undefined, { refetchInterval: 15_000 });
   const utils = trpc.useUtils();
   const [active, setActive] = useState("AI providers");
   const [providerDrafts, setProviderDrafts] = useState<Partial<AppSettings["aiProviders"]>>({});
@@ -63,6 +64,11 @@ export function SettingsScreen() {
   const [activeCaptionId, setActiveCaptionId] = useState("karaoke");
   const [modelOptions, setModelOptions] = useState<Partial<Record<AIProviderTask, string[]>>>({});
   const [outputDirectory, setOutputDirectory] = useState<string | null>(null);
+  const [cleanupOptions, setCleanupOptions] = useState({
+    temp: true,
+    failedArtifacts: false,
+    sourceVideos: false
+  });
   const [message, setMessage] = useState("");
 
   const updateProvider = trpc.settings.updateProvider.useMutation({
@@ -75,6 +81,18 @@ export function SettingsScreen() {
   const updateOutput = trpc.settings.updateOutputDirectory.useMutation({
     onSuccess: async () => {
       setMessage("Output directory saved.");
+      await utils.settings.get.invalidate();
+    },
+    onError: (error) => setMessage(error.message)
+  });
+  const openOutput = trpc.settings.openOutputDirectory.useMutation({
+    onSuccess: (result) => setMessage(`Opened ${result.path}`),
+    onError: (error) => setMessage(error.message)
+  });
+  const cleanupStorage = trpc.settings.cleanupStorage.useMutation({
+    onSuccess: async (result) => {
+      setMessage(`Cleanup removed ${result.removedLabel}.`);
+      await utils.settings.storageStats.invalidate();
       await utils.settings.get.invalidate();
     },
     onError: (error) => setMessage(error.message)
@@ -721,8 +739,21 @@ export function SettingsScreen() {
           ) : null}
 
           {active === "Output" ? (
-            <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-              <h2 className="text-lg font-semibold">Output</h2>
+            <section className="grid gap-5 rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold">Output and storage</h2>
+                  <p className="mt-1 text-sm text-zinc-500">
+                    Local artifacts, temp files, and rendered output controls.
+                  </p>
+                </div>
+                <Badge>{storageStats.data?.storageLabel ?? "checking"}</Badge>
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <StorageMetric label="Storage root" value={storageStats.data?.storageLabel ?? "..."} />
+                <StorageMetric label="Temp files" value={storageStats.data?.tempLabel ?? "..."} />
+                <StorageMetric label="Output folder" value={storageStats.data?.outputLabel ?? "..."} />
+              </div>
               <label className="mt-4 grid gap-2">
                 <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
                   Directory
@@ -736,14 +767,64 @@ export function SettingsScreen() {
                   <FolderOpen className="absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
                 </div>
               </label>
-              <Button
-                className="mt-4"
-                variant="primary"
-                onClick={() => updateOutput.mutate(currentOutputDirectory)}
-                disabled={updateOutput.isPending}
-              >
-                Save output directory
-              </Button>
+              <div className="flex flex-wrap gap-3">
+                <Button
+                  variant="primary"
+                  onClick={() => updateOutput.mutate(currentOutputDirectory)}
+                  disabled={updateOutput.isPending}
+                >
+                  {updateOutput.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Save output directory
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => openOutput.mutate()}
+                  disabled={openOutput.isPending}
+                >
+                  {openOutput.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FolderOpen className="h-4 w-4" />
+                  )}
+                  Open output folder
+                </Button>
+              </div>
+
+              <div className="grid gap-3 rounded-lg border border-zinc-800 bg-black p-4">
+                <h3 className="font-semibold">Cleanup policy</h3>
+                <CleanupToggle
+                  label="Temp render folders"
+                  checked={cleanupOptions.temp}
+                  onChange={(checked) => setCleanupOptions((current) => ({ ...current, temp: checked }))}
+                />
+                <CleanupToggle
+                  label="Failed or cancelled clip artifacts"
+                  checked={cleanupOptions.failedArtifacts}
+                  onChange={(checked) =>
+                    setCleanupOptions((current) => ({ ...current, failedArtifacts: checked }))
+                  }
+                />
+                <CleanupToggle
+                  label="Downloaded source/audio after render"
+                  checked={cleanupOptions.sourceVideos}
+                  onChange={(checked) =>
+                    setCleanupOptions((current) => ({ ...current, sourceVideos: checked }))
+                  }
+                />
+                <Button
+                  variant="danger"
+                  disabled={
+                    cleanupStorage.isPending ||
+                    (!cleanupOptions.temp &&
+                      !cleanupOptions.failedArtifacts &&
+                      !cleanupOptions.sourceVideos)
+                  }
+                  onClick={() => cleanupStorage.mutate(cleanupOptions)}
+                >
+                  {cleanupStorage.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Run cleanup
+                </Button>
+              </div>
             </section>
           ) : null}
 
@@ -864,6 +945,37 @@ function ColorField({
         </span>
         <Input value={value} onChange={(event) => onChange(event.target.value)} />
       </div>
+    </label>
+  );
+}
+
+function StorageMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-black p-4">
+      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</p>
+      <p className="mt-2 text-xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function CleanupToggle({
+  label,
+  checked,
+  onChange
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center justify-between gap-4 rounded-lg border border-zinc-900 bg-zinc-950 px-3 py-2">
+      <span className="text-sm font-medium">{label}</span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="h-4 w-4 accent-lime-300"
+      />
     </label>
   );
 }

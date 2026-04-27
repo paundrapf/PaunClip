@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { loadAIProviderModels, validateAIProviderConfig } from "@/server/ai/provider-router";
 import { getSettings, maskSettings, saveSettings } from "@/server/config/settings-store";
+import { cleanupStorage, getStorageStats, openOutputDirectory } from "@/server/storage/maintenance";
 import { getSystemHealth } from "@/server/system/health";
 import {
   AI_PROVIDER_PRESETS,
@@ -25,6 +26,10 @@ export const settingsRouter = createTRPCRouter({
 
   health: publicProcedure.query(async () => {
     return getSystemHealth();
+  }),
+
+  storageStats: publicProcedure.query(async () => {
+    return getStorageStats();
   }),
 
   update: publicProcedure.input(appSettingsSchema).mutation(async ({ input }) => {
@@ -77,6 +82,23 @@ export const settingsRouter = createTRPCRouter({
       })
     );
   }),
+
+  openOutputDirectory: publicProcedure.mutation(async () => {
+    const settings = await getSettings();
+    return openOutputDirectory(settings.outputDirectory);
+  }),
+
+  cleanupStorage: publicProcedure
+    .input(
+      z.object({
+        temp: z.boolean().default(false),
+        failedArtifacts: z.boolean().default(false),
+        sourceVideos: z.boolean().default(false)
+      })
+    )
+    .mutation(async ({ input }) => {
+      return cleanupStorage(input);
+    }),
 
   updateCaptionPreset: publicProcedure.input(captionPresetSchema).mutation(async ({ input }) => {
     const current = await getSettings();
