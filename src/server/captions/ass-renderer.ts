@@ -7,6 +7,7 @@ type AssRenderOptions = {
   height: number;
   style: CaptionStyle;
   hookText?: string;
+  captionOffsetMs?: number;
 };
 
 export function buildAssSubtitles(transcript: Transcript, options: AssRenderOptions) {
@@ -14,7 +15,9 @@ export function buildAssSubtitles(transcript: Transcript, options: AssRenderOpti
   const hookStyle = toHookStyle(options.width, options.height);
   const captionEvents = transcript.segments
     .filter((segment) => segment.text.trim() && segment.end > segment.start)
-    .map((segment) => buildDialogue(segment, options.style))
+    .flatMap((segment) =>
+      buildDialogues(segment, options.style, options.captionOffsetMs ?? 0)
+    )
     .join("\n");
   const events = [buildHookDialogue(options.hookText, transcript), captionEvents]
     .filter(Boolean)
@@ -38,10 +41,30 @@ ${events}
 `;
 }
 
-function buildDialogue(segment: TranscriptSegment, style: CaptionStyle) {
+function buildDialogues(
+  segment: TranscriptSegment,
+  style: CaptionStyle,
+  captionOffsetMs: number
+) {
+  if (
+    style.animation === "karaoke" &&
+    style.wordHighlightColor &&
+    segment.words.length > 0
+  ) {
+    return buildRealtimeKaraokeDialogues(segment, style, captionOffsetMs);
+  }
+
+  return [buildDialogue(segment, style, captionOffsetMs)];
+}
+
+function buildDialogue(
+  segment: TranscriptSegment,
+  style: CaptionStyle,
+  captionOffsetMs: number
+) {
   const text = buildEventText(segment, style);
-  return `Dialogue: 1,${formatAssTime(segment.start)},${formatAssTime(
-    segment.end
+  return `Dialogue: 1,${formatAssTime(applyOffset(segment.start, captionOffsetMs))},${formatAssTime(
+    applyOffset(segment.end, captionOffsetMs)
   )},Default,,0,0,0,,${text}`;
 }
 
@@ -125,30 +148,40 @@ function buildHookDialogue(hookText: string | undefined, transcript: Transcript)
 
 function buildEventText(segment: TranscriptSegment, style: CaptionStyle) {
   const prefix = buildAnimationOverride(style, segment.end - segment.start);
-  if (
-    style.animation === "karaoke" &&
-    style.wordHighlightColor &&
-    segment.words.length > 0
-  ) {
-    return `${prefix}${buildKaraokeText(segment, style)}`;
-  }
 
   const text = lineBreakCaption(transformText(segment.text, style.textTransform));
   return `${prefix}${escapeAssText(text)}`;
 }
 
-function buildKaraokeText(segment: TranscriptSegment, style: CaptionStyle) {
-  const words = segment.words.length > 0 ? segment.words : segment.text.split(/\s+/).map((word) => ({
-    word,
-    start: segment.start,
-    end: segment.end
-  }));
+function buildRealtimeKaraokeDialogues(
+  segment: TranscriptSegment,
+  style: CaptionStyle,
+  captionOffsetMs: number
+) {
+  const words = segment.words.filter((word) => word.word.trim() && word.end > word.start);
   return words
-    .map((word) => {
+    .map((word, activeIndex) => {
+      const next = words[activeIndex + 1];
       const start = Math.max(segment.start, word.start);
-      const end = Math.max(start + 0.05, word.end);
-      const centiseconds = Math.max(1, Math.round((end - start) * 100));
-      return `{\\k${centiseconds}}${escapeAssText(transformText(word.word, style.textTransform))}`;
+      const end = Math.min(segment.end, Math.max(start + 0.08, next?.start ?? word.end));
+      const text = buildActiveWordText(words, activeIndex, style);
+      return `Dialogue: 1,${formatAssTime(applyOffset(start, captionOffsetMs))},${formatAssTime(
+        applyOffset(end, captionOffsetMs)
+      )},Default,,0,0,0,,${text}`;
+    });
+}
+
+function buildActiveWordText(
+  words: TranscriptSegment["words"],
+  activeIndex: number,
+  style: CaptionStyle
+) {
+  return words
+    .map((word, index) => {
+      const text = escapeAssText(transformText(word.word, style.textTransform));
+      const color = index === activeIndex ? style.wordHighlightColor ?? style.textColor : style.textColor;
+      const scale = index === activeIndex ? "\\fscx108\\fscy108" : "\\fscx100\\fscy100";
+      return `{\\rDefault\\1c&H${assInlineColor(color)}&${scale}}${text}`;
     })
     .join(" ");
 }
@@ -226,11 +259,16 @@ function compactHookText(value: string | undefined) {
 }
 
 function formatAssTime(value: number) {
-  const hours = Math.floor(value / 3600);
-  const minutes = Math.floor((value % 3600) / 60);
-  const seconds = Math.floor(value % 60);
-  const centiseconds = Math.floor((value - Math.floor(value)) * 100);
+  const totalCentiseconds = Math.max(0, Math.round(value * 100));
+  const hours = Math.floor(totalCentiseconds / 360000);
+  const minutes = Math.floor((totalCentiseconds % 360000) / 6000);
+  const seconds = Math.floor((totalCentiseconds % 6000) / 100);
+  const centiseconds = totalCentiseconds % 100;
   return `${hours}:${pad(minutes)}:${pad(seconds)}.${String(centiseconds).padStart(2, "0")}`;
+}
+
+function applyOffset(value: number, offsetMs: number) {
+  return Math.max(0, value + offsetMs / 1000);
 }
 
 function assColor(hex: string, alpha = 0) {
@@ -240,6 +278,14 @@ function assColor(hex: string, alpha = 0) {
   const b = normalized.slice(4, 6);
   const a = alpha.toString(16).padStart(2, "0");
   return `&H${a}${b}${g}${r}`;
+}
+
+function assInlineColor(hex: string) {
+  const normalized = hex.replace("#", "");
+  const r = normalized.slice(0, 2);
+  const g = normalized.slice(2, 4);
+  const b = normalized.slice(4, 6);
+  return `${b}${g}${r}`;
 }
 
 function clamp(value: number, min: number, max: number) {

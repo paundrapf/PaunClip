@@ -8,6 +8,9 @@ export type ClipRenderSignatureInput = {
   highlight: Highlight;
   transcript: Transcript;
   captionStyle: CaptionStyle;
+  captionOffsetMs?: number;
+  captionModel?: string;
+  captionProvider?: string;
   aspectRatio: string;
   hook?: {
     enabled?: boolean;

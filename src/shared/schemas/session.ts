@@ -22,6 +22,7 @@ export const sessionConfigSchema = z
     processingEnd: secondsSchema.optional(),
     faceTrackingMode: z.enum(["center_crop", "mediapipe"]).default("center_crop"),
     language: z.string().default("id"),
+    captionOffsetMs: z.number().int().min(-1500).max(1500).default(0),
     manualTranscriptSrt: z.string().optional()
   })
   .refine(

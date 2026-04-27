@@ -1,5 +1,6 @@
 import type { CaptionStyle } from "@/shared/schemas/caption-style";
 import type { Highlight, Transcript } from "@/shared/schemas/session";
+import type { AIProviderConfig } from "@/shared/schemas/settings";
 
 export type RenderClipInput = {
   sessionId: string;
@@ -11,6 +12,10 @@ export type RenderClipInput = {
   highlight: Highlight;
   transcript: Transcript;
   captionStyle: CaptionStyle;
+  captionConfig?: AIProviderConfig;
+  captionOffsetMs?: number;
+  language?: string;
+  onLog?: (message: string, data?: Record<string, unknown>) => Promise<void>;
   hookAudioPath?: string;
 };
 

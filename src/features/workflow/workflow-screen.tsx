@@ -337,6 +337,25 @@ export function WorkflowScreen() {
                 </button>
               ))}
             </div>
+            <div className="mt-5 grid gap-3 rounded-lg border border-zinc-800 bg-black p-4 md:grid-cols-[1fr_180px] md:items-end">
+              <div>
+                <h3 className="text-sm font-semibold">Caption sync</h3>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {config.captionOffsetMs === 0
+                    ? "No offset"
+                    : `${config.captionOffsetMs > 0 ? "+" : ""}${config.captionOffsetMs}ms`}
+                </p>
+              </div>
+              <Input
+                type="number"
+                min={-1500}
+                max={1500}
+                step={50}
+                value={config.captionOffsetMs}
+                onChange={(event) => updateConfig("captionOffsetMs", Number(event.target.value))}
+                placeholder="Offset ms"
+              />
+            </div>
           </div>
         </div>
       </section>

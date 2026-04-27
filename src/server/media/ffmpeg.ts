@@ -79,16 +79,34 @@ export async function cutSegment(
   end: number,
   options: MediaProcessOptions = {}
 ) {
+  const seekStart = Math.max(0, start - 5);
+  const innerSeek = Math.max(0, start - seekStart);
   await runProcess(getFfmpegCommand(), [
     "-y",
     "-ss",
-    String(start),
+    String(seekStart),
     "-i",
     inputPath,
+    "-ss",
+    String(innerSeek),
     "-t",
     String(Math.max(0.1, end - start)),
-    "-c",
-    "copy",
+    "-map",
+    "0:v:0",
+    "-map",
+    "0:a?",
+    "-c:v",
+    "libx264",
+    "-crf",
+    "20",
+    "-preset",
+    "veryfast",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "160k",
+    "-movflags",
+    "+faststart",
     "-avoid_negative_ts",
     "make_zero",
     outputPath
@@ -116,6 +134,49 @@ export async function centerCropPortrait(
     "aac",
     "-b:a",
     "160k",
+    outputPath
+  ], { jobId: options.jobId, onLine: options.onLine });
+}
+
+export async function cutAndCropPortraitSegment(
+  inputPath: string,
+  outputPath: string,
+  start: number,
+  end: number,
+  options: MediaProcessOptions = {}
+) {
+  const seekStart = Math.max(0, start - 5);
+  const innerSeek = Math.max(0, start - seekStart);
+  await runProcess(getFfmpegCommand(), [
+    "-y",
+    "-ss",
+    String(seekStart),
+    "-i",
+    inputPath,
+    "-ss",
+    String(innerSeek),
+    "-t",
+    String(Math.max(0.1, end - start)),
+    "-map",
+    "0:v:0",
+    "-map",
+    "0:a?",
+    "-vf",
+    "crop=min(iw\\,ih*9/16):min(ih\\,iw*16/9):(iw-ow)/2:(ih-oh)/2,scale=1080:1920",
+    "-c:v",
+    "libx264",
+    "-crf",
+    "22",
+    "-preset",
+    "veryfast",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "160k",
+    "-movflags",
+    "+faststart",
+    "-avoid_negative_ts",
+    "make_zero",
     outputPath
   ], { jobId: options.jobId, onLine: options.onLine });
 }

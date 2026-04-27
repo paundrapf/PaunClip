@@ -386,6 +386,9 @@ async function renderHighlights(sessionId: string, context: JobContext) {
       highlight,
       transcript,
       captionStyle: captionPreset.config,
+      captionOffsetMs: config.captionOffsetMs ?? 0,
+      captionModel: settings.aiProviders.captionMaker.model,
+      captionProvider: settings.aiProviders.captionMaker.provider,
       aspectRatio: config.aspectRatio,
       hook: buildHookSignature(config.autoHook, highlight.hookText, settings.aiProviders.hookMaker)
     });
@@ -428,6 +431,10 @@ async function renderHighlights(sessionId: string, context: JobContext) {
             highlight,
             transcript,
             captionStyle: captionPreset.config,
+            captionConfig: settings.aiProviders.captionMaker,
+            captionOffsetMs: config.captionOffsetMs ?? 0,
+            language,
+            onLog: context.log,
             hookAudioPath
           }),
         retryOptions(context, "render_clip", 2)
@@ -630,6 +637,9 @@ async function rerenderClip(clipId: string, context: JobContext) {
     highlight,
     transcript,
     captionStyle: captionPreset.config,
+    captionOffsetMs: config.captionOffsetMs ?? 0,
+    captionModel: settings.aiProviders.captionMaker.model,
+    captionProvider: settings.aiProviders.captionMaker.provider,
     aspectRatio: config.aspectRatio,
     hook: buildHookSignature(config.autoHook, highlight.hookText, settings.aiProviders.hookMaker)
   });
@@ -682,6 +692,10 @@ async function rerenderClip(clipId: string, context: JobContext) {
           highlight,
           transcript,
           captionStyle: captionPreset.config,
+          captionConfig: settings.aiProviders.captionMaker,
+          captionOffsetMs: config.captionOffsetMs ?? 0,
+          language,
+          onLog: context.log,
           hookAudioPath
         }),
       retryOptions(context, "rerender_clip", 2)
@@ -857,6 +871,7 @@ function defaultConfig(): SessionConfig {
     renderMode: "auto",
     processingStart: 0,
     faceTrackingMode: "center_crop",
+    captionOffsetMs: 0,
     language: "id"
   };
 }
