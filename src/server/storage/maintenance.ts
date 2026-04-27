@@ -86,7 +86,7 @@ export async function cleanupStorage(options: CleanupOptions) {
 }
 
 export async function openOutputDirectory(outputDirectory: string) {
-  const target = path.resolve(process.cwd(), outputDirectory);
+  const target = path.resolve(/* turbopackIgnore: true */ process.cwd(), outputDirectory);
   await mkdir(target, { recursive: true });
 
   const command =
