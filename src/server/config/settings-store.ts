@@ -3,6 +3,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { appSettingsSchema, type AppSettings } from "@/shared/schemas/settings";
 import { normalizeAISettings } from "@/shared/constants/ai-providers";
+import { DEFAULT_CAPTION_PRESETS } from "@/shared/constants/caption-presets";
 import { configPath, ensureStorageLayout } from "@/server/storage/paths";
 import { defaultAppSettings } from "./defaults";
 
@@ -32,7 +33,8 @@ export async function saveSettings(settings: AppSettings) {
 function normalizeSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
-    aiProviders: normalizeAISettings(settings.aiProviders)
+    aiProviders: normalizeAISettings(settings.aiProviders),
+    captionPresets: mergeDefaultCaptionPresets(settings.captionPresets)
   };
 }
 
@@ -49,4 +51,12 @@ export function maskSettings(settings: AppSettings): AppSettings {
       ])
     ) as AppSettings["aiProviders"]
   };
+}
+
+function mergeDefaultCaptionPresets(presets: AppSettings["captionPresets"]) {
+  const existingIds = new Set(presets.map((preset) => preset.id));
+  return [
+    ...presets,
+    ...DEFAULT_CAPTION_PRESETS.filter((preset) => !existingIds.has(preset.id))
+  ];
 }

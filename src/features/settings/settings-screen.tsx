@@ -4,11 +4,14 @@ import { useRef, useState } from "react";
 import {
   Activity,
   CheckCircle2,
+  Copy,
   EyeOff,
   FolderOpen,
   KeyRound,
   Loader2,
+  Palette,
   RefreshCw,
+  Save,
   Upload,
   Volume2
 } from "lucide-react";
@@ -22,6 +25,7 @@ import {
   type AIProviderTask
 } from "@/shared/constants/ai-providers";
 import { DEFAULT_CAPTION_PRESETS } from "@/shared/constants/caption-presets";
+import type { CaptionPreset } from "@/shared/schemas/caption-style";
 import type { AIProviderConfig, AppSettings } from "@/shared/schemas/settings";
 import { trpc } from "@/features/trpc/client";
 
@@ -55,6 +59,8 @@ export function SettingsScreen() {
   const utils = trpc.useUtils();
   const [active, setActive] = useState("AI providers");
   const [providerDrafts, setProviderDrafts] = useState<Partial<AppSettings["aiProviders"]>>({});
+  const [captionDrafts, setCaptionDrafts] = useState<Record<string, CaptionPreset>>({});
+  const [activeCaptionId, setActiveCaptionId] = useState("karaoke");
   const [modelOptions, setModelOptions] = useState<Partial<Record<AIProviderTask, string[]>>>({});
   const [outputDirectory, setOutputDirectory] = useState<string | null>(null);
   const [message, setMessage] = useState("");
@@ -84,9 +90,67 @@ export function SettingsScreen() {
     },
     onError: (error) => setMessage(error.message)
   });
+  const updateCaptionPreset = trpc.settings.updateCaptionPreset.useMutation({
+    onSuccess: async () => {
+      setMessage("Caption preset saved.");
+      await utils.settings.get.invalidate();
+    },
+    onError: (error) => setMessage(error.message)
+  });
+  const duplicateCaptionPreset = trpc.settings.duplicateCaptionPreset.useMutation({
+    onSuccess: async (nextSettings) => {
+      const latestPreset = nextSettings.captionPresets.at(-1);
+      if (latestPreset) {
+        setActiveCaptionId(latestPreset.id);
+      }
+      setMessage("Caption preset duplicated.");
+      await utils.settings.get.invalidate();
+    },
+    onError: (error) => setMessage(error.message)
+  });
 
   function getDraft(task: AIProviderTask) {
     return providerDrafts[task] ?? settings.data?.aiProviders[task];
+  }
+
+  const captionPresets = settings.data?.captionPresets?.length
+    ? settings.data.captionPresets
+    : DEFAULT_CAPTION_PRESETS;
+  const activeCaption =
+    captionDrafts[activeCaptionId] ??
+    captionPresets.find((preset) => preset.id === activeCaptionId) ??
+    captionPresets[0];
+
+  function setCaptionDraft(preset: CaptionPreset) {
+    setCaptionDrafts((current) => ({ ...current, [preset.id]: preset }));
+  }
+
+  function setCaptionConfigField(
+    field: keyof CaptionPreset["config"],
+    value: string | number | CaptionPreset["config"]["shadow"]
+  ) {
+    if (!activeCaption) {
+      return;
+    }
+    const nextConfig = {
+      ...activeCaption.config,
+      [field]: value
+    };
+    setCaptionDraft({
+      ...activeCaption,
+      isCustom: true,
+      config: nextConfig
+    });
+  }
+
+  function setCaptionShadowField(field: "color" | "blur" | "offsetX" | "offsetY", value: string | number) {
+    if (!activeCaption) {
+      return;
+    }
+    setCaptionConfigField("shadow", {
+      ...(activeCaption.config.shadow ?? { color: "#000000", blur: 0, offsetX: 0, offsetY: 0 }),
+      [field]: value
+    });
   }
 
   function setProviderField(
@@ -379,23 +443,280 @@ export function SettingsScreen() {
           ) : null}
 
           {active === "Caption styles" ? (
-            <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-              <div className="mb-5 flex items-center justify-between">
-                <h2 className="text-lg font-semibold">Caption styles</h2>
-                <Badge>{DEFAULT_CAPTION_PRESETS.length} presets</Badge>
+            <section className="grid gap-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold">Caption style manager</h2>
+                  <p className="mt-1 text-sm text-zinc-500">
+                    Edit ASS/libass presets used by FFmpeg renders.
+                  </p>
+                </div>
+                <Badge>{captionPresets.length} presets</Badge>
               </div>
-              <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
-                {DEFAULT_CAPTION_PRESETS.map((preset) => (
-                  <div key={preset.id} className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
-                    <div className="grid aspect-[4/3] place-items-center rounded-lg bg-zinc-800 text-center text-sm font-black uppercase">
+
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                {captionPresets.map((preset) => (
+                  <button
+                    key={preset.id}
+                    className={`rounded-lg border p-3 text-left ${
+                      activeCaption?.id === preset.id
+                        ? "border-lime-300/60 bg-lime-300/10"
+                        : "border-zinc-800 bg-zinc-950"
+                    }`}
+                    onClick={() => setActiveCaptionId(preset.id)}
+                  >
+                    <div
+                      className="grid aspect-[4/3] place-items-center rounded-lg text-center text-sm font-black uppercase"
+                      style={{
+                        color: preset.config.textColor,
+                        background:
+                          preset.config.backgroundType === "none"
+                            ? "#18181b"
+                            : preset.config.backgroundColor ?? "#111111"
+                      }}
+                    >
                       <span style={{ color: preset.config.wordHighlightColor ?? preset.config.textColor }}>
                         PaunClip
                       </span>
                     </div>
                     <p className="mt-3 text-sm font-semibold">{preset.name}</p>
-                  </div>
+                    <p className="mt-1 text-xs text-zinc-500">{preset.config.animation}</p>
+                  </button>
                 ))}
               </div>
+
+              {activeCaption ? (
+                <div className="grid gap-5 rounded-lg border border-zinc-800 bg-zinc-950 p-5 xl:grid-cols-[320px_1fr]">
+                  <div className="grid content-start gap-4">
+                    <div className="grid aspect-[9/16] place-items-center rounded-lg bg-black p-5 text-center">
+                      <div
+                        className="max-w-full px-4 py-3 text-center font-black"
+                        style={{
+                          color: activeCaption.config.textColor,
+                          background:
+                            activeCaption.config.backgroundType === "none"
+                              ? "transparent"
+                              : activeCaption.config.backgroundColor ?? "#111111",
+                          borderRadius: activeCaption.config.borderRadius ?? 8,
+                          fontSize: `${Math.round(activeCaption.config.fontSize * 240)}px`,
+                          fontFamily: activeCaption.config.fontFamily,
+                          textTransform:
+                            activeCaption.config.textTransform === "none"
+                              ? "none"
+                              : activeCaption.config.textTransform,
+                          WebkitTextStroke: `${activeCaption.config.strokeWidth ?? 0}px ${
+                            activeCaption.config.strokeColor ?? "transparent"
+                          }`
+                        }}
+                      >
+                        Hook line
+                        <br />
+                        <span style={{ color: activeCaption.config.wordHighlightColor }}>
+                          goes here
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={updateCaptionPreset.isPending}
+                        onClick={() => updateCaptionPreset.mutate(activeCaption)}
+                      >
+                        {updateCaptionPreset.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Save className="h-4 w-4" />
+                        )}
+                        Save
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={duplicateCaptionPreset.isPending}
+                        onClick={() => duplicateCaptionPreset.mutate(activeCaption.id)}
+                      >
+                        {duplicateCaptionPreset.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Copy className="h-4 w-4" />
+                        )}
+                        Duplicate
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <label className="grid gap-2">
+                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                        Name
+                      </span>
+                      <Input
+                        value={activeCaption.name}
+                        onChange={(event) =>
+                          setCaptionDraft({
+                            ...activeCaption,
+                            name: event.target.value,
+                            isCustom: true,
+                            config: { ...activeCaption.config, name: event.target.value }
+                          })
+                        }
+                      />
+                    </label>
+                    <label className="grid gap-2">
+                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                        Font family
+                      </span>
+                      <Input
+                        value={activeCaption.config.fontFamily}
+                        onChange={(event) => setCaptionConfigField("fontFamily", event.target.value)}
+                      />
+                    </label>
+                    <label className="grid gap-2">
+                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                        Font size
+                      </span>
+                      <Input
+                        type="number"
+                        min="0.02"
+                        max="0.2"
+                        step="0.002"
+                        value={activeCaption.config.fontSize}
+                        onChange={(event) => setCaptionConfigField("fontSize", Number(event.target.value))}
+                      />
+                    </label>
+                    <label className="grid gap-2">
+                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                        Font weight
+                      </span>
+                      <Input
+                        type="number"
+                        min="100"
+                        max="1000"
+                        step="100"
+                        value={activeCaption.config.fontWeight}
+                        onChange={(event) => setCaptionConfigField("fontWeight", Number(event.target.value))}
+                      />
+                    </label>
+                    <SelectField
+                      label="Position"
+                      value={activeCaption.config.position}
+                      onChange={(next) => setCaptionConfigField("position", next)}
+                      options={[
+                        { label: "Top", value: "top" },
+                        { label: "Center", value: "center" },
+                        { label: "Bottom", value: "bottom" }
+                      ]}
+                    />
+                    <SelectField
+                      label="Animation"
+                      value={activeCaption.config.animation}
+                      onChange={(next) => setCaptionConfigField("animation", next)}
+                      options={[
+                        { label: "None", value: "none" },
+                        { label: "Karaoke", value: "karaoke" },
+                        { label: "Pop", value: "pop" },
+                        { label: "Bounce", value: "bounce" },
+                        { label: "Fade", value: "fade" },
+                        { label: "Slide", value: "slide" },
+                        { label: "Typewriter", value: "typewriter" },
+                        { label: "Glitch", value: "glitch" },
+                        { label: "Shake", value: "shake" }
+                      ]}
+                    />
+                    <SelectField
+                      label="Background"
+                      value={activeCaption.config.backgroundType}
+                      onChange={(next) => setCaptionConfigField("backgroundType", next)}
+                      options={[
+                        { label: "None", value: "none" },
+                        { label: "Pill", value: "pill" },
+                        { label: "Rectangle", value: "rectangle" },
+                        { label: "Glow", value: "glow" }
+                      ]}
+                    />
+                    <SelectField
+                      label="Text transform"
+                      value={activeCaption.config.textTransform}
+                      onChange={(next) => setCaptionConfigField("textTransform", next)}
+                      options={[
+                        { label: "None", value: "none" },
+                        { label: "Uppercase", value: "uppercase" },
+                        { label: "Lowercase", value: "lowercase" },
+                        { label: "Capitalize", value: "capitalize" }
+                      ]}
+                    />
+                    <ColorField
+                      label="Text"
+                      value={activeCaption.config.textColor}
+                      onChange={(value) => setCaptionConfigField("textColor", value)}
+                    />
+                    <ColorField
+                      label="Highlight"
+                      value={activeCaption.config.wordHighlightColor ?? "#b7ff3c"}
+                      onChange={(value) => setCaptionConfigField("wordHighlightColor", value)}
+                    />
+                    <ColorField
+                      label="Background"
+                      value={activeCaption.config.backgroundColor ?? "#111111"}
+                      onChange={(value) => setCaptionConfigField("backgroundColor", value)}
+                    />
+                    <ColorField
+                      label="Stroke"
+                      value={activeCaption.config.strokeColor ?? "#000000"}
+                      onChange={(value) => setCaptionConfigField("strokeColor", value)}
+                    />
+                    <label className="grid gap-2">
+                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                        Stroke width
+                      </span>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="20"
+                        step="1"
+                        value={activeCaption.config.strokeWidth ?? 0}
+                        onChange={(event) => setCaptionConfigField("strokeWidth", Number(event.target.value))}
+                      />
+                    </label>
+                    <label className="grid gap-2">
+                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                        Letter spacing
+                      </span>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="10"
+                        step="0.5"
+                        value={activeCaption.config.letterSpacing ?? 0}
+                        onChange={(event) => setCaptionConfigField("letterSpacing", Number(event.target.value))}
+                      />
+                    </label>
+                    <ColorField
+                      label="Shadow"
+                      value={activeCaption.config.shadow?.color ?? "#000000"}
+                      onChange={(value) => setCaptionShadowField("color", value)}
+                    />
+                    <label className="grid gap-2">
+                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                        Shadow blur
+                      </span>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="64"
+                        step="1"
+                        value={activeCaption.config.shadow?.blur ?? 0}
+                        onChange={(event) => setCaptionShadowField("blur", Number(event.target.value))}
+                      />
+                    </label>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5 text-sm text-zinc-500">
+                  No caption preset available.
+                </div>
+              )}
             </section>
           ) : null}
 
@@ -519,5 +840,30 @@ function HealthItem({ label, ok, detail }: { label: string; ok?: boolean; detail
       </div>
       <p className="mt-2 truncate text-xs text-zinc-500">{detail || "Not checked"}</p>
     </div>
+  );
+}
+
+function ColorField({
+  label,
+  value,
+  onChange
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="grid gap-2">
+      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</span>
+      <div className="grid grid-cols-[44px_1fr] gap-2">
+        <span
+          className="grid h-11 place-items-center rounded-lg border border-zinc-800 bg-black"
+          style={{ color: value }}
+        >
+          <Palette className="h-4 w-4" aria-hidden="true" />
+        </span>
+        <Input value={value} onChange={(event) => onChange(event.target.value)} />
+      </div>
+    </label>
   );
 }

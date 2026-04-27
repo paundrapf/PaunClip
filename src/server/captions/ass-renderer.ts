@@ -1,6 +1,6 @@
 import "server-only";
 import type { CaptionStyle } from "@/shared/schemas/caption-style";
-import type { Transcript } from "@/shared/schemas/session";
+import type { Transcript, TranscriptSegment } from "@/shared/schemas/session";
 
 type AssRenderOptions = {
   width: number;
@@ -11,12 +11,7 @@ type AssRenderOptions = {
 export function buildAssSubtitles(transcript: Transcript, options: AssRenderOptions) {
   const style = toAssStyle(options.style, options.width, options.height);
   const events = transcript.segments
-    .map((segment) => {
-      const text = transformText(segment.text, options.style.textTransform);
-      return `Dialogue: 0,${formatAssTime(segment.start)},${formatAssTime(
-        segment.end
-      )},Default,,0,0,0,,${escapeAssText(text)}`;
-    })
+    .map((segment) => buildDialogue(segment, options.style))
     .join("\n");
 
   return `[Script Info]
@@ -34,6 +29,13 @@ ${style}
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 ${events}
 `;
+}
+
+function buildDialogue(segment: TranscriptSegment, style: CaptionStyle) {
+  const text = buildEventText(segment, style);
+  return `Dialogue: 0,${formatAssTime(segment.start)},${formatAssTime(
+    segment.end
+  )},Default,,0,0,0,,${text}`;
 }
 
 function toAssStyle(style: CaptionStyle, width: number, height: number) {
@@ -71,6 +73,64 @@ function toAssStyle(style: CaptionStyle, width: number, height: number) {
     marginV,
     1
   ].join(",");
+}
+
+function buildEventText(segment: TranscriptSegment, style: CaptionStyle) {
+  const prefix = buildAnimationOverride(style, segment.end - segment.start);
+  if (
+    style.animation === "karaoke" &&
+    style.wordHighlightColor &&
+    segment.words.length > 0
+  ) {
+    return `${prefix}${buildKaraokeText(segment, style)}`;
+  }
+
+  const text = transformText(segment.text, style.textTransform);
+  return `${prefix}${escapeAssText(text)}`;
+}
+
+function buildKaraokeText(segment: TranscriptSegment, style: CaptionStyle) {
+  return segment.words
+    .map((word) => {
+      const start = Math.max(segment.start, word.start);
+      const end = Math.max(start + 0.05, word.end);
+      const centiseconds = Math.max(1, Math.round((end - start) * 100));
+      return `{\\k${centiseconds}}${escapeAssText(transformText(word.word, style.textTransform))}`;
+    })
+    .join(" ");
+}
+
+function buildAnimationOverride(style: CaptionStyle, duration: number) {
+  const fade = "{\\fad(80,80)}";
+  const pop = "{\\fad(60,80)\\fscx92\\fscy92\\t(0,120,\\fscx104\\fscy104)\\t(120,220,\\fscx100\\fscy100)}";
+  const bounce = "{\\fad(50,90)\\fscx94\\fscy94\\t(0,140,\\fscx108\\fscy108)\\t(140,260,\\fscx100\\fscy100)}";
+  const slide = "{\\fad(70,90)\\move(540,1780,540,1680,0,180)}";
+  const typewriter = "{\\fad(60,80)}";
+  const glitch = "{\\fad(40,80)\\t(0,80,\\fsp5)\\t(80,160,\\fsp0)}";
+  const shake = "{\\fad(40,80)\\t(0,80,\\frz-2)\\t(80,160,\\frz2)\\t(160,240,\\frz0)}";
+
+  if (duration <= 0.25) {
+    return "";
+  }
+
+  switch (style.animation) {
+    case "pop":
+      return pop;
+    case "bounce":
+      return bounce;
+    case "fade":
+      return fade;
+    case "slide":
+      return slide;
+    case "typewriter":
+      return typewriter;
+    case "glitch":
+      return glitch;
+    case "shake":
+      return shake;
+    default:
+      return "";
+  }
 }
 
 function transformText(value: string, transform: CaptionStyle["textTransform"]) {

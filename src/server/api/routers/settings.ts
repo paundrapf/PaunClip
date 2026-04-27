@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { loadAIProviderModels, validateAIProviderConfig } from "@/server/ai/provider-router";
 import { getSettings, maskSettings, saveSettings } from "@/server/config/settings-store";
@@ -8,6 +9,8 @@ import {
   AI_PROVIDER_TASKS,
   getProviderPreset
 } from "@/shared/constants/ai-providers";
+import { DEFAULT_CAPTION_PRESETS } from "@/shared/constants/caption-presets";
+import { captionPresetSchema } from "@/shared/schemas/caption-style";
 import { aiProviderConfigSchema, appSettingsSchema, aiSettingsSchema } from "@/shared/schemas/settings";
 import { createTRPCRouter, publicProcedure } from "../trpc";
 
@@ -71,6 +74,53 @@ export const settingsRouter = createTRPCRouter({
       await saveSettings({
         ...current,
         outputDirectory: input
+      })
+    );
+  }),
+
+  updateCaptionPreset: publicProcedure.input(captionPresetSchema).mutation(async ({ input }) => {
+    const current = await getSettings();
+    const existingIndex = current.captionPresets.findIndex((preset) => preset.id === input.id);
+    const captionPresets =
+      existingIndex >= 0
+        ? current.captionPresets.map((preset) => (preset.id === input.id ? input : preset))
+        : [...current.captionPresets, input];
+
+    return maskSettings(
+      await saveSettings({
+        ...current,
+        captionPresets
+      })
+    );
+  }),
+
+  duplicateCaptionPreset: publicProcedure.input(z.string().min(1)).mutation(async ({ input }) => {
+    const current = await getSettings();
+    const source =
+      current.captionPresets.find((preset) => preset.id === input) ??
+      DEFAULT_CAPTION_PRESETS.find((preset) => preset.id === input);
+    if (!source) {
+      throw new Error(`Caption preset not found: ${input}`);
+    }
+
+    const id = `${source.id}-${randomUUID().slice(0, 8)}`;
+    const duplicate = captionPresetSchema.parse({
+      ...source,
+      id,
+      name: `${source.name} Copy`,
+      isDefault: false,
+      isCustom: true,
+      config: {
+        ...source.config,
+        id,
+        name: `${source.name} Copy`
+      }
+    });
+
+    return maskSettings(
+      await saveSettings({
+        ...current,
+        captionPresets: [...current.captionPresets, duplicate]
       })
     );
   }),
