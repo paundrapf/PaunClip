@@ -73,14 +73,62 @@ export const campaignRouter = createTRPCRouter({
   list: publicProcedure.query(async () => {
     return db.campaign.findMany({
       orderBy: { createdAt: "desc" },
-      include: { videos: true, sessions: true }
+      include: {
+        videos: {
+          orderBy: { createdAt: "desc" },
+          include: {
+            session: {
+              include: {
+                jobs: {
+                  orderBy: { createdAt: "desc" },
+                  take: 1
+                }
+              }
+            }
+          }
+        },
+        sessions: true
+      }
     });
   }),
 
-  startBatch: publicProcedure.input(z.string().min(1)).mutation(async ({ input }) => {
+  setVideoSelection: publicProcedure
+    .input(
+      z.object({
+        campaignId: z.string().min(1),
+        videoIds: z.array(z.string().min(1)).max(100)
+      })
+    )
+    .mutation(async ({ input }) => {
+      return db.$transaction(async (tx) => {
+        await tx.campaignVideo.updateMany({
+          where: { campaignId: input.campaignId },
+          data: { selected: false }
+        });
+        if (input.videoIds.length > 0) {
+          await tx.campaignVideo.updateMany({
+            where: { campaignId: input.campaignId, id: { in: input.videoIds } },
+            data: { selected: true }
+          });
+        }
+        return tx.campaign.findUnique({
+          where: { id: input.campaignId },
+          include: { videos: true }
+        });
+      });
+    }),
+
+  startBatch: publicProcedure
+    .input(
+      z.object({
+        campaignId: z.string().min(1),
+        videoIds: z.array(z.string().min(1)).max(100).optional()
+      })
+    )
+    .mutation(async ({ input }) => {
     registerPipelineJobs();
     const campaign = await db.campaign.findUnique({
-      where: { id: input },
+      where: { id: input.campaignId },
       include: { videos: true }
     });
     if (!campaign) {
@@ -88,7 +136,11 @@ export const campaignRouter = createTRPCRouter({
     }
 
     const config = parseJsonWithSchema(sessionConfigSchema, campaign.configJson, {});
-    const videos = campaign.videos.filter((video) => video.selected || campaign.videos.every((item) => !item.selected));
+    const selectedIds = new Set(input.videoIds ?? campaign.videos.filter((video) => video.selected).map((video) => video.id));
+    const videos = campaign.videos.filter((video) => selectedIds.has(video.id));
+    if (videos.length === 0) {
+      throw new Error("Select at least one campaign video before starting batch.");
+    }
     const sessions = [];
 
     for (const video of videos) {
