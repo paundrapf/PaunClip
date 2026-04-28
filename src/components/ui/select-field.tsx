@@ -21,11 +21,11 @@ export function SelectField({
 }) {
   return (
     <label className={cn("grid gap-2", className)}>
-      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</span>
+      <span className="text-xs font-medium uppercase text-[var(--muted-soft)]">{label}</span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="h-11 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-500 focus:ring-2 focus:ring-white/10"
+        className="h-11 rounded-lg border border-[var(--border)] bg-[rgb(9_9_8_/_0.78)] px-3 text-sm text-[var(--text)] shadow-[inset_0_1px_0_rgb(255_255_255_/_0.03)] outline-none transition-[border-color,box-shadow,background] duration-200 focus:border-[var(--accent)]/70 focus:bg-[rgb(12_12_10_/_0.92)] focus:ring-2 focus:ring-[rgb(242_162_58_/_0.13)]"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>
