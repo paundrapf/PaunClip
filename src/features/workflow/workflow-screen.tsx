@@ -110,24 +110,35 @@ export function WorkflowScreen() {
   }
 
   return (
-    <div className="mx-auto grid min-h-screen max-w-[1360px] gap-8 px-8 py-8">
-      <header className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium text-zinc-500">Workflow</p>
-          <h1 className="mt-1 text-2xl font-bold">AI clipping</h1>
+    <div className="mx-auto grid min-h-screen w-full max-w-[1360px] gap-7 overflow-hidden px-5 py-6 sm:px-8">
+      <header className="flex min-w-0 flex-wrap items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-[var(--muted-soft)]">Workflow</p>
+          <h1 className="mt-1 break-words text-2xl font-semibold text-[var(--text)] sm:text-3xl">
+            AI clipping setup
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm text-[var(--muted)]">
+            Pick a source, choose the rules, then decide whether PaunClip renders immediately or waits for review.
+          </p>
         </div>
         <Button variant="primary" onClick={() => void start()} disabled={isWorking}>
           {isWorking ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
-          {config.renderMode === "review" ? "Analyze first" : "Get clips in 1 click"}
+          {config.renderMode === "review" ? "Analyze first" : "Start clipping"}
         </Button>
       </header>
 
-      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[420px_1fr]">
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-          <div className="aspect-video overflow-hidden rounded-lg bg-zinc-900">
+      <div className="grid gap-3 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.56)] p-3 sm:grid-cols-3">
+        <StepBadge number="1" label="Source" active={Boolean(sourceUrl || uploadId)} />
+        <StepBadge number="2" label="Clip rules" active={Boolean(config.prompt || config.genre !== "auto")} />
+        <StepBadge number="3" label={config.renderMode === "review" ? "Review first" : "Auto render"} active />
+      </div>
+
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
+        <div className="min-w-0 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-4 shadow-[var(--shadow-tight)]">
+          <div className="aspect-video overflow-hidden rounded-lg bg-[linear-gradient(135deg,rgb(31_29_25),rgb(9_9_8))]">
             <div className="grid h-full place-items-center">
               <button
-                className="grid h-14 w-14 place-items-center rounded-full bg-white text-black"
+                className="grid h-14 w-14 place-items-center rounded-full bg-[var(--accent)] text-[#1d1308] shadow-[0_18px_38px_rgb(242_162_58_/_0.18)] transition hover:bg-[var(--accent-strong)]"
                 aria-label="Preview source placeholder"
                 onClick={() => fileInputRef.current?.click()}
               >
@@ -137,9 +148,7 @@ export function WorkflowScreen() {
           </div>
           <div className="mt-4 grid gap-4">
             <label className="grid gap-2">
-              <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                YouTube URL
-              </span>
+              <span className="text-xs font-semibold text-[var(--muted-soft)]">YouTube URL</span>
               <Input
                 value={sourceUrl}
                 onChange={(event) => {
@@ -218,12 +227,12 @@ export function WorkflowScreen() {
             </div>
             {uploadedName ? <Badge>{uploadedName}</Badge> : null}
             {manualTranscriptSrt ? <Badge>SRT loaded</Badge> : null}
-            {error ? <p className="text-sm font-medium text-red-300">{error}</p> : null}
+            {error ? <p className="break-words text-sm font-medium text-[#ff9a9a]">{error}</p> : null}
           </div>
         </div>
 
         <div className="grid gap-6">
-          <div className="grid gap-4 rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+          <div className="grid min-w-0 gap-4 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)]">
             <div className="grid gap-4 md:grid-cols-4">
               <SelectField
                 label="Clip model"
@@ -260,32 +269,30 @@ export function WorkflowScreen() {
                 ]}
               />
               <label className="grid gap-2">
-                <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                  Auto hook
-                </span>
+                <span className="text-xs font-semibold text-[var(--muted-soft)]">Auto hook</span>
                 <button
-                  className="flex h-11 items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm"
+                  className="flex h-11 items-center justify-between rounded-lg border border-[var(--border)] bg-[rgb(9_9_8_/_0.72)] px-3 text-sm text-[var(--text)] transition hover:border-[var(--border-strong)]"
                   onClick={() => updateConfig("autoHook", !config.autoHook)}
                 >
                   {config.autoHook ? "Enabled" : "Disabled"}
-                  <span className="grid h-6 w-6 place-items-center rounded-full bg-lime-300 text-black">
+                  <span className="grid h-6 w-6 place-items-center rounded-full bg-[var(--accent)] text-[#1d1308]">
                     <Check className="h-4 w-4" aria-hidden="true" />
                   </span>
                 </button>
               </label>
             </div>
 
-            <div className="grid gap-3 rounded-lg border border-zinc-800 bg-black p-4">
+            <div className="grid gap-3 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.52)] p-4">
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <h2 className="text-sm font-semibold">Render flow</h2>
-                  <p className="mt-1 text-xs text-zinc-500">
+                  <h2 className="text-sm font-semibold text-[var(--text)]">Render flow</h2>
+                  <p className="mt-1 text-xs text-[var(--muted)]">
                     {config.renderMode === "review"
                       ? "Analysis stops before rendering."
                       : "Selected highlights render automatically."}
                   </p>
                 </div>
-                <Layers3 className="h-5 w-5 text-zinc-500" aria-hidden="true" />
+                <Layers3 className="h-5 w-5 text-[var(--muted-soft)]" aria-hidden="true" />
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <Button
@@ -306,21 +313,19 @@ export function WorkflowScreen() {
             </div>
 
             <label className="grid gap-2">
-              <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                Include specific moments
-              </span>
+              <span className="text-xs font-semibold text-[var(--muted-soft)]">Include specific moments</span>
               <textarea
                 value={config.prompt}
                 onChange={(event) => updateConfig("prompt", event.target.value)}
-                className="min-h-28 resize-none rounded-lg border border-zinc-800 bg-black px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-zinc-500 focus:ring-2 focus:ring-white/10"
+                className="min-h-28 resize-none rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.6)] px-4 py-3 text-sm text-[var(--text)] outline-none transition-[border-color,box-shadow,background] placeholder:text-[var(--muted-soft)] focus:border-[var(--accent)]/70 focus:bg-[rgb(12_12_10_/_0.92)] focus:ring-2 focus:ring-[rgb(242_162_58_/_0.13)]"
                 placeholder="Cari momen inspiratif dan kisah sukses"
               />
             </label>
 
-            <div className="rounded-lg border border-zinc-800 bg-black p-4">
+            <div className="rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.52)] p-4">
               <div className="mb-4 flex items-center justify-between text-sm">
-                <span className="font-semibold">Processing timeframe</span>
-                <span className="flex items-center gap-2 text-zinc-500">
+                <span className="font-semibold text-[var(--text)]">Processing timeframe</span>
+                <span className="flex items-center gap-2 text-[var(--muted)]">
                   <Clock className="h-4 w-4" aria-hidden="true" />
                   {config.processingStart ?? 0}s - {config.processingEnd ?? "end"}
                 </span>
@@ -349,11 +354,11 @@ export function WorkflowScreen() {
             </div>
           </div>
 
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+          <div className="min-w-0 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)]">
             <div className="mb-5 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-semibold">Caption</h2>
-                <p className="mt-1 text-sm text-zinc-500">Quick presets</p>
+                <h2 className="text-lg font-semibold text-[var(--text)]">Caption</h2>
+                <p className="mt-1 text-sm text-[var(--muted)]">Quick presets</p>
               </div>
               <SelectField
                 label="Aspect"
@@ -373,11 +378,11 @@ export function WorkflowScreen() {
                 <button
                   key={preset.id}
                   onClick={() => updateConfig("captionStyleId", preset.id)}
-                  className={`grid gap-3 rounded-lg border bg-zinc-900 p-3 text-left transition hover:border-zinc-500 ${
-                    config.captionStyleId === preset.id ? "border-white" : "border-zinc-800"
+                  className={`grid min-w-0 gap-3 rounded-lg border bg-[rgb(9_9_8_/_0.62)] p-3 text-left transition hover:border-[var(--border-strong)] ${
+                    config.captionStyleId === preset.id ? "border-[var(--accent)]" : "border-[var(--border)]"
                   }`}
                 >
-                  <span className="grid aspect-[4/3] place-items-center rounded-lg bg-zinc-800 px-3 text-center text-sm font-black uppercase">
+                  <span className="grid aspect-[4/3] place-items-center rounded-lg bg-[var(--panel-raised)] px-3 text-center text-sm font-black">
                     <span
                       style={{
                         color: preset.config.wordHighlightColor ?? preset.config.textColor,
@@ -388,14 +393,14 @@ export function WorkflowScreen() {
                       To get started
                     </span>
                   </span>
-                  <span className="text-sm font-semibold text-zinc-200">{preset.name}</span>
+                  <span className="break-words text-sm font-semibold text-[var(--text)]">{preset.name}</span>
                 </button>
               ))}
             </div>
-            <div className="mt-5 grid gap-3 rounded-lg border border-zinc-800 bg-black p-4 md:grid-cols-[1fr_180px] md:items-end">
+            <div className="mt-5 grid gap-3 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.52)] p-4 md:grid-cols-[1fr_180px] md:items-end">
               <div>
-                <h3 className="text-sm font-semibold">Caption sync</h3>
-                <p className="mt-1 text-xs text-zinc-500">
+                <h3 className="text-sm font-semibold text-[var(--text)]">Caption sync</h3>
+                <p className="mt-1 text-xs text-[var(--muted)]">
                   {config.captionOffsetMs === 0
                     ? "No offset"
                     : `${config.captionOffsetMs > 0 ? "+" : ""}${config.captionOffsetMs}ms`}
@@ -414,6 +419,29 @@ export function WorkflowScreen() {
           </div>
         </div>
       </section>
+    </div>
+  );
+}
+
+function StepBadge({ number, label, active }: { number: string; label: string; active?: boolean }) {
+  return (
+    <div
+      className={`flex min-w-0 items-center gap-3 rounded-lg border px-3 py-2 ${
+        active
+          ? "border-[rgb(242_162_58_/_0.32)] bg-[var(--accent-muted)]"
+          : "border-[var(--border)] bg-[rgb(7_7_6_/_0.42)]"
+      }`}
+    >
+      <span
+        className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-semibold ${
+          active
+            ? "bg-[var(--accent)] text-[#1d1308]"
+            : "bg-[var(--panel-raised)] text-[var(--muted)]"
+        }`}
+      >
+        {number}
+      </span>
+      <span className="min-w-0 truncate text-sm font-semibold text-[var(--text)]">{label}</span>
     </div>
   );
 }

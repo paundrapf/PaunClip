@@ -204,11 +204,16 @@ export function CampaignsScreen() {
   }
 
   return (
-    <div className="mx-auto grid min-h-screen max-w-[1360px] gap-8 px-8 py-8">
-      <header className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium text-zinc-500">Campaign mode</p>
-          <h1 className="mt-1 text-2xl font-bold">Channel batch processing</h1>
+    <div className="mx-auto grid min-h-screen w-full max-w-[1360px] gap-7 overflow-hidden px-5 py-6 sm:px-8">
+      <header className="flex min-w-0 flex-wrap items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-[var(--muted-soft)]">Campaign mode</p>
+          <h1 className="mt-1 break-words text-2xl font-semibold text-[var(--text)] sm:text-3xl">
+            Channel batch processing
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm text-[var(--muted)]">
+            Create a campaign, fetch channel videos, select the best candidates, then queue only what you want to process.
+          </p>
         </div>
         <Button
           variant="primary"
@@ -220,20 +225,25 @@ export function CampaignsScreen() {
         </Button>
       </header>
 
-      {message ? <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-sm">{message}</div> : null}
+      {message ? (
+        <div className="rounded-lg border border-[rgb(242_162_58_/_0.3)] bg-[var(--accent-muted)] p-3 text-sm text-[var(--text)]">
+          {message}
+        </div>
+      ) : null}
 
-      <section className="grid gap-6 rounded-lg border border-zinc-800 bg-zinc-950 p-6">
+      <section className="grid min-w-0 gap-6 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)] sm:p-6">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <CampaignStep number="1" label="Create campaign" active={Boolean(activeCampaign)} />
+          <CampaignStep number="2" label="Fetch videos" active={Boolean(activeCampaign?.videos.length)} />
+          <CampaignStep number="3" label={`Start selected (${selectedVideoIds.length})`} active={selectedVideoIds.length > 0} />
+        </div>
         <div className="grid gap-4 md:grid-cols-[1fr_1fr_160px]">
           <label className="grid gap-2">
-            <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-              Campaign name
-            </span>
+            <span className="text-xs font-semibold text-[var(--muted-soft)]">Campaign name</span>
             <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Kisah inspiratif batch" />
           </label>
           <label className="grid gap-2">
-            <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-              YouTube channel
-            </span>
+            <span className="text-xs font-semibold text-[var(--muted-soft)]">YouTube channel</span>
             <Input
               value={channelUrl}
               onChange={(event) => setChannelUrl(event.target.value)}
@@ -241,9 +251,7 @@ export function CampaignsScreen() {
             />
           </label>
           <label className="grid gap-2">
-            <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-              Fetch limit
-            </span>
+            <span className="text-xs font-semibold text-[var(--muted-soft)]">Fetch limit</span>
             <Input
               type="number"
               min={1}
@@ -292,9 +300,12 @@ export function CampaignsScreen() {
         </div>
       </section>
 
-      <section className="grid gap-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Recent campaigns</h2>
+      <section className="grid min-w-0 gap-4">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-[var(--text)]">Recent campaigns</h2>
+            <p className="mt-1 text-sm text-[var(--muted)]">Select a campaign to manage its video queue.</p>
+          </div>
           <Badge>{campaigns.data?.length ?? 0} total</Badge>
         </div>
         {campaigns.data?.length ? (
@@ -302,13 +313,13 @@ export function CampaignsScreen() {
             {campaigns.data.map((campaign) => (
               <article
                 key={campaign.id}
-                className={`rounded-lg border bg-zinc-950 p-5 ${
-                  activeCampaign?.id === campaign.id ? "border-white" : "border-zinc-800"
+                className={`min-w-0 rounded-lg border bg-[rgb(18_18_16_/_0.68)] p-5 shadow-[var(--shadow-tight)] ${
+                  activeCampaign?.id === campaign.id ? "border-[var(--accent)]" : "border-[var(--border)]"
                 }`}
               >
-                <button className="text-left" onClick={() => setActiveCampaignId(campaign.id)}>
-                  <h3 className="font-semibold">{campaign.name}</h3>
-                  <p className="mt-1 text-sm text-zinc-500">{campaign.channelUrl || "No channel URL"}</p>
+                <button className="min-w-0 text-left" onClick={() => setActiveCampaignId(campaign.id)}>
+                  <h3 className="break-words font-semibold text-[var(--text)]">{campaign.name}</h3>
+                  <p className="mt-1 break-words text-sm text-[var(--muted)]">{campaign.channelUrl || "No channel URL"}</p>
                 </button>
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   <Badge>{campaign.videos.length} videos</Badge>
@@ -319,55 +330,55 @@ export function CampaignsScreen() {
                 </div>
                 <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   {campaign.videos.map((video) => (
-                    <div key={video.id} className="overflow-hidden rounded-lg border border-zinc-800 bg-black">
+                    <div key={video.id} className="min-w-0 overflow-hidden rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.64)]">
                       <button
-                        className="relative aspect-video w-full bg-zinc-900 text-left"
+                        className="relative aspect-video w-full bg-[var(--panel-raised)] text-left"
                         onClick={() => toggleCampaignVideo(campaign, video.id)}
                       >
                         {video.thumbnailUrl ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={video.thumbnailUrl} alt="" className="h-full w-full object-cover" />
                         ) : (
-                          <div className="grid h-full place-items-center px-4 text-center text-xs text-zinc-500">
+                          <div className="grid h-full place-items-center px-4 text-center text-xs text-[var(--muted)]">
                             No thumbnail
                           </div>
                         )}
-                        <span className="absolute left-2 top-2 grid h-9 w-9 place-items-center rounded-lg bg-black/75">
+                        <span className="absolute left-2 top-2 grid h-9 w-9 place-items-center rounded-lg bg-[rgb(7_7_6_/_0.82)] shadow-[inset_0_0_0_1px_rgb(255_255_255_/_0.08)]">
                           {(activeCampaign?.id === campaign.id
                             ? selectedVideoIds
                             : campaign.videos
                                 .filter((item) => item.selected)
                                 .map((item) => item.id)
                           ).includes(video.id) ? (
-                            <CheckSquare className="h-5 w-5 text-lime-300" aria-hidden="true" />
+                            <CheckSquare className="h-5 w-5 text-[var(--accent-strong)]" aria-hidden="true" />
                           ) : (
-                            <Square className="h-5 w-5 text-white" aria-hidden="true" />
+                            <Square className="h-5 w-5 text-[var(--text)]" aria-hidden="true" />
                           )}
                         </span>
                         {video.durationSeconds ? (
-                          <span className="absolute right-2 top-2 rounded-full bg-black/75 px-2 py-1 text-xs font-semibold">
+                          <span className="absolute right-2 top-2 rounded-full bg-[rgb(7_7_6_/_0.82)] px-2 py-1 text-xs font-semibold text-[var(--text)]">
                             {formatDuration(video.durationSeconds)}
                           </span>
                         ) : null}
                       </button>
                       <div className="grid gap-2 p-3">
-                        <p className="line-clamp-2 text-sm font-semibold">{video.title}</p>
+                        <p className="line-clamp-2 break-words text-sm font-semibold text-[var(--text)]">{video.title}</p>
                         <div className="flex items-center justify-between gap-2">
                           <Badge>{video.session?.jobs[0]?.progress ?? 0}%</Badge>
-                          <span className="text-xs text-zinc-500">
+                          <span className="truncate text-xs text-[var(--muted)]">
                             {video.session?.stage ?? video.status}
                           </span>
                         </div>
-                        <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
+                        <div className="h-2 overflow-hidden rounded-full bg-[rgb(255_255_255_/_0.06)]">
                           <div
-                            className="h-full rounded-full bg-lime-300"
+                            className="h-full rounded-full bg-[var(--accent)]"
                             style={{
                               width: `${video.session?.jobs[0]?.progress ?? (video.status === "completed" ? 100 : 0)}%`
                             }}
                           />
                         </div>
                       {video.sessionId ? (
-                        <Link className="inline-flex text-xs font-semibold text-lime-300" href={`/results/${video.sessionId}`}>
+                        <Link className="inline-flex text-xs font-semibold text-[var(--accent-strong)]" href={`/results/${video.sessionId}`}>
                           Open results
                         </Link>
                       ) : null}
@@ -379,7 +390,7 @@ export function CampaignsScreen() {
             ))}
           </div>
         ) : (
-          <div className="grid place-items-center rounded-lg border border-dashed border-zinc-800 py-20 text-zinc-500">
+          <div className="grid place-items-center rounded-lg border border-dashed border-[var(--border-strong)] bg-[rgb(18_18_16_/_0.45)] py-20 text-[var(--muted)]">
             No campaigns yet
           </div>
         )}
@@ -392,4 +403,27 @@ function formatDuration(totalSeconds: number) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = Math.round(totalSeconds % 60);
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function CampaignStep({ number, label, active }: { number: string; label: string; active?: boolean }) {
+  return (
+    <div
+      className={`flex min-w-0 items-center gap-3 rounded-lg border px-3 py-2 ${
+        active
+          ? "border-[rgb(242_162_58_/_0.32)] bg-[var(--accent-muted)]"
+          : "border-[var(--border)] bg-[rgb(7_7_6_/_0.42)]"
+      }`}
+    >
+      <span
+        className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-semibold ${
+          active
+            ? "bg-[var(--accent)] text-[#1d1308]"
+            : "bg-[var(--panel-raised)] text-[var(--muted)]"
+        }`}
+      >
+        {number}
+      </span>
+      <span className="min-w-0 truncate text-sm font-semibold text-[var(--text)]">{label}</span>
+    </div>
+  );
 }
