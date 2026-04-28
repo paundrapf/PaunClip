@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
 import { trpc } from "@/features/trpc/client";
 
 type ClipEditorDraft = {
@@ -44,6 +45,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
   const [previewClipId, setPreviewClipId] = useState<string | null>(null);
   const [localSelectedHighlightIds, setLocalSelectedHighlightIds] = useState<string[] | null>(null);
   const utils = trpc.useUtils();
+  const { notify } = useToast();
   const session = trpc.session.getById.useQuery(sessionId, {
     refetchInterval: (query) => {
       const data = query.state.data;
@@ -54,8 +56,20 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
   });
   const retrySession = trpc.session.retry.useMutation({
     onSuccess: async () => {
+      notify({
+        type: "success",
+        title: "Retry queued",
+        description: "PaunClip will process this session again."
+      });
       await utils.session.getById.invalidate(sessionId);
       await utils.session.list.invalidate();
+    },
+    onError: (error) => {
+      notify({
+        type: "error",
+        title: "Retry failed",
+        description: error.message
+      });
     }
   });
   const setHighlightSelection = trpc.session.setHighlightSelection.useMutation({
@@ -63,40 +77,107 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
       setLocalSelectedHighlightIds(null);
       await utils.session.getById.invalidate(sessionId);
       await utils.session.list.invalidate();
+    },
+    onError: (error) => {
+      notify({
+        type: "error",
+        title: "Selection was not saved",
+        description: error.message
+      });
     }
   });
   const renderSelected = trpc.session.renderSelected.useMutation({
-    onSuccess: async () => {
+    onSuccess: async (_job, variables) => {
       setLocalSelectedHighlightIds(null);
+      notify({
+        type: "success",
+        title: "Render queued",
+        description: `${variables.highlightIds?.length ?? 0} selected highlights are rendering.`
+      });
       await utils.session.getById.invalidate(sessionId);
       await utils.session.list.invalidate();
+    },
+    onError: (error) => {
+      notify({
+        type: "error",
+        title: "Render could not start",
+        description: error.message
+      });
     }
   });
   const updateClipDraft = trpc.clip.updateDraft.useMutation({
     onSuccess: async (_clip, variables) => {
+      notify({
+        type: "success",
+        title: "Draft saved",
+        description: "Your clip edits are stored."
+      });
       await utils.clip.editorData.invalidate(variables.clipId);
       await utils.session.getById.invalidate(sessionId);
       await utils.session.list.invalidate();
+    },
+    onError: (error) => {
+      notify({
+        type: "error",
+        title: "Draft was not saved",
+        description: error.message
+      });
     }
   });
   const rerenderClip = trpc.clip.rerender.useMutation({
     onSuccess: async (_result, clipId) => {
+      notify({
+        type: "success",
+        title: "Rerender queued",
+        description: "PaunClip will rebuild this clip safely."
+      });
       await utils.clip.editorData.invalidate(clipId);
       await utils.session.getById.invalidate(sessionId);
       await utils.session.list.invalidate();
+    },
+    onError: (error) => {
+      notify({
+        type: "error",
+        title: "Rerender failed",
+        description: error.message
+      });
     }
   });
   const duplicateClip = trpc.clip.duplicate.useMutation({
     onSuccess: async (clip) => {
       setPreviewClipId(clip.id);
+      notify({
+        type: "success",
+        title: "Clip duplicated",
+        description: "The duplicated clip is ready to edit."
+      });
       await utils.session.getById.invalidate(sessionId);
       await utils.session.list.invalidate();
+    },
+    onError: (error) => {
+      notify({
+        type: "error",
+        title: "Duplicate failed",
+        description: error.message
+      });
     }
   });
   const cancelJob = trpc.job.cancel.useMutation({
     onSuccess: async () => {
+      notify({
+        type: "warning",
+        title: "Cancellation requested",
+        description: "PaunClip is stopping the running job."
+      });
       await utils.session.getById.invalidate(sessionId);
       await utils.session.list.invalidate();
+    },
+    onError: (error) => {
+      notify({
+        type: "error",
+        title: "Cancel failed",
+        description: error.message
+      });
     }
   });
   const editor = trpc.clip.editorData.useQuery(previewClipId ?? "", {

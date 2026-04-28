@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SelectField } from "@/components/ui/select-field";
+import { useToast } from "@/components/ui/toast";
 import {
   AI_PROVIDER_PRESETS,
   buildProviderConfig,
@@ -54,6 +55,7 @@ type HealthData = {
 
 export function SettingsScreen() {
   const cookiesRef = useRef<HTMLInputElement>(null);
+  const { notify } = useToast();
   const settings = trpc.settings.get.useQuery();
   const health = trpc.settings.health.useQuery(undefined, { refetchInterval: 15_000 });
   const storageStats = trpc.settings.storageStats.useQuery(undefined, { refetchInterval: 15_000 });
@@ -71,49 +73,74 @@ export function SettingsScreen() {
   });
   const [message, setMessage] = useState("");
 
+  function showMessage(
+    type: "success" | "error" | "warning" | "info",
+    title: string,
+    description?: string,
+  ) {
+    setMessage(description ?? title);
+    notify({ type, title, description });
+  }
+
   const updateProvider = trpc.settings.updateProvider.useMutation({
     onSuccess: async () => {
-      setMessage("Provider saved.");
+      showMessage("success", "Provider saved", "The AI provider configuration is ready.");
       await utils.settings.get.invalidate();
     },
-    onError: (error) => setMessage(error.message)
+    onError: (error) =>
+      showMessage("error", "Provider save failed", error.message)
   });
   const updateOutput = trpc.settings.updateOutputDirectory.useMutation({
     onSuccess: async () => {
-      setMessage("Output directory saved.");
+      showMessage("success", "Output directory saved");
       await utils.settings.get.invalidate();
     },
-    onError: (error) => setMessage(error.message)
+    onError: (error) =>
+      showMessage("error", "Output directory was not saved", error.message)
   });
   const openOutput = trpc.settings.openOutputDirectory.useMutation({
-    onSuccess: (result) => setMessage(`Opened ${result.path}`),
-    onError: (error) => setMessage(error.message)
+    onSuccess: (result) => showMessage("success", "Output folder opened", result.path),
+    onError: (error) =>
+      showMessage("error", "Output folder could not open", error.message)
   });
   const cleanupStorage = trpc.settings.cleanupStorage.useMutation({
     onSuccess: async (result) => {
-      setMessage(`Cleanup removed ${result.removedLabel}.`);
+      showMessage("success", "Cleanup completed", `Removed ${result.removedLabel}.`);
       await utils.settings.storageStats.invalidate();
       await utils.settings.get.invalidate();
     },
-    onError: (error) => setMessage(error.message)
+    onError: (error) =>
+      showMessage("error", "Cleanup failed", error.message)
   });
   const validateProvider = trpc.settings.validateProvider.useMutation({
-    onSuccess: (result) => setMessage(result.message),
-    onError: (error) => setMessage(error.message)
+    onSuccess: (result) =>
+      showMessage(
+        result.ok ? "success" : "warning",
+        result.ok ? "Provider validated" : "Provider needs attention",
+        result.message,
+      ),
+    onError: (error) =>
+      showMessage("error", "Provider validation failed", error.message)
   });
   const loadModels = trpc.settings.loadProviderModels.useMutation({
     onSuccess: (models, variables) => {
       setModelOptions((current) => ({ ...current, [variables.task]: models }));
-      setMessage(models.length ? `Loaded ${models.length} models.` : "No models returned.");
+      showMessage(
+        models.length ? "success" : "warning",
+        models.length ? "Models loaded" : "No models returned",
+        models.length ? `Loaded ${models.length} models.` : "Check the base URL or API key.",
+      );
     },
-    onError: (error) => setMessage(error.message)
+    onError: (error) =>
+      showMessage("error", "Could not load models", error.message)
   });
   const updateCaptionPreset = trpc.settings.updateCaptionPreset.useMutation({
     onSuccess: async () => {
-      setMessage("Caption preset saved.");
+      showMessage("success", "Caption preset saved");
       await utils.settings.get.invalidate();
     },
-    onError: (error) => setMessage(error.message)
+    onError: (error) =>
+      showMessage("error", "Caption preset was not saved", error.message)
   });
   const duplicateCaptionPreset = trpc.settings.duplicateCaptionPreset.useMutation({
     onSuccess: async (nextSettings) => {
@@ -121,10 +148,11 @@ export function SettingsScreen() {
       if (latestPreset) {
         setActiveCaptionId(latestPreset.id);
       }
-      setMessage("Caption preset duplicated.");
+      showMessage("success", "Caption preset duplicated");
       await utils.settings.get.invalidate();
     },
-    onError: (error) => setMessage(error.message)
+    onError: (error) =>
+      showMessage("error", "Caption preset was not duplicated", error.message)
   });
 
   function getDraft(task: AIProviderTask) {
@@ -214,7 +242,11 @@ export function SettingsScreen() {
       throw new Error(body?.error ?? "Cookie upload failed");
     }
 
-    setMessage(body?.validation?.message ?? "cookies.txt saved.");
+    showMessage(
+      "success",
+      "Cookies uploaded",
+      body?.validation?.message ?? "cookies.txt saved.",
+    );
     await utils.settings.get.invalidate();
     await utils.settings.health.invalidate();
   }
@@ -856,9 +888,13 @@ export function SettingsScreen() {
                   if (!file) {
                     return;
                   }
-                  uploadCookies(file).catch((error) =>
-                    setMessage(error instanceof Error ? error.message : "Cookie upload failed")
-                  );
+                  uploadCookies(file).catch((error) => {
+                    showMessage(
+                      "error",
+                      "Cookie upload failed",
+                      error instanceof Error ? error.message : "Cookie upload failed",
+                    );
+                  });
                   event.currentTarget.value = "";
                 }}
               />

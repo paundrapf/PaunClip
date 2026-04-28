@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 import { trpc } from "@/features/trpc/client";
 import { sessionConfigSchema } from "@/shared/schemas/session";
 
@@ -35,12 +36,28 @@ const defaultConfig = sessionConfigSchema.parse({});
 
 export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" }) {
   const router = useRouter();
+  const { notify } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const sessions = trpc.session.list.useQuery(undefined, { refetchInterval: 3000 });
   const createSession = trpc.session.create.useMutation({
-    onSuccess: ({ session }) => router.push(`/results/${session.id}`)
+    onSuccess: ({ session }) => {
+      notify({
+        type: "success",
+        title: "Project started",
+        description: "Opening the processing workspace."
+      });
+      router.push(`/results/${session.id}`);
+    },
+    onError: (createError) => {
+      setError(createError.message);
+      notify({
+        type: "error",
+        title: "Could not start project",
+        description: createError.message
+      });
+    }
   });
 
   const isWorking = createSession.isPending;
@@ -49,14 +66,21 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
     setError("");
     if (!url.trim()) {
       setError("Paste YouTube URL dulu, atau upload file video.");
+      notify({
+        type: "warning",
+        title: "Source is empty",
+        description: "Paste a YouTube URL or upload a video first."
+      });
       return;
     }
 
-    await createSession.mutateAsync({
-      sourceType: "youtube",
-      sourceUrl: url.trim(),
-      config: defaultConfig
-    });
+    await createSession
+      .mutateAsync({
+        sourceType: "youtube",
+        sourceUrl: url.trim(),
+        config: defaultConfig
+      })
+      .catch(() => undefined);
   }
 
   async function uploadAndStart(file: File) {
@@ -73,11 +97,19 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
     }
 
     const uploaded = (await response.json()) as { uploadId: string };
-    await createSession.mutateAsync({
-      sourceType: "upload",
-      uploadId: uploaded.uploadId,
-      config: defaultConfig
+    notify({
+      type: "success",
+      title: "Upload received",
+      description: "Starting clip analysis now."
     });
+
+    await createSession
+      .mutateAsync({
+        sourceType: "upload",
+        uploadId: uploaded.uploadId,
+        config: defaultConfig
+      })
+      .catch(() => undefined);
   }
 
   const visibleSessions = sessions.data ?? [];
@@ -134,9 +166,16 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
                 if (!file) {
                   return;
                 }
-                uploadAndStart(file).catch((uploadError) =>
-                  setError(uploadError instanceof Error ? uploadError.message : "Upload failed")
-                );
+                uploadAndStart(file).catch((uploadError) => {
+                  const message =
+                    uploadError instanceof Error ? uploadError.message : "Upload failed";
+                  setError(message);
+                  notify({
+                    type: "error",
+                    title: "Upload failed",
+                    description: message
+                  });
+                });
                 event.currentTarget.value = "";
               }}
             />

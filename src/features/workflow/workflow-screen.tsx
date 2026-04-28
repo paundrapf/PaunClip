@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { SelectField } from "@/components/ui/select-field";
+import { useToast } from "@/components/ui/toast";
 import { DEFAULT_CAPTION_PRESETS } from "@/shared/constants/caption-presets";
 import { sessionConfigSchema, type SessionConfig } from "@/shared/schemas/session";
 import { trpc } from "@/features/trpc/client";
@@ -14,6 +15,7 @@ import { trpc } from "@/features/trpc/client";
 export function WorkflowScreen() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { notify } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const srtInputRef = useRef<HTMLInputElement>(null);
   const [sourceUrl, setSourceUrl] = useState(searchParams.get("url") ?? "");
@@ -23,7 +25,22 @@ export function WorkflowScreen() {
   const [error, setError] = useState("");
   const [config, setConfig] = useState<SessionConfig>(sessionConfigSchema.parse({}));
   const createSession = trpc.session.create.useMutation({
-    onSuccess: ({ session }) => router.push(`/results/${session.id}`)
+    onSuccess: ({ session }) => {
+      notify({
+        type: "success",
+        title: "Workflow started",
+        description: "Opening the processing workspace."
+      });
+      router.push(`/results/${session.id}`);
+    },
+    onError: (createError) => {
+      setError(createError.message);
+      notify({
+        type: "error",
+        title: "Workflow could not start",
+        description: createError.message
+      });
+    }
   });
 
   const isWorking = createSession.isPending;
@@ -48,6 +65,11 @@ export function WorkflowScreen() {
     setUploadId(data.uploadId);
     setUploadedName(file.name);
     setSourceUrl("");
+    notify({
+      type: "success",
+      title: "Video uploaded",
+      description: "This file is ready for the workflow."
+    });
   }
 
   async function start() {
@@ -58,24 +80,33 @@ export function WorkflowScreen() {
     });
 
     if (uploadId) {
-      await createSession.mutateAsync({
-        sourceType: "upload",
-        uploadId,
-        config: finalConfig
-      });
+      await createSession
+        .mutateAsync({
+          sourceType: "upload",
+          uploadId,
+          config: finalConfig
+        })
+        .catch(() => undefined);
       return;
     }
 
     if (!sourceUrl.trim()) {
       setError("Masukkan YouTube URL atau upload file video dulu.");
+      notify({
+        type: "warning",
+        title: "Source is empty",
+        description: "Masukkan YouTube URL atau upload file video dulu."
+      });
       return;
     }
 
-    await createSession.mutateAsync({
-      sourceType: "youtube",
-      sourceUrl: sourceUrl.trim(),
-      config: finalConfig
-    });
+    await createSession
+      .mutateAsync({
+        sourceType: "youtube",
+        sourceUrl: sourceUrl.trim(),
+        config: finalConfig
+      })
+      .catch(() => undefined);
   }
 
   return (
@@ -131,9 +162,16 @@ export function WorkflowScreen() {
                 if (!file) {
                   return;
                 }
-                uploadVideo(file).catch((uploadError) =>
-                  setError(uploadError instanceof Error ? uploadError.message : "Upload failed")
-                );
+                uploadVideo(file).catch((uploadError) => {
+                  const message =
+                    uploadError instanceof Error ? uploadError.message : "Upload failed";
+                  setError(message);
+                  notify({
+                    type: "error",
+                    title: "Upload failed",
+                    description: message
+                  });
+                });
                 event.currentTarget.value = "";
               }}
             />
@@ -147,7 +185,24 @@ export function WorkflowScreen() {
                 if (!file) {
                   return;
                 }
-                file.text().then(setManualTranscriptSrt).catch(() => setError("Gagal membaca SRT."));
+                file
+                  .text()
+                  .then((text) => {
+                    setManualTranscriptSrt(text);
+                    notify({
+                      type: "success",
+                      title: "Transcript loaded",
+                      description: "PaunClip will use this SRT for analysis."
+                    });
+                  })
+                  .catch(() => {
+                    setError("Gagal membaca SRT.");
+                    notify({
+                      type: "error",
+                      title: "Could not read SRT",
+                      description: "Try another subtitle file."
+                    });
+                  });
                 event.currentTarget.value = "";
               }}
             />

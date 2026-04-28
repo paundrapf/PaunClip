@@ -6,11 +6,13 @@ import { CheckSquare, FolderPlus, ListChecks, Loader2, PlayCircle, Square } from
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 import { trpc } from "@/features/trpc/client";
 import { sessionConfigSchema } from "@/shared/schemas/session";
 
 export function CampaignsScreen() {
   const utils = trpc.useUtils();
+  const { notify } = useToast();
   const [name, setName] = useState("");
   const [channelUrl, setChannelUrl] = useState("");
   const [limit, setLimit] = useState(10);
@@ -22,26 +24,73 @@ export function CampaignsScreen() {
     onSuccess: async (campaign) => {
       setActiveCampaignId(campaign.id);
       setMessage("Campaign created.");
+      notify({
+        type: "success",
+        title: "Campaign created",
+        description: "Next step: fetch videos from the channel."
+      });
       await utils.campaign.list.invalidate();
+    },
+    onError: (error) => {
+      setMessage(error.message);
+      notify({
+        type: "error",
+        title: "Campaign could not be created",
+        description: error.message
+      });
     }
   });
   const fetchVideos = trpc.campaign.fetchVideos.useMutation({
-    onSuccess: async () => {
+    onSuccess: async (campaign) => {
       setLocalSelectedVideoIds(null);
-      setMessage("Videos fetched.");
+      const count = campaign?.videos.length ?? 0;
+      setMessage(`${count} videos fetched.`);
+      notify({
+        type: "success",
+        title: "Videos fetched",
+        description: `${count} videos are ready to select.`
+      });
       await utils.campaign.list.invalidate();
+    },
+    onError: (error) => {
+      setMessage(error.message);
+      notify({
+        type: "error",
+        title: "Could not fetch videos",
+        description: error.message
+      });
     }
   });
   const setVideoSelection = trpc.campaign.setVideoSelection.useMutation({
     onSuccess: async () => {
       setLocalSelectedVideoIds(null);
       await utils.campaign.list.invalidate();
+    },
+    onError: (error) => {
+      notify({
+        type: "error",
+        title: "Selection was not saved",
+        description: error.message
+      });
     }
   });
   const startBatch = trpc.campaign.startBatch.useMutation({
     onSuccess: async (jobs) => {
       setMessage(`${jobs.length} videos queued.`);
+      notify({
+        type: "success",
+        title: "Batch queued",
+        description: `${jobs.length} selected videos are processing.`
+      });
       await utils.campaign.list.invalidate();
+    },
+    onError: (error) => {
+      setMessage(error.message);
+      notify({
+        type: "error",
+        title: "Batch could not start",
+        description: error.message
+      });
     }
   });
 
@@ -93,6 +142,67 @@ export function CampaignsScreen() {
     persistVideoSelection(allVideosSelected ? [] : activeCampaign.videos.map((video) => video.id));
   }
 
+  function createNewCampaign() {
+    const trimmedChannelUrl = channelUrl.trim();
+
+    if (!trimmedChannelUrl) {
+      setMessage("Paste a YouTube channel or playlist URL first.");
+      notify({
+        type: "warning",
+        title: "Channel URL is empty",
+        description: "Paste a YouTube channel or playlist URL before creating a campaign."
+      });
+      return;
+    }
+
+    createCampaign.mutate({
+      name: name.trim() || "Untitled campaign",
+      channelUrl: trimmedChannelUrl,
+      config: sessionConfigSchema.parse({})
+    });
+  }
+
+  function fetchCampaignVideos() {
+    if (!activeCampaign) {
+      notify({
+        type: "warning",
+        title: "No active campaign",
+        description: "Create or select a campaign first."
+      });
+      return;
+    }
+
+    fetchVideos.mutate({
+      campaignId: activeCampaign.id,
+      limit
+    });
+  }
+
+  function startSelectedVideos() {
+    if (!activeCampaign) {
+      notify({
+        type: "warning",
+        title: "No active campaign",
+        description: "Create or select a campaign first."
+      });
+      return;
+    }
+
+    if (selectedVideoIds.length === 0) {
+      notify({
+        type: "warning",
+        title: "No videos selected",
+        description: "Select at least one video before starting the batch."
+      });
+      return;
+    }
+
+    startBatch.mutate({
+      campaignId: activeCampaign.id,
+      videoIds: selectedVideoIds
+    });
+  }
+
   return (
     <div className="mx-auto grid min-h-screen max-w-[1360px] gap-8 px-8 py-8">
       <header className="flex items-center justify-between">
@@ -102,13 +212,7 @@ export function CampaignsScreen() {
         </div>
         <Button
           variant="primary"
-          onClick={() =>
-            createCampaign.mutate({
-              name: name || "Untitled campaign",
-              channelUrl: channelUrl || undefined,
-              config: sessionConfigSchema.parse({})
-            })
-          }
+          onClick={createNewCampaign}
           disabled={createCampaign.isPending}
         >
           {createCampaign.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderPlus className="h-4 w-4" />}
@@ -163,13 +267,7 @@ export function CampaignsScreen() {
           <Button
             variant="secondary"
             disabled={!activeCampaign || fetchVideos.isPending}
-            onClick={() =>
-              activeCampaign &&
-              fetchVideos.mutate({
-                campaignId: activeCampaign.id,
-                limit
-              })
-            }
+            onClick={fetchCampaignVideos}
           >
             {fetchVideos.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
             Fetch videos
@@ -177,13 +275,7 @@ export function CampaignsScreen() {
           <Button
             variant="primary"
             disabled={!activeCampaign || selectedVideoIds.length === 0 || startBatch.isPending}
-            onClick={() =>
-              activeCampaign &&
-              startBatch.mutate({
-                campaignId: activeCampaign.id,
-                videoIds: selectedVideoIds
-              })
-            }
+            onClick={startSelectedVideos}
           >
             {startBatch.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
             Start selected ({selectedVideoIds.length})
