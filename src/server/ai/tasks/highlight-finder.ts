@@ -4,6 +4,11 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { AIProviderConfig } from "@/shared/schemas/settings";
 import { highlightSchema, type Highlight, type Transcript } from "@/shared/schemas/session";
 import { AIProviderRouter, isOpenAIClient } from "@/server/ai/provider-router";
+import {
+  buildHighlightPromptMessages,
+  type HighlightPromptMessages,
+  type HighlightPromptMode
+} from "@/server/ai/prompts/highlight-finder";
 import { improveHighlights } from "./highlight-quality";
 
 const highlightArraySchema = highlightSchema.array();
@@ -40,6 +45,7 @@ export async function findHighlights(params: {
   router: AIProviderRouter;
   transcript: Transcript;
   prompt?: string;
+  promptMode?: HighlightPromptMode;
   targetCount?: number;
 }): Promise<Highlight[]> {
   const targetCount = params.targetCount ?? 8;
@@ -61,6 +67,7 @@ export async function findHighlights(params: {
       config,
       transcript: params.transcript,
       userPrompt: params.prompt,
+      promptMode: params.promptMode,
       targetCount
     });
     if (highlights.length === 0) {
@@ -101,18 +108,21 @@ async function findHighlightsWithAI(params: {
   config: AIProviderConfig;
   transcript: Transcript;
   userPrompt?: string;
+  promptMode?: HighlightPromptMode;
   targetCount: number;
 }) {
   const budget = getPromptTokenBudget(params.config);
   const transcriptTokens = estimateTranscriptTokens(params.transcript);
   if (transcriptTokens <= budget) {
     try {
-      const prompt = buildHighlightPrompt(
-        params.transcript,
-        params.userPrompt,
-        params.targetCount,
-        "final"
-      );
+      const prompt = buildHighlightPromptMessages({
+        transcript: params.transcript,
+        userPrompt: params.userPrompt,
+        targetCount: params.targetCount,
+        scope: "final",
+        promptMode: params.promptMode,
+        systemMessage: params.config.systemMessage
+      });
       const raw = await callAI(params.client, params.config.model, prompt);
       return parseHighlights(raw, params.transcript, params.targetCount, false, params.config);
     } catch (error) {
@@ -133,6 +143,7 @@ async function findHighlightsByChunks(params: {
   config: AIProviderConfig;
   transcript: Transcript;
   userPrompt?: string;
+  promptMode?: HighlightPromptMode;
   targetCount: number;
   chunkBudget: number;
 }) {
@@ -143,12 +154,14 @@ async function findHighlightsByChunks(params: {
 
   for (const chunk of chunks) {
     try {
-      const prompt = buildHighlightPrompt(
-        chunk.transcript,
-        params.userPrompt,
-        perChunkTarget,
-        "chunk"
-      );
+      const prompt = buildHighlightPromptMessages({
+        transcript: chunk.transcript,
+        userPrompt: params.userPrompt,
+        targetCount: perChunkTarget,
+        scope: "chunk",
+        promptMode: params.promptMode,
+        systemMessage: params.config.systemMessage
+      });
       const raw = await callAI(params.client, params.config.model, prompt);
       candidates.push(...parseHighlights(raw, chunk.transcript, perChunkTarget, false, params.config));
     } catch (error) {
@@ -156,12 +169,14 @@ async function findHighlightsByChunks(params: {
         const smallerChunks = splitTranscriptIntoChunks(chunk.transcript, Math.floor(chunk.tokenEstimate / 2));
         for (const smallerChunk of smallerChunks) {
           try {
-            const prompt = buildHighlightPrompt(
-              smallerChunk.transcript,
-              params.userPrompt,
-              Math.max(2, perChunkTarget - 1),
-              "chunk"
-            );
+            const prompt = buildHighlightPromptMessages({
+              transcript: smallerChunk.transcript,
+              userPrompt: params.userPrompt,
+              targetCount: Math.max(2, perChunkTarget - 1),
+              scope: "chunk",
+              promptMode: params.promptMode,
+              systemMessage: params.config.systemMessage
+            });
             const raw = await callAI(params.client, params.config.model, prompt);
             candidates.push(...parseHighlights(raw, smallerChunk.transcript, perChunkTarget, false, params.config));
           } catch (nestedError) {
@@ -190,56 +205,20 @@ async function findHighlightsByChunks(params: {
   return candidates;
 }
 
-function buildHighlightPrompt(
-  transcript: Transcript,
-  userPrompt = "",
-  targetCount: number,
-  mode: "chunk" | "final"
-) {
-  const compactTranscript = transcript.segments
-    .map((segment) => `[${segment.start.toFixed(1)}-${segment.end.toFixed(1)}] ${segment.text}`)
-    .join("\n");
-
-  const modeInstruction =
-    mode === "chunk"
-      ? "This is one transcript chunk. Return only moments that are self-contained inside this chunk."
-      : "Return the best final moments across the whole transcript.";
-
-  return `You are an expert short-form podcast clip curator.
-
-${modeInstruction}
-Find up to ${targetCount} standalone highlight clips from this transcript.
-Return JSON only. The JSON must be an object with a "highlights" array.
-Each highlight object must have:
-startTime, endTime, title, description, viralityScore, selected, hookText.
-
-Rules:
-- startTime and endTime are seconds from the original video.
-- Prefer complete thoughts with setup, core point, and payoff/reaction.
-- Avoid clips that start in the middle of a sentence or end before the speaker finishes.
-- Podcast/story clips should usually be 24-75 seconds.
-- Short punchline clips can be shorter only when the joke is complete.
-- viralityScore is 0-100.
-- Titles are max 10 words.
-- hookText is max 12 words and should make the first second understandable.
-- If transcript language is Indonesian, use Indonesian titles and hooks.
-- User request: ${userPrompt || "No specific request"}.
-
-Transcript:
-${compactTranscript}`;
-}
-
-async function callAI(client: AIClient, model: string, prompt: string) {
+async function callAI(client: AIClient, model: string, prompt: HighlightPromptMessages) {
   return isOpenAIClient(client)
     ? callOpenAI(client, model, prompt)
     : callAnthropic(client, model, prompt);
 }
 
-async function callOpenAI(client: OpenAI, model: string, prompt: string) {
+async function callOpenAI(client: OpenAI, model: string, prompt: HighlightPromptMessages) {
   try {
     const response = await client.chat.completions.create({
       model,
-      messages: [{ role: "user", content: prompt }],
+      messages: [
+        { role: "system", content: prompt.system },
+        { role: "user", content: prompt.user }
+      ],
       temperature: 0.2,
       response_format: { type: "json_object" }
     });
@@ -252,19 +231,23 @@ async function callOpenAI(client: OpenAI, model: string, prompt: string) {
 
     const response = await client.chat.completions.create({
       model,
-      messages: [{ role: "user", content: prompt }],
+      messages: [
+        { role: "system", content: prompt.system },
+        { role: "user", content: prompt.user }
+      ],
       temperature: 0.2
     });
     return response.choices[0]?.message.content ?? "[]";
   }
 }
 
-async function callAnthropic(client: Anthropic, model: string, prompt: string) {
+async function callAnthropic(client: Anthropic, model: string, prompt: HighlightPromptMessages) {
   const response = await client.messages.create({
     model,
     max_tokens: 4000,
     temperature: 0.2,
-    messages: [{ role: "user", content: prompt }]
+    system: prompt.system,
+    messages: [{ role: "user", content: prompt.user }]
   });
   const block = response.content[0];
   return block?.type === "text" ? block.text : "[]";

@@ -296,7 +296,8 @@ async function analyzeHighlights(sessionId: string, context: JobContext) {
           router,
           transcript,
           prompt: config.prompt,
-          targetCount: 8
+          promptMode: config.promptMode,
+          targetCount: config.targetClipCount
         }),
       retryOptions(context, "find_highlights", 2)
     );
@@ -888,7 +889,9 @@ function defaultConfig(): SessionConfig {
     processingStart: 0,
     faceTrackingMode: "center_crop",
     captionOffsetMs: 0,
-    language: "id"
+    language: "id",
+    targetClipCount: 3,
+    promptMode: "single_video"
   };
 }
 

@@ -840,6 +840,8 @@ Latest known before this handoff expansion:
 - Observed a temporary Next dev issue where `/settings`, `/campaigns`, `/workflow`, `/projects`, and `/api/trpc/*` returned HTML 404 even though source and compiled routes existed. User confirmed restarting `npm run dev` fixed it; no code fix was needed. Treat this as stale Next/Turbopack dev server state before changing routing code.
 - Implemented the hook audio intro rule: when Hook is enabled, PaunClip prepends hook audio while freezing the first video frame, then starts the normal clip after hook audio ends. Hook disabled keeps the no-intro render path.
 - Clarified naming: Caption Preset means subtitle/caption visual style. Quick Preset should be reserved for a future workflow bundle such as caption preset, hook toggle, clip length, render mode, and provider routing.
+- Redesigned the intended Campaign flow as a novice-friendly video picker: find latest videos, select candidates, set clips per video, prepare batch settings, then start processing. "Find moments about" is the optional user intent prompt, not the system prompt.
+- Split Highlight Finder prompting into system and user messages so the base PaunClip curator instruction can be tuned separately from transcript payload and campaign/project intent.
 
 ## Current Known State
 
@@ -847,6 +849,7 @@ As of this context file:
 
 - Latest committed functional change is highlight fallback failure behavior.
 - Hook audio should no longer be mixed over a moving clip. If a rendered hook clip starts moving before the hook voice ends, inspect `prependHookAudioWithFreeze` and render signature cache invalidation.
+- Campaign sessions should use `promptMode: "campaign_batch"` and `targetClipCount` from the batch setup or per-video override. Projects/default sessions use the same base prompt but `promptMode: "single_video"`.
 - `next-env.d.ts` was dirty before creating this file; do not revert it casually.
 - `docs/` is gitignored, so docs under `docs/updates` exist locally but may not be tracked.
 - `assets/` is gitignored; public brand copies are used by app.
@@ -937,6 +940,7 @@ The conversation hit context compaction multiple times. Important memory preserv
 - Equal-interval clips are acceptable only as internal debugging, not as auto-rendered creator output.
 - Caption sync bugs can come from transcript timing, fallback mode, renderer normalization, or provider capability mismatch.
 - Hook intro bugs can come from accidentally using audio `amix` again; expected behavior is prepend/concat audio and `tpad` first-frame video freeze.
+- Campaign UX should not expose "system prompt" language to normal users. Use "Find moments about" for optional creator intent and keep system prompts in server prompt modules.
 - UI should not force horizontal scroll. Always use `min-w-0`, `max-w-full`, wrapping, and bounded media previews in dense pages.
 - The user wants PaunClip to feel obvious and capable, not like a prototype requiring manual interpretation.
 - If many valid Next app routes suddenly return 404 while `/` still works, first restart `npm run dev` before making code changes.

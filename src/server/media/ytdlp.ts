@@ -349,40 +349,130 @@ export async function downloadYoutubeAudio(params: {
 export async function fetchChannelVideos(params: {
   channelUrl: string;
   limit: number;
+  contentType?: "videos" | "shorts" | "all";
   cookiesPath?: string;
 }) {
-  const result = await runProcess(
-    getYtdlpCommand(),
-    [
-      "--flat-playlist",
-      "--dump-single-json",
-      "--playlist-end",
-      String(params.limit),
-      ...youtubeChallengeArgs,
-      ...(params.cookiesPath ? ["--cookies", params.cookiesPath] : []),
-      params.channelUrl
-    ],
-    { timeoutMs: 180_000 }
-  );
-  const parsed = JSON.parse(result.stdout) as {
-    entries?: Array<{
-      id: string;
-      title: string;
-      url: string;
-      duration?: number;
-      thumbnail?: string;
-    }>;
-  };
+  const urls = normalizeYoutubeChannelTargets(params.channelUrl, params.contentType ?? "videos");
+  const seen = new Set<string>();
+  const videos: Array<{
+    videoId: string;
+    title: string;
+    videoUrl: string;
+    durationSeconds?: number;
+    thumbnailUrl?: string;
+    publishedAt?: Date;
+  }> = [];
 
-  return (parsed.entries ?? []).map((entry) => ({
-    videoId: entry.id,
-    title: entry.title,
-    videoUrl: entry.url?.startsWith("http")
-      ? entry.url
-      : `https://www.youtube.com/watch?v=${entry.id}`,
-    durationSeconds: entry.duration,
-    thumbnailUrl: entry.thumbnail
-  }));
+  for (const url of urls) {
+    const result = await runProcess(
+      getYtdlpCommand(),
+      [
+        "--flat-playlist",
+        "--dump-single-json",
+        "--playlist-end",
+        String(params.limit),
+        ...youtubeChallengeArgs,
+        ...(params.cookiesPath ? ["--cookies", params.cookiesPath] : []),
+        url
+      ],
+      { timeoutMs: 180_000 }
+    );
+    const parsed = JSON.parse(result.stdout) as {
+      entries?: Array<{
+        id: string;
+        title: string;
+        url: string;
+        duration?: number;
+        thumbnail?: string;
+        timestamp?: number;
+        upload_date?: string;
+      }>;
+    };
+
+    for (const entry of parsed.entries ?? []) {
+      if (!entry.id || seen.has(entry.id)) {
+        continue;
+      }
+      seen.add(entry.id);
+      videos.push({
+        videoId: entry.id,
+        title: entry.title,
+        videoUrl: entry.url?.startsWith("http")
+          ? entry.url
+          : `https://www.youtube.com/watch?v=${entry.id}`,
+        durationSeconds: entry.duration,
+        thumbnailUrl: entry.thumbnail,
+        publishedAt: parseYoutubePublishedAt(entry.timestamp, entry.upload_date)
+      });
+      if (videos.length >= params.limit) {
+        break;
+      }
+    }
+
+    if (videos.length >= params.limit) {
+      break;
+    }
+  }
+
+  return videos.sort((a, b) => {
+    const aTime = a.publishedAt?.getTime() ?? 0;
+    const bTime = b.publishedAt?.getTime() ?? 0;
+    return bTime - aTime;
+  });
+}
+
+export function normalizeYoutubeChannelTargets(
+  channelUrl: string,
+  contentType: "videos" | "shorts" | "all" = "videos"
+) {
+  const trimmed = channelUrl.trim();
+  const url = parseYoutubeUrl(trimmed);
+  if (!url) {
+    return [trimmed];
+  }
+
+  const hasPlaylist = url.searchParams.has("list") || url.pathname.startsWith("/playlist");
+  if (hasPlaylist) {
+    return [url.toString()];
+  }
+
+  const cleanPath = url.pathname.replace(/\/+$/, "");
+  const withoutTab = cleanPath.replace(/\/(videos|shorts|streams|featured|playlists)$/i, "");
+  const base = `${url.origin}${withoutTab || cleanPath || "/"}`.replace(/\/$/, "");
+  const targets =
+    contentType === "all"
+      ? [`${base}/videos`, `${base}/shorts`]
+      : [`${base}/${contentType}`];
+
+  return targets.map((target) => target.replace("://www.youtube.com//", "://www.youtube.com/"));
+}
+
+function parseYoutubeUrl(value: string) {
+  try {
+    const withProtocol = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+    const url = new URL(withProtocol);
+    if (!/(^|\.)youtube\.com$|(^|\.)youtu\.be$/i.test(url.hostname)) {
+      return undefined;
+    }
+    if (/youtu\.be$/i.test(url.hostname)) {
+      return url;
+    }
+    url.hostname = "www.youtube.com";
+    return url;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseYoutubePublishedAt(timestamp?: number, uploadDate?: string) {
+  if (timestamp) {
+    return new Date(timestamp * 1000);
+  }
+  const match = uploadDate?.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (!match) {
+    return undefined;
+  }
+  return new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00.000Z`);
 }
 
 async function cleanPreviousSourceFiles(outputDir: string) {

@@ -2,8 +2,10 @@ import "server-only";
 import { z } from "zod";
 import { db } from "@/server/db/client";
 import { getSettings } from "@/server/config/settings-store";
+import { buildCampaignSessionConfig } from "@/server/campaign/config";
 import { fetchChannelVideos } from "@/server/media/ytdlp";
-import { parseJsonWithSchema, stringifyJson } from "@/shared/schemas/primitives";
+import { stringifyJson } from "@/shared/schemas/primitives";
+import { campaignBatchConfigSchema, campaignContentTypeSchema } from "@/shared/schemas/campaign";
 import { sessionConfigSchema } from "@/shared/schemas/session";
 import { enqueueJob, resumeQueuedJobs } from "@/server/jobs/runner";
 import { registerPipelineJobs } from "@/server/pipeline/register";
@@ -32,7 +34,8 @@ export const campaignRouter = createTRPCRouter({
     .input(
       z.object({
         campaignId: z.string().min(1),
-        limit: z.number().int().min(1).max(50).default(10)
+        limit: z.number().int().min(1).max(50).default(10),
+        contentType: campaignContentTypeSchema.default("videos")
       })
     )
     .mutation(async ({ input }) => {
@@ -45,6 +48,7 @@ export const campaignRouter = createTRPCRouter({
       const videos = await fetchChannelVideos({
         channelUrl: campaign.channelUrl,
         limit: input.limit,
+        contentType: input.contentType,
         cookiesPath: settings.cookies.youtubePath ?? undefined
       });
 
@@ -125,52 +129,81 @@ export const campaignRouter = createTRPCRouter({
     .input(
       z.object({
         campaignId: z.string().min(1),
-        videoIds: z.array(z.string().min(1)).max(100).optional()
+        videoIds: z.array(z.string().min(1)).max(100).optional(),
+        batchConfig: campaignBatchConfigSchema.partial().optional(),
+        perVideoClipCounts: z.record(z.string(), z.number().int().min(1).max(10)).optional()
       })
     )
     .mutation(async ({ input }) => {
-    registerPipelineJobs();
-    const campaign = await db.campaign.findUnique({
-      where: { id: input.campaignId },
-      include: { videos: true }
-    });
-    if (!campaign) {
-      throw new Error("Campaign not found");
-    }
+      registerPipelineJobs();
+      const campaign = await db.campaign.findUnique({
+        where: { id: input.campaignId },
+        include: { videos: true }
+      });
+      if (!campaign) {
+        throw new Error("Campaign not found");
+      }
 
-    const config = parseJsonWithSchema(sessionConfigSchema, campaign.configJson, {});
-    const selectedIds = new Set(input.videoIds ?? campaign.videos.filter((video) => video.selected).map((video) => video.id));
-    const videos = campaign.videos.filter((video) => selectedIds.has(video.id));
-    if (videos.length === 0) {
-      throw new Error("Select at least one campaign video before starting batch.");
-    }
-    const sessions = [];
+      const batchConfig = campaignBatchConfigSchema.parse(input.batchConfig ?? {});
+      const selectedIds = new Set(
+        input.videoIds ?? campaign.videos.filter((video) => video.selected).map((video) => video.id)
+      );
+      const videos = campaign.videos.filter((video) => selectedIds.has(video.id));
+      if (videos.length === 0) {
+        throw new Error("Select at least one campaign video before starting batch.");
+      }
+      const sessions = [];
 
-    for (const video of videos) {
-      const session = await db.session.create({
+      await db.campaign.update({
+        where: { id: campaign.id },
         data: {
-          sourceType: "youtube",
-          sourceUrl: video.videoUrl,
-          sourceTitle: video.title,
-          thumbnailPath: video.thumbnailUrl,
-          campaignId: campaign.id,
-          status: "created",
-          stage: "pending",
-          configJson: stringifyJson(config)
+          configJson: stringifyJson(
+            buildCampaignSessionConfig({
+              campaignConfigJson: campaign.configJson,
+              batchConfig,
+              targetClipCount: batchConfig.clipsPerVideo
+            })
+          )
         }
       });
-      await db.campaignVideo.update({
-        where: { id: video.id },
-        data: { sessionId: session.id, status: "queued" }
-      });
-      const job = await enqueueJob({
-        type: "single_video_pipeline",
-        sessionId: session.id,
-        payload: { sourceType: "youtube", campaignId: campaign.id, videoId: video.id }
-      });
-      sessions.push({ session, job });
-    }
 
-    return sessions;
-  })
+      for (const video of videos) {
+        const targetClipCount =
+          input.perVideoClipCounts?.[video.id] ?? input.perVideoClipCounts?.[video.videoId] ?? batchConfig.clipsPerVideo;
+        const config = buildCampaignSessionConfig({
+          campaignConfigJson: campaign.configJson,
+          batchConfig,
+          targetClipCount
+        });
+        const session = await db.session.create({
+          data: {
+            sourceType: "youtube",
+            sourceUrl: video.videoUrl,
+            sourceTitle: video.title,
+            thumbnailPath: video.thumbnailUrl,
+            campaignId: campaign.id,
+            status: "created",
+            stage: "pending",
+            configJson: stringifyJson(config)
+          }
+        });
+        await db.campaignVideo.update({
+          where: { id: video.id },
+          data: { sessionId: session.id, status: "queued" }
+        });
+        const job = await enqueueJob({
+          type: "single_video_pipeline",
+          sessionId: session.id,
+          payload: {
+            sourceType: "youtube",
+            campaignId: campaign.id,
+            videoId: video.id,
+            targetClipCount
+          }
+        });
+        sessions.push({ session, job });
+      }
+
+      return sessions;
+    })
 });
