@@ -1,10 +1,198 @@
 # PaunClip Project Context
 
-Last updated: 2026-04-28, Asia/Bangkok.
+Last updated: 2026-04-28 19:14:29 +07:00, Asia/Bangkok.
 
 This file is a memory ledger for PaunClip across multiple Codex context compactions. It is intentionally practical: future agents should be able to re-enter the project, understand the product direction, understand what has already been changed, and avoid repeating old mistakes.
 
 Sensitive data policy: do not paste real API keys, cookies, tokens, or raw `.env` values into this file. During prior debugging, real provider keys were visible in local settings/log output. They must be treated as secrets and stay redacted.
+
+## Current Snapshot
+
+This snapshot is meant to help the next AI agent start without guessing.
+
+- Repo root: `C:\000.Project\PaunClip-Codex\PaunClip`.
+- Current branch in recent work: `main`.
+- Latest committed docs baseline before this expansion: `aa38fa3 docs: add project context ledger`.
+- Known dirty file before this docs expansion: `next-env.d.ts`. It was generated/dirty before the handoff docs work. Do not revert or include it in a docs-only commit unless the user explicitly asks.
+- Runtime folders such as `.next/`, `storage/`, and `node_modules/` are not source-of-truth handoff content.
+- `docs/` and `assets/` are ignored by git in this project state. Root-level `CONTEXT.md` and `AGENTS.md` are the durable handoff docs.
+- The user wants informative commits after changes, especially because they may rollback by commit.
+- This project is actively changing. Before implementing anything, inspect current files instead of trusting this document blindly.
+
+## Architecture Map
+
+High-level product flow:
+
+1. User starts from dashboard and submits either a YouTube URL or local video.
+2. A `Session` and first `Job` are created through tRPC.
+3. The job runner executes the single video pipeline.
+4. The pipeline ingests source metadata and transcript first when possible.
+5. Highlight Finder analyzes transcript and returns candidate short clips.
+6. In review mode, user selects highlights and then renders selected clips.
+7. In auto mode, selected highlights can render automatically.
+8. Render produces vertical clips, captions, thumbnails, and database records.
+9. Results screen displays progress, logs, highlight cards, and rendered clip cards.
+
+Core data concepts:
+
+- `Session`: one source video or upload workflow. Holds status, stage, metadata, transcript JSON, config JSON, and related jobs/highlights/clips.
+- `Job`: background operation such as single video pipeline or render flow. Jobs write `JobEvent` logs and `JobStep` progress.
+- `Highlight`: AI-selected time range before render. It should be meaningful, not fake equal-interval filler.
+- `Clip`: rendered output artifact with master path, thumbnail, status, render metadata, and optional hook/caption state.
+- `Campaign`: batch/channel workflow that should create per-video sessions/jobs while keeping per-video state visible.
+
+Pipeline stages:
+
+- `ingest_source`: YouTube metadata, subtitle/auto-caption fetch, upload metadata, and source preparation.
+- `extract_audio`: create audio for transcription when needed.
+- `transcribe`: OpenAI-compatible audio transcription or fallback transcript only as last resort.
+- `find_highlights`: AI chat task that must return usable structured highlights or fail loudly.
+- `render_clips`: download source video if deferred, slice/crop portrait, align captions, render ASS captions, generate output files.
+
+Important implementation anchors:
+
+- `src/server/pipeline/single-video-pipeline.ts` coordinates the main flow.
+- `src/server/jobs/runner.ts` owns in-memory queue behavior and queued-job resume.
+- `src/server/ai/tasks/highlight-finder.ts` owns highlight quality and JSON parsing.
+- `src/server/transcription/openai-transcriber.ts` owns audio transcription and SRT fallback policy.
+- `src/server/transcription/normalize-transcript.ts` owns transcript timing normalization.
+- `src/server/rendering/ffmpeg-renderer.ts` owns render orchestration and caption alignment.
+- `src/server/captions/ass-renderer.ts` owns ASS subtitle generation.
+- `src/server/media/ytdlp.ts` and `src/server/media/ffmpeg.ts` own external media tooling.
+- `src/features/clips/results-screen.tsx` is the highest-risk UI surface because it combines long titles, logs, cards, media, and actions.
+
+## User Workflow Map
+
+Dashboard/new clip flow:
+
+- Awam user should see one obvious primary action: paste YouTube URL or upload a video.
+- Advanced settings should be discoverable but not required for first success.
+- After submission, user should land on Results and see clear progress, ETA, current step, and logs for debug.
+
+Review-first flow:
+
+- PaunClip should analyze transcript and show real highlight candidates before rendering.
+- User can select/deselect highlights.
+- `Render selected` should only be enabled when highlights exist, are selected, and no job is currently running.
+- Highlight cards should display enough context to decide whether a clip is worth rendering.
+
+Auto-render flow:
+
+- If configured, PaunClip can render selected highlights after analysis.
+- It must not auto-render equal-interval fallback clips.
+- Failures should preserve logs and explain which provider/task failed.
+
+Editor flow:
+
+- User opens a rendered clip, trims start/end, edits hook text, changes caption preset, duplicates, rerenders, or downloads.
+- Rerender must be safe: write a new output/version first, then update database only after successful FFmpeg output.
+
+Campaign flow:
+
+- User fetches videos from a channel/source.
+- User selects which videos to process.
+- User applies shared workflow config.
+- Each selected video becomes its own queue item/session with visible progress and result link.
+- Campaign should never feel like a black box batch process.
+
+Settings flow:
+
+- User configures provider keys by task, not by vague global AI state.
+- Validation should explain what capability is supported: chat/highlight, audio transcription, TTS/hook voice.
+- For Groq Hook Maker, model and voice are separate important fields.
+- Cookies settings should validate whether YouTube cookies are present/useful and warn if expiry/auth issues are likely.
+
+## Provider Capability Matrix
+
+Use this as a practical rulebook, not a marketing compatibility list.
+
+| Provider | Highlight/chat | Transcription/caption timing | Hook TTS/voice | Notes |
+| --- | --- | --- | --- | --- |
+| OpenAI | Good for structured highlight JSON and title/hook text | Good with Whisper-style audio transcription; prefer responses that include segments/words where available | Good if configured with a TTS model/voice | Safest general baseline when key is available. |
+| Groq | Good for chat if model has enough context/TPM | Good with `whisper-large-v3-turbo`; user has tested this path | Groq Orpheus-style hook maker needs both model and voice | Watch TPM 413 errors; chunk long highlight prompts. |
+| OpenCode custom | Can work for chat tasks if base URL is only the API base, not `/chat/completions` | Treat as unsupported/chat-only for audio unless proven otherwise | Treat as unsupported for TTS unless endpoint supports it | If it returns HTML 404, the wrong endpoint/capability is being called. |
+| Anthropic | Chat/highlight conceptually supported | Not an audio transcription provider in this app | Not a TTS provider here | Do not route caption audio work here. |
+| Gemini | Chat/highlight conceptually supported | Do not assume OpenAI audio transcription compatibility | Do not assume TTS compatibility | Validate capability explicitly before using. |
+| Custom OpenAI-compatible | Depends on endpoint | Depends on whether `/audio/transcriptions` is actually supported | Depends on whether `/audio/speech` or equivalent is supported | Always normalize base URL and separate capability checks. |
+
+Provider rules that should not regress:
+
+- Do not use chat-only providers for audio transcription.
+- Do not hide a failed verbose transcription behind silent SRT fallback.
+- SRT fallback is acceptable only as a visible last resort; it cannot produce true word-level karaoke timing.
+- Highlight Finder can use chat providers, but must return valid structured highlights.
+- If Highlight Finder returns empty/invalid output, fail loudly and keep user out of fake clips.
+
+## Quality Bar
+
+Output quality the user expects:
+
+- Captions should feel close to OpusClip: readable, timely, not huge, not delayed, and not crammed with too many words.
+- Caption timing should follow real speech. Word-level timestamps are preferred; estimated word timing is a last resort.
+- Highlights should preserve conversational context. Avoid cutting off before a thought lands or ending mid-story.
+- If AI highlight detection fails, do not create generic `Clip 1`, `Clip 2`, etc. from equal intervals.
+- Rendered clips should be useful for social short-form review without manual interpretation.
+- UI should be obvious for awam users: clear primary action, clear empty states, clear disabled reasons, and short-lived toast feedback after saves/actions.
+- No horizontal overflow. Results, logs, headers, cards, and media previews must stay inside viewport at small widths and browser zoom.
+
+## Debug Playbooks
+
+Stuck at queued/pending with 0 events:
+
+- Check `src/server/jobs/runner.ts` and queued-job resume behavior.
+- In dev reloads, in-memory queue can be lost while DB job remains queued.
+- Recent fix added queued-job resume; if it regresses, session may sit at 0% with no logs.
+
+yt-dlp challenge, format, or long download:
+
+- Check cookies configuration and logs from `src/server/media/ytdlp.ts`.
+- Challenge solving warnings can mean YouTube blocked formats or needs cookies.
+- Download progress should be displayed separately from overall pipeline progress.
+- Long render-stage downloads are expected when transcript-first ingest deferred full video download.
+
+FFmpeg `ENOENT`:
+
+- Usually means FFmpeg resolver returned a bad path, historically `\ROOT\node_modules\ffmpeg-static\ffmpeg.exe`.
+- Check tool resolution in `src/server/media/ffmpeg.ts`.
+- Do not hardcode Windows-only paths unless resolver accounts for package output.
+
+Groq 413 / TPM token limit:
+
+- Root issue is long transcript/highlight prompt exceeding provider TPM/context policy.
+- Use chunking or reduce prompt payload.
+- Do not blame Whisper if transcription succeeded and failure occurs in `find_highlights`.
+
+OpenCode 404 HTML:
+
+- If response body is an HTML 404 page, PaunClip is probably hitting the wrong URL or wrong capability.
+- For chat, use the base URL setting correctly; do not include `/chat/completions` if the app appends it.
+- For audio transcription, treat OpenCode as unsupported unless it exposes an OpenAI-compatible audio endpoint.
+
+Caption delay or bad sync:
+
+- First check if transcription fell back to SRT or estimated words.
+- Check for repeated `normalizeTranscriptForShorts` calls after transcript is already normalized.
+- Check Whisper word timestamp overlap tolerance; do not force every word after previous word unless overlap is beyond tolerance.
+- Check render path: sliced transcript should not be re-normalized after `sliceTranscript`.
+- Clip-level audio alignment can fail for chat-only providers and should explain fallback source.
+
+Highlight fallback / bad generic clips:
+
+- If UI shows `Clip 1`, `Clip 2`, and "Fallback equal-interval segment", that is a regression.
+- Equal-interval fallback should not be user-facing auto output.
+- `find_highlights` should fail with provider/model/error details.
+
+UI overflow:
+
+- Check shell `main`, Results root, header, search/action groups, highlight cards, log blocks, and media cards.
+- Use `min-w-0`, `max-w-full`, `overflow-hidden/clip`, wrapping, and bounded video preview sizes.
+- Long Windows paths and provider HTML errors are common overflow triggers.
+
+Campaign stuck or confusing:
+
+- Check per-video queue state, session links, and campaign status sync.
+- Batch should show selected videos, queued/running/done/failed per item, and result links.
+- Do not make campaign start all fetched videos unless user selected them.
 
 ## Product Understanding
 
@@ -571,8 +759,9 @@ Fix:
 
 ## Commit Log Snapshot
 
-Latest known before this file:
+Latest known before this handoff expansion:
 
+- `aa38fa3` | 2026-04-28 18:49:44 +0700 | `docs: add project context ledger`
 - `3c065cb` | 2026-04-28 15:02:59 +0700 | `fix: fail loud on highlight finder fallback`
 - `eb82954` | 2026-04-28 14:25:41 +0700 | `fix: resume queued jobs and skip chat-only audio providers`
 - `a6c668d` | 2026-04-28 13:46:16 +0700 | `fix: preserve transcript timing for captions`
@@ -605,8 +794,6 @@ Latest known before this file:
 - `9ef3ae2` | 2026-04-27 11:33:27 +0700 | `feat: harden media pipeline and ai settings`
 - `bcd4cf2` | 2026-04-25 19:27:05 +0700 | `feat: add retry for failed sessions`
 - `d1bf97c` | 2026-04-25 19:23:49 +0700 | `feat: harden youtube ingest and add pipeline logs`
-
-This file itself should be committed after creation with a message like `docs: add project context ledger`.
 
 ## Changelog Narrative
 
@@ -649,6 +836,7 @@ This file itself should be committed after creation with a message like `docs: a
 - Resumed queued jobs and skipped chat-only audio providers for audio tasks.
 - Failed loudly on Highlight Finder fallback instead of rendering equal-interval fake clips.
 - Created this project context ledger.
+- Expanded root handoff context and added an agent operating manual.
 
 ## Current Known State
 
