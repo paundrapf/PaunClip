@@ -13,6 +13,7 @@ export type MediaProbe = {
   width?: number;
   height?: number;
   fps?: number;
+  hasAudio?: boolean;
 };
 
 export async function probeMedia(inputPath: string): Promise<MediaProbe> {
@@ -40,12 +41,14 @@ export async function probeMedia(inputPath: string): Promise<MediaProbe> {
       }>;
     };
     const video = parsed.streams?.find((stream) => stream.codec_type === "video");
+    const audio = parsed.streams?.find((stream) => stream.codec_type === "audio");
 
     return {
       durationSeconds: Number(parsed.format?.duration ?? 0),
       width: video?.width,
       height: video?.height,
-      fps: parseFps(video?.r_frame_rate)
+      fps: parseFps(video?.r_frame_rate),
+      hasAudio: Boolean(audio)
     };
   } catch {
     return probeMediaWithFfmpeg(inputPath);
@@ -235,6 +238,95 @@ export async function mixHookAudio(
   ], { jobId: options.jobId, onLine: options.onLine });
 }
 
+export type HookFreezeIntroResult = {
+  hookDurationSeconds: number;
+  clipDurationSeconds: number;
+  outputDurationSeconds: number;
+};
+
+export async function prependHookAudioWithFreeze(
+  inputPath: string,
+  hookAudioPath: string,
+  outputPath: string,
+  options: MediaProcessOptions = {}
+): Promise<HookFreezeIntroResult> {
+  const [inputProbe, hookProbe] = await Promise.all([
+    probeMedia(inputPath),
+    probeMedia(hookAudioPath)
+  ]);
+  const clipDurationSeconds = Math.max(0.1, inputProbe.durationSeconds || 0);
+  const hookDurationSeconds = Math.max(0.1, hookProbe.durationSeconds || 0);
+
+  await runProcess(
+    getFfmpegCommand(),
+    buildHookFreezeIntroArgs({
+      inputPath,
+      hookAudioPath,
+      outputPath,
+      clipDurationSeconds,
+      hookDurationSeconds,
+      inputHasAudio: Boolean(inputProbe.hasAudio)
+    }),
+    { jobId: options.jobId, onLine: options.onLine }
+  );
+
+  const outputProbe = await probeMedia(outputPath);
+  return {
+    hookDurationSeconds,
+    clipDurationSeconds,
+    outputDurationSeconds: outputProbe.durationSeconds || hookDurationSeconds + clipDurationSeconds
+  };
+}
+
+export function buildHookFreezeIntroArgs(input: {
+  inputPath: string;
+  hookAudioPath: string;
+  outputPath: string;
+  clipDurationSeconds: number;
+  hookDurationSeconds: number;
+  inputHasAudio: boolean;
+}) {
+  const clipDuration = formatFfmpegSeconds(input.clipDurationSeconds);
+  const hookDuration = formatFfmpegSeconds(input.hookDurationSeconds);
+  const clipAudio = input.inputHasAudio
+    ? "[0:a]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:" +
+      "channel_layouts=stereo,volume=1.0[clip]"
+    : `anullsrc=r=48000:cl=stereo,atrim=0:${clipDuration},asetpts=PTS-STARTPTS[clip]`;
+  return [
+    "-y",
+    "-i",
+    input.inputPath,
+    "-i",
+    input.hookAudioPath,
+    "-filter_complex",
+    [
+      `[0:v]tpad=start_duration=${hookDuration}:start_mode=clone,setpts=PTS-STARTPTS[v]`,
+      "[1:a]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:" +
+        "channel_layouts=stereo,volume=1.0[hook]",
+      clipAudio,
+      "[hook][clip]concat=n=2:v=0:a=1[a]"
+    ].join(";"),
+    "-map",
+    "[v]",
+    "-map",
+    "[a]",
+    "-c:v",
+    "libx264",
+    "-crf",
+    "23",
+    "-preset",
+    "fast",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "160k",
+    "-movflags",
+    "+faststart",
+    "-shortest",
+    input.outputPath
+  ];
+}
+
 export async function generateThumbnail(
   inputPath: string,
   outputPath: string,
@@ -266,6 +358,10 @@ function parseFps(value?: string) {
   return num / den;
 }
 
+function formatFfmpegSeconds(value: number) {
+  return Math.max(0, value).toFixed(3);
+}
+
 async function probeMediaWithFfmpeg(inputPath: string): Promise<MediaProbe> {
   try {
     await runProcess(getFfmpegCommand(), ["-i", inputPath], { timeoutMs: 60_000 });
@@ -280,7 +376,8 @@ async function probeMediaWithFfmpeg(inputPath: string): Promise<MediaProbe> {
           Number(durationMatch[3])
         : 60,
       width: sizeMatch ? Number(sizeMatch[1]) : undefined,
-      height: sizeMatch ? Number(sizeMatch[2]) : undefined
+      height: sizeMatch ? Number(sizeMatch[2]) : undefined,
+      hasAudio: /Audio:/i.test(message)
     };
   }
 

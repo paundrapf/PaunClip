@@ -7,7 +7,8 @@ import {
   cutAndCropPortraitSegment,
   extractAudio,
   generateThumbnail,
-  mixHookAudio
+  prependHookAudioWithFreeze,
+  probeMedia
 } from "@/server/media/ffmpeg";
 import { buildAssSubtitles } from "@/server/captions/ass-renderer";
 import { getFileSizeMb } from "@/server/storage/files";
@@ -72,18 +73,42 @@ export class FfmpegClipRenderer implements ClipRenderer {
     }
 
     let hookAdded = false;
+    let hookDurationSeconds = 0;
+    let outputDuration = duration;
     if (input.hookAudioPath) {
       try {
-        await mixHookAudio(captionedPath, input.hookAudioPath, masterPath, { jobId: input.jobId });
+        const hookIntro = await prependHookAudioWithFreeze(
+          captionedPath,
+          input.hookAudioPath,
+          masterPath,
+          { jobId: input.jobId }
+        );
+        hookDurationSeconds = hookIntro.hookDurationSeconds;
+        outputDuration = hookIntro.outputDurationSeconds;
         hookAdded = true;
+        await input.onLog?.("Hook intro prepended with frozen video", {
+          hookDurationSeconds: hookIntro.hookDurationSeconds,
+          clipDurationSeconds: hookIntro.clipDurationSeconds,
+          outputDurationSeconds: hookIntro.outputDurationSeconds
+        });
       } catch {
+        await input.onLog?.("Hook intro render failed; clip will render without hook audio");
         await copyFile(captionedPath, masterPath);
       }
     } else {
       await copyFile(captionedPath, masterPath);
     }
 
-    await generateThumbnail(masterPath, thumbnailPath, Math.max(0.5, duration / 2), {
+    if (!hookAdded) {
+      const outputProbe = await probeMedia(masterPath);
+      outputDuration = outputProbe.durationSeconds || duration;
+    }
+
+    const thumbnailAt = hookAdded
+      ? Math.max(0.5, hookDurationSeconds + duration / 2)
+      : Math.max(0.5, duration / 2);
+    const safeThumbnailAt = Math.max(0.1, Math.min(Math.max(0.1, outputDuration - 0.1), thumbnailAt));
+    await generateThumbnail(masterPath, thumbnailPath, safeThumbnailAt, {
       jobId: input.jobId
     });
 
@@ -91,7 +116,7 @@ export class FfmpegClipRenderer implements ClipRenderer {
       clipId,
       masterPath,
       thumbnailPath,
-      duration,
+      duration: outputDuration,
       fileSizeMb: await getFileSizeMb(masterPath),
       captionBurned,
       hookAdded

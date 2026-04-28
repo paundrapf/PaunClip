@@ -19,6 +19,7 @@ export type ClipRenderSignatureInput = {
     model?: string;
     voice?: string;
     format?: string;
+    introMode?: string;
   };
 };
 

@@ -768,13 +768,15 @@ function buildHookSignature(
   hookText: string | undefined,
   hookConfig: Awaited<ReturnType<typeof getSettings>>["aiProviders"]["hookMaker"]
 ) {
+  const hookEnabled = Boolean(enabled && hookText);
   return {
-    enabled: Boolean(enabled && hookText),
+    enabled: hookEnabled,
     text: hookText ?? "",
     provider: hookConfig.provider,
     model: hookConfig.model,
     voice: hookConfig.ttsVoice,
-    format: hookConfig.ttsFormat
+    format: hookConfig.ttsFormat,
+    ...(hookEnabled ? { introMode: "freeze_prepend_v1" } : {})
   };
 }
 
