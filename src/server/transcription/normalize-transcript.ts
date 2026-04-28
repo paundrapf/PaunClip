@@ -19,6 +19,7 @@ const DEFAULT_MAX_WORDS = 6;
 const DEFAULT_MAX_DURATION = 1.9;
 const DEFAULT_MIN_WORDS_BEFORE_BREAK = 3;
 const DEFAULT_LOOKBACK_WORDS = 18;
+const OVERLAP_TOLERANCE_S = 0.05;
 
 export function normalizeTranscriptForShorts(
   transcript: Transcript,
@@ -71,7 +72,10 @@ function buildMonotonicWordStream(
     for (const word of candidateWords) {
       const previous = stream.at(-1);
       const duration = Math.max(0.08, word.end - word.start);
-      const start = previous ? Math.max(word.start, previous.end + 0.01) : word.start;
+      const start =
+        previous && word.start < previous.end - OVERLAP_TOLERANCE_S
+          ? previous.end + 0.01
+          : word.start;
       stream.push({
         word: word.word,
         start,

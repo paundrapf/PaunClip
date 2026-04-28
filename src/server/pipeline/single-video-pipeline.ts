@@ -282,15 +282,9 @@ async function analyzeHighlights(sessionId: string, context: JobContext) {
   const router = new AIProviderRouter(settings.aiProviders);
   const config = parseJsonWithSchema(sessionConfigSchema, session.configJson, defaultConfig());
   const language = config.language ?? "id";
-  const transcript = normalizeTranscriptForShorts(parseJsonWithSchema(transcriptSchema, session.transcriptJson, {
+  const transcript = parseJsonWithSchema(transcriptSchema, session.transcriptJson, {
     language,
     segments: []
-  }), { language });
-  await db.session.update({
-    where: { id: sessionId },
-    data: {
-      transcriptJson: stringifyJson(transcript)
-    }
   });
   const highlights = await withRetry(
     () =>
@@ -336,10 +330,10 @@ async function renderHighlights(sessionId: string, context: JobContext) {
   const settings = await getSettings();
   const config = parseJsonWithSchema(sessionConfigSchema, session.configJson, defaultConfig());
   const language = config.language ?? "id";
-  const transcript = normalizeTranscriptForShorts(parseJsonWithSchema(transcriptSchema, session.transcriptJson, {
+  const transcript = parseJsonWithSchema(transcriptSchema, session.transcriptJson, {
     language,
     segments: []
-  }), { language });
+  });
   const captionPreset =
     settings.captionPresets.find((preset) => preset.id === config.captionStyleId) ??
     settings.captionPresets[0];
@@ -609,10 +603,10 @@ async function rerenderClip(clipId: string, context: JobContext) {
   const settings = await getSettings();
   const config = parseJsonWithSchema(sessionConfigSchema, clip.session.configJson, defaultConfig());
   const language = config.language ?? "id";
-  const transcript = normalizeTranscriptForShorts(parseJsonWithSchema(transcriptSchema, clip.session.transcriptJson, {
+  const transcript = parseJsonWithSchema(transcriptSchema, clip.session.transcriptJson, {
     language,
     segments: []
-  }), { language });
+  });
   const metadata = readClipRenderMetadata(clip.renderJson);
   const captionStyleId = metadata.draft?.captionStyleId ?? config.captionStyleId;
   const captionPreset =

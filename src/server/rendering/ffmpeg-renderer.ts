@@ -12,7 +12,6 @@ import {
 import { buildAssSubtitles } from "@/server/captions/ass-renderer";
 import { getFileSizeMb } from "@/server/storage/files";
 import { sessionPath } from "@/server/storage/paths";
-import { normalizeTranscriptForShorts } from "@/server/transcription/normalize-transcript";
 import { transcribeAudioWithOpenAICompatible } from "@/server/transcription/openai-transcriber";
 import { sliceTranscript } from "@/server/transcription/srt";
 import type { ClipRenderer, RenderClipInput } from "./types";
@@ -42,8 +41,10 @@ export class FfmpegClipRenderer implements ClipRenderer {
       { jobId: input.jobId }
     );
 
-    const fallbackTranscript = normalizeTranscriptForShorts(
-      sliceTranscript(input.transcript, input.highlight.startTime, input.highlight.endTime)
+    const fallbackTranscript = sliceTranscript(
+      input.transcript,
+      input.highlight.startTime,
+      input.highlight.endTime
     );
     const clipTranscript = await this.buildRenderTranscript({
       mediaPath: portraitPath,
@@ -99,7 +100,7 @@ export class FfmpegClipRenderer implements ClipRenderer {
   private async buildRenderTranscript(params: {
     mediaPath: string;
     audioPath: string;
-    fallbackTranscript: ReturnType<typeof normalizeTranscriptForShorts>;
+    fallbackTranscript: ReturnType<typeof sliceTranscript>;
     renderTranscriptPath: string;
     input: RenderClipInput;
   }) {

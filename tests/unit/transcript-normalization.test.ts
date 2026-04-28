@@ -40,4 +40,25 @@ describe("normalizeTranscriptForShorts", () => {
       normalized.segments.every((segment) => segment.text.split(/\s+/).length <= 6)
     ).toBe(true);
   });
+
+  it("preserves small provider word overlaps to avoid caption drift", () => {
+    const transcript: Transcript = {
+      language: "id",
+      segments: [
+        {
+          start: 0,
+          end: 1,
+          text: "aku mau",
+          words: [
+            { word: "aku", start: 0, end: 0.5 },
+            { word: "mau", start: 0.47, end: 0.8 }
+          ]
+        }
+      ]
+    };
+
+    const normalized = normalizeTranscriptForShorts(transcript);
+
+    expect(normalized.segments[0]?.words[1]?.start).toBeCloseTo(0.47);
+  });
 });

@@ -27,30 +27,63 @@ export async function transcribeAudioWithOpenAICompatible(params: {
     baseURL: params.config.baseUrl ? normalizeOpenAICompatibleBaseUrl(params.config.baseUrl) : undefined
   });
 
+  let verboseResponse: unknown;
   try {
-    const response = await client.audio.transcriptions.create({
+    verboseResponse = await client.audio.transcriptions.create({
       file: createReadStream(params.audioPath),
       model: params.config.model || "whisper-1",
       language: params.language,
       response_format: "verbose_json",
       timestamp_granularities: ["word", "segment"]
     });
-
-    const transcript = transcriptFromVerboseJson(response, params.language ?? "id");
-    if (transcript.segments.length > 0) {
-      return transcript;
-    }
-    throw new Error("Verbose transcription did not include usable timestamps.");
-  } catch {
-    const response = await client.audio.transcriptions.create({
-      file: createReadStream(params.audioPath),
-      model: params.config.model || "whisper-1",
+  } catch (error) {
+    return transcribeWithSrtFallback({
+      audioPath: params.audioPath,
+      client,
+      config: params.config,
+      error,
       language: params.language,
-      response_format: "srt"
+      reason: "verbose_json transcription request failed"
     });
-
-    return parseSrt(String(response), params.language ?? "id");
   }
+
+  const transcript = transcriptFromVerboseJson(verboseResponse, params.language ?? "id");
+  if (transcript.segments.length > 0) {
+    return transcript;
+  }
+
+  return transcribeWithSrtFallback({
+    audioPath: params.audioPath,
+    client,
+    config: params.config,
+    language: params.language,
+    reason: "verbose_json transcription did not include usable timestamps"
+  });
+}
+
+async function transcribeWithSrtFallback(params: {
+  audioPath: string;
+  client: OpenAI;
+  config: AIProviderConfig;
+  error?: unknown;
+  language?: string;
+  reason: string;
+}) {
+  console.error("[PaunClip] Falling back to SRT transcription", {
+    provider: params.config.provider,
+    model: params.config.model,
+    reason: params.reason,
+    error: params.error instanceof Error ? params.error.message : params.error
+  });
+
+  const response = await params.client.audio.transcriptions.create({
+    file: createReadStream(params.audioPath),
+    model: params.config.model || "whisper-1",
+    language: params.language,
+    response_format: "srt"
+  });
+
+  return parseSrt(String(response), params.language ?? "id");
 }
 
 type VerboseTranscription = {
