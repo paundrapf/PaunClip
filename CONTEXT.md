@@ -837,6 +837,7 @@ Latest known before this handoff expansion:
 - Failed loudly on Highlight Finder fallback instead of rendering equal-interval fake clips.
 - Created this project context ledger.
 - Expanded root handoff context and added an agent operating manual.
+- Observed a temporary Next dev issue where `/settings`, `/campaigns`, `/workflow`, `/projects`, and `/api/trpc/*` returned HTML 404 even though source and compiled routes existed. User confirmed restarting `npm run dev` fixed it; no code fix was needed. Treat this as stale Next/Turbopack dev server state before changing routing code.
 
 ## Current Known State
 
@@ -921,6 +922,7 @@ The conversation hit context compaction multiple times. Important memory preserv
 - User asked to integrate branding from `assets/`.
 - User asked to install and use taste-skill for better UI.
 - User later showed logs with fallback equal-interval clips even after using Groq Whisper; root issue was Highlight Finder, not transcription.
+- User hit a dev-only route 404 incident after docs changes; restarting `npm run dev` resolved it, so the planned route/cache fix was cancelled.
 
 ## Do Not Forget
 
@@ -933,3 +935,4 @@ The conversation hit context compaction multiple times. Important memory preserv
 - Caption sync bugs can come from transcript timing, fallback mode, renderer normalization, or provider capability mismatch.
 - UI should not force horizontal scroll. Always use `min-w-0`, `max-w-full`, wrapping, and bounded media previews in dense pages.
 - The user wants PaunClip to feel obvious and capable, not like a prototype requiring manual interpretation.
+- If many valid Next app routes suddenly return 404 while `/` still works, first restart `npm run dev` before making code changes.
