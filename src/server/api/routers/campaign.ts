@@ -5,7 +5,7 @@ import { getSettings } from "@/server/config/settings-store";
 import { fetchChannelVideos } from "@/server/media/ytdlp";
 import { parseJsonWithSchema, stringifyJson } from "@/shared/schemas/primitives";
 import { sessionConfigSchema } from "@/shared/schemas/session";
-import { enqueueJob } from "@/server/jobs/runner";
+import { enqueueJob, resumeQueuedJobs } from "@/server/jobs/runner";
 import { registerPipelineJobs } from "@/server/pipeline/register";
 import { createTRPCRouter, publicProcedure } from "../trpc";
 
@@ -71,6 +71,9 @@ export const campaignRouter = createTRPCRouter({
     }),
 
   list: publicProcedure.query(async () => {
+    registerPipelineJobs();
+    await resumeQueuedJobs();
+
     return db.campaign.findMany({
       orderBy: { createdAt: "desc" },
       include: {

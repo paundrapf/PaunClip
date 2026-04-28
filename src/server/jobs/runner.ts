@@ -31,6 +31,7 @@ export type JobContext = {
 
 const queue = new PQueue({ concurrency: 1 });
 const handlers = new Map<JobType, JobHandler>();
+const scheduledJobIds = new Set<string>();
 
 export function registerJobHandler(type: JobType, handler: JobHandler) {
   handlers.set(type, handler);
@@ -39,8 +40,43 @@ export function registerJobHandler(type: JobType, handler: JobHandler) {
 export async function enqueueJob(input: CreateJobInput) {
   const parsed = createJobInputSchema.parse(input);
   const job = await createJob(parsed);
-  queue.add(() => runJob(job.id, parsed));
+  scheduleJob(job.id, parsed);
   return job;
+}
+
+export async function resumeQueuedJobs() {
+  const jobs = await db.job.findMany({
+    where: { status: "queued" },
+    orderBy: { createdAt: "asc" },
+    take: 25
+  });
+  let resumed = 0;
+
+  for (const job of jobs) {
+    if (scheduledJobIds.has(job.id)) {
+      continue;
+    }
+
+    try {
+      const input = createJobInputSchema.parse({
+        type: job.type,
+        sessionId: job.sessionId ?? undefined,
+        payload: parseJobPayload(job.payloadJson)
+      });
+      scheduleJob(job.id, input);
+      resumed += 1;
+    } catch (error) {
+      await failJob(job.id, error);
+      await emitJobEvent({
+        jobId: job.id,
+        type: "error",
+        message: "Queued job could not be resumed",
+        data: { error: serializeError(error) }
+      });
+    }
+  }
+
+  return { resumed, queued: jobs.length };
 }
 
 export async function runJob(jobId: string, input: CreateJobInput) {
@@ -197,6 +233,37 @@ export function getQueueStats() {
   return {
     pending: queue.pending,
     size: queue.size,
-    isPaused: queue.isPaused
+    isPaused: queue.isPaused,
+    scheduled: scheduledJobIds.size
   };
+}
+
+function scheduleJob(jobId: string, input: CreateJobInput) {
+  if (scheduledJobIds.has(jobId)) {
+    return;
+  }
+
+  scheduledJobIds.add(jobId);
+  queue
+    .add(() => runJob(jobId, input))
+    .catch(async (error) => {
+      await failJob(jobId, error);
+      await emitJobEvent({
+        jobId,
+        type: "error",
+        message: error instanceof Error ? error.message : "Job failed before it started",
+        data: { error: serializeError(error) }
+      });
+    })
+    .finally(() => {
+      scheduledJobIds.delete(jobId);
+    });
+}
+
+function parseJobPayload(payloadJson: string) {
+  const payload = JSON.parse(payloadJson) as unknown;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {};
+  }
+  return payload as Record<string, unknown>;
 }

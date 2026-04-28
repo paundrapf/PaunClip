@@ -14,6 +14,7 @@ import { getFileSizeMb } from "@/server/storage/files";
 import { sessionPath } from "@/server/storage/paths";
 import { transcribeAudioWithOpenAICompatible } from "@/server/transcription/openai-transcriber";
 import { sliceTranscript } from "@/server/transcription/srt";
+import { providerSupportsCapability } from "@/shared/constants/ai-providers";
 import type { ClipRenderer, RenderClipInput } from "./types";
 
 export class FfmpegClipRenderer implements ClipRenderer {
@@ -115,6 +116,31 @@ export class FfmpegClipRenderer implements ClipRenderer {
           {
             source: "analysis_fallback",
             reason: "caption provider api key is not configured",
+            transcript: params.fallbackTranscript
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+      return params.fallbackTranscript;
+    }
+
+    if (!providerSupportsCapability(captionConfig, "transcription")) {
+      await params.input.onLog?.(
+        "Render caption alignment skipped; caption provider does not support audio transcription",
+        {
+          captionSource: "analysis_fallback",
+          provider: captionConfig.provider,
+          model: captionConfig.model
+        }
+      );
+      await writeFile(
+        params.renderTranscriptPath,
+        JSON.stringify(
+          {
+            source: "analysis_fallback",
+            reason: "caption provider does not support audio transcription",
             transcript: params.fallbackTranscript
           },
           null,

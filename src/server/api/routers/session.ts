@@ -2,7 +2,7 @@ import "server-only";
 import { readdir } from "node:fs/promises";
 import { z } from "zod";
 import { db } from "@/server/db/client";
-import { enqueueJob } from "@/server/jobs/runner";
+import { enqueueJob, resumeQueuedJobs } from "@/server/jobs/runner";
 import { registerPipelineJobs } from "@/server/pipeline/register";
 import { uploadPath } from "@/server/storage/paths";
 import { createSessionInputSchema, sessionConfigSchema } from "@/shared/schemas/session";
@@ -126,6 +126,9 @@ export const sessionRouter = createTRPCRouter({
     }),
 
   list: publicProcedure.query(async () => {
+    registerPipelineJobs();
+    await resumeQueuedJobs();
+
     return db.session.findMany({
       orderBy: { createdAt: "desc" },
       include: {
@@ -140,6 +143,9 @@ export const sessionRouter = createTRPCRouter({
   }),
 
   getById: publicProcedure.input(z.string().min(1)).query(async ({ input }) => {
+    registerPipelineJobs();
+    await resumeQueuedJobs();
+
     const session = await db.session.findUnique({
       where: { id: input },
       include: {

@@ -24,6 +24,7 @@ import { setJobStep } from "@/server/jobs/job-store";
 import { fileExists } from "@/server/storage/files";
 import { ensureSessionLayout, sessionPath } from "@/server/storage/paths";
 import { parseJsonWithSchema, stringifyJson } from "@/shared/schemas/primitives";
+import { providerSupportsCapability } from "@/shared/constants/ai-providers";
 import {
   sessionConfigSchema,
   transcriptSchema,
@@ -942,6 +943,18 @@ async function transcribeOrFallback(params: {
       durationSeconds: params.durationSeconds,
       language: params.language,
       label: "No API key"
+    });
+  }
+
+  if (!providerSupportsCapability(params.captionConfig, "transcription")) {
+    await params.log("AI transcription skipped; caption provider does not support audio transcription", {
+      provider: params.captionConfig.provider,
+      model: params.captionConfig.model
+    });
+    return createFallbackTranscript({
+      durationSeconds: params.durationSeconds,
+      language: params.language,
+      label: "Transcription fallback"
     });
   }
 

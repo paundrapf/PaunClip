@@ -37,6 +37,17 @@ export async function transcribeAudioWithOpenAICompatible(params: {
       timestamp_granularities: ["word", "segment"]
     });
   } catch (error) {
+    if (isAudioTranscriptionEndpointUnavailable(error)) {
+      console.error("[PaunClip] Audio transcription endpoint is unavailable", {
+        provider: params.config.provider,
+        model: params.config.model,
+        error: error instanceof Error ? error.message : error
+      });
+      throw new Error(
+        "Caption provider tidak menyediakan OpenAI audio transcription endpoint. Pakai OpenAI/Groq untuk Caption Maker, atau biarkan PaunClip memakai transcript fallback."
+      );
+    }
+
     return transcribeWithSrtFallback({
       audioPath: params.audioPath,
       client,
@@ -141,4 +152,12 @@ export function transcriptFromVerboseJson(
     language,
     segments
   });
+}
+
+function isAudioTranscriptionEndpointUnavailable(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /\b404\b/.test(message) &&
+    /(not found|page not found|<!doctype html|audio\/transcriptions)/i.test(message)
+  );
 }

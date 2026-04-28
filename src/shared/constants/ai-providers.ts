@@ -113,6 +113,40 @@ export function getProviderPreset(provider: AIProviderConfig["provider"]) {
   return AI_PROVIDER_PRESETS[provider];
 }
 
+export function providerSupportsCapability(
+  config: Pick<AIProviderConfig, "provider" | "baseUrl">,
+  capability: keyof AIProviderPreset["supports"]
+) {
+  const preset = getProviderPreset(config.provider);
+  if (!preset.supports[capability]) {
+    return false;
+  }
+
+  if (
+    config.provider === "custom" &&
+    (capability === "transcription" || capability === "tts") &&
+    isKnownChatOnlyOpenAICompatibleBaseUrl(config.baseUrl)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+export function isKnownChatOnlyOpenAICompatibleBaseUrl(value?: string) {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = normalizeOpenAICompatibleBaseUrl(value);
+  try {
+    const hostname = new URL(normalized).hostname.toLowerCase();
+    return hostname === "opencode.ai" || hostname.endsWith(".opencode.ai");
+  } catch {
+    return /(^|\.)opencode\.ai\b/i.test(normalized);
+  }
+}
+
 export function buildProviderConfig(
   provider: AIProviderConfig["provider"],
   task: AIProviderTask,

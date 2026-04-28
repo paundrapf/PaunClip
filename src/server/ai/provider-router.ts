@@ -6,6 +6,8 @@ import {
   AI_PROVIDER_TASKS,
   getProviderPreset,
   normalizeOpenAICompatibleBaseUrl,
+  providerSupportsCapability,
+  isKnownChatOnlyOpenAICompatibleBaseUrl,
   type AIProviderTask
 } from "@/shared/constants/ai-providers";
 
@@ -58,10 +60,13 @@ export async function validateAIProviderConfig(
     return { ok: false, message: "Unknown AI task" };
   }
 
-  if (!preset.supports[capability]) {
+  if (!providerSupportsCapability(config, capability)) {
     return {
       ok: false,
-      message: `${preset.label} belum mendukung ${capability} untuk task ini.`
+      message:
+        config.provider === "custom" && isKnownChatOnlyOpenAICompatibleBaseUrl(config.baseUrl)
+          ? "OpenCode Go endpoint hanya mendukung chat/model list. Pakai OpenAI atau Groq untuk Caption Maker/Hook Maker audio."
+          : `${preset.label} belum mendukung ${capability} untuk task ini.`
     };
   }
 
