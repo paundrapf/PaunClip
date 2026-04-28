@@ -12,6 +12,7 @@ import {
   Flame,
   Link as LinkIcon,
   Loader2,
+  PlayCircle,
   Settings,
   Scissors,
   Sparkles,
@@ -27,12 +28,42 @@ import { BRAND_ASSETS } from "@/shared/constants/brand";
 import { sessionConfigSchema } from "@/shared/schemas/session";
 
 const tools = [
-  { label: "New workflow", icon: Sparkles, color: "text-lime-300", href: "/workflow" },
-  { label: "Projects", icon: Scissors, color: "text-sky-300", href: "/projects" },
-  { label: "Campaigns", icon: Flame, color: "text-amber-300", href: "/campaigns" },
-  { label: "Caption styles", icon: Captions, color: "text-emerald-300", href: "/settings" },
-  { label: "AI settings", icon: Settings, color: "text-cyan-300", href: "/settings" },
-  { label: "Storage", icon: Database, color: "text-blue-300", href: "/settings" }
+  {
+    label: "Guided workflow",
+    description: "Set source, captions, hooks, and render mode.",
+    icon: Sparkles,
+    href: "/workflow"
+  },
+  {
+    label: "Review projects",
+    description: "Open previous sessions and pick up unfinished work.",
+    icon: Scissors,
+    href: "/projects"
+  },
+  {
+    label: "Campaign batch",
+    description: "Clip selected videos from a channel or list.",
+    icon: Flame,
+    href: "/campaigns"
+  },
+  {
+    label: "Caption styles",
+    description: "Tune presets before rendering a new batch.",
+    icon: Captions,
+    href: "/settings"
+  },
+  {
+    label: "AI providers",
+    description: "Check models, keys, voices, and task routing.",
+    icon: Settings,
+    href: "/settings"
+  },
+  {
+    label: "Storage",
+    description: "Clean temp files and manage output folders.",
+    icon: Database,
+    href: "/settings"
+  }
 ];
 
 const defaultConfig = sessionConfigSchema.parse({});
@@ -118,11 +149,11 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
   const visibleSessions = sessions.data ?? [];
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-[1500px] flex-col px-8 py-8">
-      <header className="flex flex-wrap items-center justify-between gap-4">
+    <div className="mx-auto flex min-h-screen w-full max-w-[1500px] flex-col overflow-hidden px-5 py-6 sm:px-8">
+      <header className="flex min-w-0 flex-wrap items-center justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3">
           {mode === "home" ? (
-            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-zinc-800 bg-zinc-950">
+            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-[var(--border-strong)] bg-[var(--panel-raised)] shadow-[inset_0_1px_0_rgb(255_255_255_/_0.05)]">
               <Image
                 src={BRAND_ASSETS.logoTransparent}
                 alt={APP_NAME}
@@ -134,24 +165,25 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
             </span>
           ) : null}
           <div className="min-w-0">
-            <p className="text-sm font-medium text-zinc-500">Local workspace</p>
-            <h1 className="mt-1 break-words text-2xl font-bold text-white">
+            <p className="text-sm font-medium text-[var(--muted-soft)]">Local workspace</p>
+            <h1 className="mt-1 break-words text-2xl font-semibold text-[var(--text)] sm:text-3xl">
               {mode === "projects" ? "Projects" : APP_NAME}
             </h1>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
           <Badge>{visibleSessions.length} projects</Badge>
           <Button variant="secondary" size="sm" onClick={() => router.push("/settings")}>
+            <Settings className="h-4 w-4" aria-hidden="true" />
             Settings
           </Button>
         </div>
       </header>
 
-      <section className="grid flex-1 gap-5 py-10 xl:grid-cols-[1fr_360px]">
-        <div className="rounded-lg border border-zinc-800 bg-black/60 p-7 shadow-2xl shadow-black/30">
+      <section className="grid flex-1 gap-5 py-8 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0 overflow-hidden rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.78)] p-5 shadow-[var(--shadow-soft)] sm:p-7">
           {mode === "home" ? (
-            <div className="mb-5 flex min-w-0 items-center gap-4 overflow-hidden rounded-lg border border-zinc-900 bg-black px-4 py-3">
+            <div className="mb-5 flex min-w-0 items-center gap-4 overflow-hidden rounded-lg border border-[var(--border)] bg-[rgb(8_8_7_/_0.72)] px-4 py-3">
               <div className="relative h-12 w-44 shrink-0 sm:w-56">
                 <Image
                   src={BRAND_ASSETS.bannerDark}
@@ -163,8 +195,8 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
                   priority
                 />
               </div>
-              <p className="hidden min-w-0 text-sm text-zinc-500 md:block">
-                Local-first clipping workspace for fast short-form output.
+              <p className="hidden min-w-0 text-sm text-[var(--muted)] md:block">
+                One place to import, analyze, review, and render short clips.
               </p>
             </div>
           ) : null}
@@ -176,21 +208,19 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
             }}
           >
             <label className="grid gap-2">
-              <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                Source video
-              </span>
+              <span className="text-xs font-semibold text-[var(--muted-soft)]">Source video</span>
               <div className="relative">
-                <LinkIcon className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-zinc-500" />
+                <LinkIcon className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[var(--muted-soft)]" />
                 <Input
                   value={url}
                   onChange={(event) => setUrl(event.target.value)}
-                  className="pl-12"
+                  className="pl-12 text-base"
                   placeholder="Paste a YouTube link"
                   disabled={isWorking}
                 />
               </div>
             </label>
-            {error ? <p className="text-sm font-medium text-red-300">{error}</p> : null}
+            {error ? <p className="break-words text-sm font-medium text-[#ff9a9a]">{error}</p> : null}
             <input
               ref={fileInputRef}
               type="file"
@@ -214,7 +244,7 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
                 event.currentTarget.value = "";
               }}
             />
-            <div className="flex flex-wrap items-center gap-4">
+            <div className="flex flex-wrap items-center gap-3">
               <Button
                 type="button"
                 variant="secondary"
@@ -224,24 +254,28 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
                 {isWorking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
                 Upload
               </Button>
-              <Button type="submit" variant="primary" className="min-w-56" disabled={isWorking}>
-                {isWorking ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                Get clips in 1 click
+              <Button type="submit" variant="primary" className="min-w-52" disabled={isWorking}>
+                {isWorking ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
+                Start clipping
               </Button>
               <Button type="button" variant="ghost" onClick={() => router.push("/workflow")}>
+                <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
                 Advanced config
               </Button>
             </div>
           </form>
         </div>
-        <aside className="grid content-start gap-3 rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="font-semibold">Workspace pulse</h2>
+        <aside className="grid min-w-0 content-start gap-3 rounded-lg border border-[var(--border)] bg-[rgb(12_12_10_/_0.78)] p-5 shadow-[var(--shadow-tight)]">
+          <div className="flex min-w-0 items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="font-semibold text-[var(--text)]">Workspace pulse</h2>
+              <p className="mt-1 text-sm text-[var(--muted-soft)]">Status snapshot</p>
+            </div>
             <Badge>local</Badge>
           </div>
           <Metric label="Completed clips" value={String(sumClips(visibleSessions))} />
           <Metric label="Running jobs" value={String(countRunningJobs(visibleSessions))} />
-          <Metric label="Failed sessions" value={String(countFailedSessions(visibleSessions))} />
+          <Metric label="Needs review" value={String(countFailedSessions(visibleSessions))} />
           <Button variant="secondary" onClick={() => router.push("/settings")}>
             <Database className="h-4 w-4" aria-hidden="true" />
             Storage settings
@@ -249,67 +283,73 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
         </aside>
       </section>
 
-      <section className="grid gap-9 pb-10">
-        <div className="grid grid-cols-2 gap-5 md:grid-cols-3 xl:grid-cols-6">
+      <section className="grid gap-8 pb-10">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {tools.map((tool) => {
             const Icon = tool.icon;
             return (
               <Link
                 key={tool.label}
                 href={tool.href as Route}
-                className="grid justify-items-center gap-3 rounded-lg border border-transparent p-3 text-sm font-semibold text-white transition hover:border-zinc-800 hover:bg-zinc-950"
+                className="group grid min-w-0 grid-cols-[44px_minmax(0,1fr)] gap-3 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.62)] p-4 transition-[background,border-color,box-shadow,transform] duration-200 hover:border-[rgb(242_162_58_/_0.42)] hover:bg-[rgb(26_24_20_/_0.88)] hover:shadow-[var(--shadow-tight)]"
               >
-                <span className="grid h-16 w-16 place-items-center rounded-full bg-zinc-900">
-                  <Icon className={`h-7 w-7 ${tool.color}`} aria-hidden="true" />
+                <span className="grid h-11 w-11 place-items-center rounded-lg bg-[var(--accent-muted)] text-[var(--accent-strong)]">
+                  <Icon className="h-5 w-5" aria-hidden="true" />
                 </span>
-                {tool.label}
+                <span className="min-w-0">
+                  <span className="block font-semibold text-[var(--text)]">{tool.label}</span>
+                  <span className="mt-1 block text-sm leading-5 text-[var(--muted)]">
+                    {tool.description}
+                  </span>
+                </span>
               </Link>
             );
           })}
         </div>
 
-        <div className="flex items-center justify-between border-t border-zinc-900 pt-6">
-          <div>
-            <h2 className="text-lg font-semibold">Projects</h2>
-            <p className="mt-1 text-sm text-zinc-500">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] pt-6">
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-[var(--text)]">Projects</h2>
+            <p className="mt-1 text-sm text-[var(--muted)]">
               {visibleSessions.length} sessions in this workspace
             </p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <Badge>Auto-save</Badge>
-            <Badge>Auto-import off</Badge>
+            <Badge>Local files</Badge>
           </div>
         </div>
 
         {visibleSessions.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-zinc-800 py-12 text-center text-sm text-zinc-500">
+          <div className="rounded-lg border border-dashed border-[var(--border-strong)] bg-[rgb(18_18_16_/_0.45)] py-12 text-center text-sm text-[var(--muted)]">
             New projects will appear here after you paste a YouTube link or upload a video.
           </div>
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {visibleSessions.map((session) => {
               const latestJob = session.jobs[0];
+              const progress = latestJob?.progress ?? (session.status === "completed" ? 100 : 0);
               return (
                 <Link
                   key={session.id}
                   href={`/results/${session.id}`}
-                  className="rounded-lg border border-zinc-800 bg-zinc-950 p-5 transition hover:border-zinc-600"
+                  className="min-w-0 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.68)] p-5 transition-[background,border-color,box-shadow] hover:border-[var(--border-strong)] hover:bg-[var(--panel-raised)] hover:shadow-[var(--shadow-tight)]"
                 >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h3 className="line-clamp-2 font-semibold">
+                  <div className="flex min-w-0 items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <h3 className="line-clamp-2 break-words font-semibold text-[var(--text)]">
                         {session.sourceTitle || session.sourceUrl || session.id}
                       </h3>
-                      <p className="mt-2 text-sm text-zinc-500">
-                        {session.sourceType} - {session.stage}
+                      <p className="mt-2 text-sm text-[var(--muted)]">
+                        {session.sourceType} / {session.stage}
                       </p>
                     </div>
-                    <Badge>{latestJob?.progress ?? 0}%</Badge>
+                    <Badge>{progress}%</Badge>
                   </div>
-                  <div className="mt-5 h-2 overflow-hidden rounded-full bg-zinc-900">
+                  <div className="mt-5 h-2 overflow-hidden rounded-full bg-[rgb(255_255_255_/_0.06)]">
                     <div
-                      className="h-full rounded-full bg-lime-300"
-                      style={{ width: `${latestJob?.progress ?? (session.status === "completed" ? 100 : 0)}%` }}
+                      className="h-full rounded-full bg-[var(--accent)]"
+                      style={{ width: `${progress}%` }}
                     />
                   </div>
                 </Link>
@@ -324,9 +364,9 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-black p-4">
-      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</p>
-      <p className="mt-2 text-2xl font-bold">{value}</p>
+    <div className="rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.6)] p-4 shadow-[inset_0_1px_0_rgb(255_255_255_/_0.03)]">
+      <p className="text-xs font-semibold text-[var(--muted-soft)]">{label}</p>
+      <p className="mt-2 text-2xl font-semibold text-[var(--text)]">{value}</p>
     </div>
   );
 }
