@@ -258,14 +258,19 @@ export function SettingsScreen() {
   const currentOutputDirectory = outputDirectory ?? settings.data?.outputDirectory ?? "./storage/output";
 
   return (
-    <div className="mx-auto grid min-h-screen max-w-[1360px] gap-8 px-8 py-8">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium text-zinc-500">Settings</p>
-          <h1 className="mt-1 text-2xl font-bold">BYOK configuration</h1>
+    <div className="mx-auto grid min-h-screen w-full max-w-[1360px] gap-7 overflow-hidden px-5 py-6 sm:px-8">
+      <header className="flex min-w-0 flex-wrap items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-[var(--muted-soft)]">Settings</p>
+          <h1 className="mt-1 break-words text-2xl font-semibold text-[var(--text)] sm:text-3xl">
+            BYOK configuration
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm text-[var(--muted)]">
+            Keep the local clipping stack healthy, validate AI providers, and control storage behavior.
+          </p>
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
+          <div className="flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] px-3 py-2 shadow-[var(--shadow-tight)]">
             <Image
               src={BRAND_ASSETS.logoTransparent}
               alt={APP_NAME}
@@ -274,28 +279,30 @@ export function SettingsScreen() {
               className="h-9 w-9 object-contain"
             />
             <div className="hidden sm:block">
-              <p className="text-sm font-semibold">{APP_NAME}</p>
-              <p className="text-xs text-zinc-500">Brand active</p>
+              <p className="text-sm font-semibold text-[var(--text)]">{APP_NAME}</p>
+              <p className="text-xs text-[var(--muted)]">Brand active</p>
             </div>
           </div>
-          <Badge className="border-lime-300/40 bg-lime-300 text-black">Local only</Badge>
+          <Badge className="border-[rgb(242_162_58_/_0.36)] bg-[var(--accent)] text-[#1d1308]">Local only</Badge>
         </div>
       </header>
 
       {message ? (
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-zinc-200">
+        <div className="break-words rounded-lg border border-[rgb(242_162_58_/_0.3)] bg-[var(--accent-muted)] px-4 py-3 text-sm text-[var(--text)]">
           {message}
         </div>
       ) : null}
 
-      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[280px_1fr]">
-        <aside className="h-max rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+      <section className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
+        <aside className="h-max rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-3 shadow-[var(--shadow-tight)]">
           {tabs.map((item) => (
             <button
               key={item}
               onClick={() => setActive(item)}
               className={`flex h-11 w-full cursor-pointer items-center rounded-lg px-3 text-left text-sm font-semibold ${
-                active === item ? "bg-zinc-900 text-white" : "text-zinc-500 hover:text-white"
+                active === item
+                  ? "bg-[var(--accent-muted)] text-[var(--accent-strong)]"
+                  : "text-[var(--muted)] hover:bg-[var(--panel-soft)] hover:text-[var(--text)]"
               }`}
             >
               {item}
@@ -307,7 +314,7 @@ export function SettingsScreen() {
           {active === "AI providers" && settings.data ? (
             <section className="grid gap-4">
               <SystemHealthPanel health={health.data} loading={health.isLoading} />
-              <h2 className="text-lg font-semibold">AI providers</h2>
+              <h2 className="text-lg font-semibold text-[var(--text)]">AI providers</h2>
               <div className="grid gap-4 md:grid-cols-2">
                 {providerCards.map((provider) => {
                   const value = getDraft(provider.key);
@@ -329,20 +336,20 @@ export function SettingsScreen() {
                   return (
                     <article
                       key={provider.key}
-                      className="grid gap-4 rounded-lg border border-zinc-800 bg-zinc-950 p-5"
+                      className="grid min-w-0 gap-4 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)]"
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-3">
-                          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-zinc-900">
+                          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-[var(--accent-muted)]">
                             {provider.key === "hookMaker" ? (
-                              <Volume2 className="h-5 w-5 text-lime-300" aria-hidden="true" />
+                              <Volume2 className="h-5 w-5 text-[var(--accent-strong)]" aria-hidden="true" />
                             ) : (
-                              <KeyRound className="h-5 w-5 text-lime-300" aria-hidden="true" />
+                              <KeyRound className="h-5 w-5 text-[var(--accent-strong)]" aria-hidden="true" />
                             )}
                           </span>
                           <div className="min-w-0">
-                            <h3 className="font-semibold">{provider.title}</h3>
-                            <p className="truncate text-sm text-zinc-500">{value.model || "No model"}</p>
+                            <h3 className="font-semibold text-[var(--text)]">{provider.title}</h3>
+                            <p className="truncate text-sm text-[var(--muted)]">{value.model || "No model"}</p>
                           </div>
                         </div>
                         <Badge>{preset.label}</Badge>
@@ -361,9 +368,7 @@ export function SettingsScreen() {
                       />
 
                       <label className="grid gap-2">
-                        <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                          Base URL
-                        </span>
+                        <span className="text-xs font-semibold text-[var(--muted-soft)]">Base URL</span>
                         <Input
                           value={value.baseUrl}
                           onChange={(event) =>
@@ -373,9 +378,7 @@ export function SettingsScreen() {
                       </label>
 
                       <label className="grid gap-2">
-                        <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                          API key
-                        </span>
+                        <span className="text-xs font-semibold text-[var(--muted-soft)]">API key</span>
                         <div className="relative">
                           <Input
                             value={value.apiKey}
@@ -385,14 +388,12 @@ export function SettingsScreen() {
                             placeholder={preset.keyPlaceholder}
                             className="pr-11"
                           />
-                          <EyeOff className="absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                          <EyeOff className="absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted-soft)]" />
                         </div>
                       </label>
 
                       <label className="grid gap-2">
-                        <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                          Model
-                        </span>
+                        <span className="text-xs font-semibold text-[var(--muted-soft)]">Model</span>
                         <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
                           <Input
                             list={`models-${provider.key}`}
@@ -421,15 +422,13 @@ export function SettingsScreen() {
                       </label>
 
                       {provider.key === "hookMaker" ? (
-                        <div className="grid gap-4 rounded-lg border border-zinc-800 bg-black p-4">
+                        <div className="grid gap-4 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.56)] p-4">
                           <div className="flex items-center gap-2">
-                            <Volume2 className="h-4 w-4 text-lime-300" aria-hidden="true" />
-                            <p className="text-sm font-semibold">Hook voice</p>
+                            <Volume2 className="h-4 w-4 text-[var(--accent-strong)]" aria-hidden="true" />
+                            <p className="text-sm font-semibold text-[var(--text)]">Hook voice</p>
                           </div>
                           <label className="grid gap-2">
-                            <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                              Voice
-                            </span>
+                            <span className="text-xs font-semibold text-[var(--muted-soft)]">Voice</span>
                             <Input
                               list="hook-voices"
                               value={value.ttsVoice ?? ""}
@@ -455,9 +454,7 @@ export function SettingsScreen() {
                               }))}
                             />
                             <label className="grid gap-2">
-                              <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                                Speed
-                              </span>
+                              <span className="text-xs font-semibold text-[var(--muted-soft)]">Speed</span>
                               <Input
                                 type="number"
                                 min="0.25"
@@ -475,7 +472,7 @@ export function SettingsScreen() {
                             </label>
                           </div>
                           {value.provider === "groq" ? (
-                            <p className="text-xs leading-5 text-zinc-500">
+                            <p className="text-xs leading-5 text-[var(--muted)]">
                               Groq Orpheus currently uses WAV output and supports bracketed vocal directions in the hook text.
                             </p>
                           ) : null}
@@ -519,8 +516,8 @@ export function SettingsScreen() {
             <section className="grid gap-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-lg font-semibold">Caption style manager</h2>
-                  <p className="mt-1 text-sm text-zinc-500">
+                  <h2 className="text-lg font-semibold text-[var(--text)]">Caption style manager</h2>
+                  <p className="mt-1 text-sm text-[var(--muted)]">
                     Edit ASS/libass presets used by FFmpeg renders.
                   </p>
                 </div>
@@ -533,8 +530,8 @@ export function SettingsScreen() {
                     key={preset.id}
                     className={`rounded-lg border p-3 text-left ${
                       activeCaption?.id === preset.id
-                        ? "border-lime-300/60 bg-lime-300/10"
-                        : "border-zinc-800 bg-zinc-950"
+                        ? "border-[rgb(242_162_58_/_0.56)] bg-[var(--accent-muted)]"
+                        : "border-[var(--border)] bg-[rgb(18_18_16_/_0.72)]"
                     }`}
                     onClick={() => setActiveCaptionId(preset.id)}
                   >
@@ -552,16 +549,16 @@ export function SettingsScreen() {
                         PaunClip
                       </span>
                     </div>
-                    <p className="mt-3 text-sm font-semibold">{preset.name}</p>
-                    <p className="mt-1 text-xs text-zinc-500">{preset.config.animation}</p>
+                    <p className="mt-3 text-sm font-semibold text-[var(--text)]">{preset.name}</p>
+                    <p className="mt-1 text-xs text-[var(--muted)]">{preset.config.animation}</p>
                   </button>
                 ))}
               </div>
 
               {activeCaption ? (
-                <div className="grid gap-5 rounded-lg border border-zinc-800 bg-zinc-950 p-5 xl:grid-cols-[320px_1fr]">
+                <div className="grid gap-5 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)] xl:grid-cols-[320px_1fr]">
                   <div className="grid content-start gap-4">
-                    <div className="grid aspect-[9/16] place-items-center rounded-lg bg-black p-5 text-center">
+                    <div className="grid aspect-[9/16] place-items-center rounded-lg bg-[rgb(7_7_6_/_0.7)] p-5 text-center">
                       <div
                         className="max-w-full px-4 py-3 text-center font-black"
                         style={{
@@ -621,9 +618,7 @@ export function SettingsScreen() {
 
                   <div className="grid gap-4 md:grid-cols-2">
                     <label className="grid gap-2">
-                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                        Name
-                      </span>
+                      <span className="text-xs font-semibold text-[var(--muted-soft)]">Name</span>
                       <Input
                         value={activeCaption.name}
                         onChange={(event) =>
@@ -637,18 +632,14 @@ export function SettingsScreen() {
                       />
                     </label>
                     <label className="grid gap-2">
-                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                        Font family
-                      </span>
+                      <span className="text-xs font-semibold text-[var(--muted-soft)]">Font family</span>
                       <Input
                         value={activeCaption.config.fontFamily}
                         onChange={(event) => setCaptionConfigField("fontFamily", event.target.value)}
                       />
                     </label>
                     <label className="grid gap-2">
-                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                        Font size
-                      </span>
+                      <span className="text-xs font-semibold text-[var(--muted-soft)]">Font size</span>
                       <Input
                         type="number"
                         min="0.02"
@@ -659,9 +650,7 @@ export function SettingsScreen() {
                       />
                     </label>
                     <label className="grid gap-2">
-                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                        Font weight
-                      </span>
+                      <span className="text-xs font-semibold text-[var(--muted-soft)]">Font weight</span>
                       <Input
                         type="number"
                         min="100"
@@ -740,9 +729,7 @@ export function SettingsScreen() {
                       onChange={(value) => setCaptionConfigField("strokeColor", value)}
                     />
                     <label className="grid gap-2">
-                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                        Stroke width
-                      </span>
+                      <span className="text-xs font-semibold text-[var(--muted-soft)]">Stroke width</span>
                       <Input
                         type="number"
                         min="0"
@@ -753,9 +740,7 @@ export function SettingsScreen() {
                       />
                     </label>
                     <label className="grid gap-2">
-                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                        Letter spacing
-                      </span>
+                      <span className="text-xs font-semibold text-[var(--muted-soft)]">Letter spacing</span>
                       <Input
                         type="number"
                         min="0"
@@ -771,9 +756,7 @@ export function SettingsScreen() {
                       onChange={(value) => setCaptionShadowField("color", value)}
                     />
                     <label className="grid gap-2">
-                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                        Shadow blur
-                      </span>
+                      <span className="text-xs font-semibold text-[var(--muted-soft)]">Shadow blur</span>
                       <Input
                         type="number"
                         min="0"
@@ -786,7 +769,7 @@ export function SettingsScreen() {
                   </div>
                 </div>
               ) : (
-                <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5 text-sm text-zinc-500">
+                <div className="rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 text-sm text-[var(--muted)]">
                   No caption preset available.
                 </div>
               )}
@@ -794,11 +777,11 @@ export function SettingsScreen() {
           ) : null}
 
           {active === "Output" ? (
-            <section className="grid gap-5 rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+            <section className="grid gap-5 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)]">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-lg font-semibold">Output and storage</h2>
-                  <p className="mt-1 text-sm text-zinc-500">
+                  <h2 className="text-lg font-semibold text-[var(--text)]">Output and storage</h2>
+                  <p className="mt-1 text-sm text-[var(--muted)]">
                     Local artifacts, temp files, and rendered output controls.
                   </p>
                 </div>
@@ -810,16 +793,14 @@ export function SettingsScreen() {
                 <StorageMetric label="Output folder" value={storageStats.data?.outputLabel ?? "..."} />
               </div>
               <label className="mt-4 grid gap-2">
-                <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                  Directory
-                </span>
+                <span className="text-xs font-semibold text-[var(--muted-soft)]">Directory</span>
                 <div className="relative">
                   <Input
                     value={currentOutputDirectory}
                     onChange={(event) => setOutputDirectory(event.target.value)}
                     className="pr-11"
                   />
-                  <FolderOpen className="absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                  <FolderOpen className="absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted-soft)]" />
                 </div>
               </label>
               <div className="flex flex-wrap gap-3">
@@ -845,8 +826,8 @@ export function SettingsScreen() {
                 </Button>
               </div>
 
-              <div className="grid gap-3 rounded-lg border border-zinc-800 bg-black p-4">
-                <h3 className="font-semibold">Cleanup policy</h3>
+              <div className="grid gap-3 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.56)] p-4">
+                <h3 className="font-semibold text-[var(--text)]">Cleanup policy</h3>
                 <CleanupToggle
                   label="Temp render folders"
                   checked={cleanupOptions.temp}
@@ -884,14 +865,14 @@ export function SettingsScreen() {
           ) : null}
 
           {active === "Cookies" ? (
-            <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-              <h2 className="text-lg font-semibold">Cookies</h2>
-              <p className="mt-2 text-sm text-zinc-500">
+            <section className="rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)]">
+              <h2 className="text-lg font-semibold text-[var(--text)]">Cookies</h2>
+              <p className="mt-2 text-sm text-[var(--muted)]">
                 Upload Netscape-format cookies.txt for private, age-restricted, or bot-protected YouTube videos.
               </p>
-              <div className="mt-4 rounded-lg border border-zinc-800 bg-black p-4">
-                <p className="text-sm font-semibold">{health.data?.cookies.message ?? "Checking cookies..."}</p>
-                <p className="mt-2 text-xs text-zinc-500">
+              <div className="mt-4 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.56)] p-4">
+                <p className="text-sm font-semibold text-[var(--text)]">{health.data?.cookies.message ?? "Checking cookies..."}</p>
+                <p className="mt-2 text-xs text-[var(--muted)]">
                   YouTube cookies: {health.data?.cookies.stats.youtubeCookies ?? 0}. Auth cookies:{" "}
                   {health.data?.cookies.stats.authCookies ?? 0}.
                 </p>
@@ -940,24 +921,24 @@ function SystemHealthPanel({
 }) {
   const tools = health?.tools;
   return (
-    <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+    <section className="rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)]">
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-lg bg-zinc-900">
+          <span className="grid h-10 w-10 place-items-center rounded-lg bg-[var(--accent-muted)]">
             {loading ? (
-              <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
+              <Loader2 className="h-5 w-5 animate-spin text-[var(--accent-strong)]" />
             ) : (
-              <Activity className="h-5 w-5 text-lime-300" />
+              <Activity className="h-5 w-5 text-[var(--accent-strong)]" />
             )}
           </span>
           <div>
-            <h2 className="text-lg font-semibold">System health</h2>
-            <p className="text-sm text-zinc-500">
+            <h2 className="text-lg font-semibold text-[var(--text)]">System health</h2>
+            <p className="text-sm text-[var(--muted)]">
               {health?.ok ? "FFmpeg, FFprobe, and yt-dlp are reachable." : "Check tools before processing."}
             </p>
           </div>
         </div>
-        <Badge className={health?.ok ? "border-lime-300/40 bg-lime-300 text-black" : "border-red-500/40 bg-red-500/15 text-red-100"}>
+        <Badge className={health?.ok ? "border-[rgb(242_162_58_/_0.36)] bg-[var(--accent)] text-[#1d1308]" : "border-[rgb(255_107_107_/_0.38)] bg-[rgb(255_107_107_/_0.12)] text-[#ffd0d0]"}>
           {health?.ok ? "ready" : "needs attention"}
         </Badge>
       </div>
@@ -973,12 +954,12 @@ function SystemHealthPanel({
 
 function HealthItem({ label, ok, detail }: { label: string; ok?: boolean; detail?: string }) {
   return (
-    <div className="min-w-0 rounded-lg border border-zinc-800 bg-black p-3">
+    <div className="min-w-0 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.56)] p-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-semibold">{label}</p>
-        <span className={ok ? "h-2 w-2 rounded-full bg-lime-300" : "h-2 w-2 rounded-full bg-red-400"} />
+        <p className="text-sm font-semibold text-[var(--text)]">{label}</p>
+        <span className={ok ? "h-2 w-2 rounded-full bg-[var(--accent)]" : "h-2 w-2 rounded-full bg-[var(--danger)]"} />
       </div>
-      <p className="mt-2 truncate text-xs text-zinc-500">{detail || "Not checked"}</p>
+      <p className="mt-2 truncate text-xs text-[var(--muted)]">{detail || "Not checked"}</p>
     </div>
   );
 }
@@ -994,10 +975,10 @@ function ColorField({
 }) {
   return (
     <label className="grid gap-2">
-      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</span>
+      <span className="text-xs font-semibold text-[var(--muted-soft)]">{label}</span>
       <div className="grid grid-cols-[44px_1fr] gap-2">
         <span
-          className="grid h-11 place-items-center rounded-lg border border-zinc-800 bg-black"
+          className="grid h-11 place-items-center rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.56)]"
           style={{ color: value }}
         >
           <Palette className="h-4 w-4" aria-hidden="true" />
@@ -1010,9 +991,9 @@ function ColorField({
 
 function StorageMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-black p-4">
-      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</p>
-      <p className="mt-2 text-xl font-bold">{value}</p>
+    <div className="rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.56)] p-4">
+      <p className="text-xs font-semibold text-[var(--muted-soft)]">{label}</p>
+      <p className="mt-2 break-words text-xl font-semibold text-[var(--text)]">{value}</p>
     </div>
   );
 }
@@ -1027,13 +1008,13 @@ function CleanupToggle({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex items-center justify-between gap-4 rounded-lg border border-zinc-900 bg-zinc-950 px-3 py-2">
-      <span className="text-sm font-medium">{label}</span>
+    <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[rgb(12_12_10_/_0.7)] px-3 py-2">
+      <span className="text-sm font-medium text-[var(--text)]">{label}</span>
       <input
         type="checkbox"
         checked={checked}
         onChange={(event) => onChange(event.target.checked)}
-        className="h-4 w-4 accent-lime-300"
+        className="h-4 w-4 accent-[var(--accent)]"
       />
     </label>
   );

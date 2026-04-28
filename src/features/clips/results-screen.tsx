@@ -327,7 +327,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
   if (session.isLoading) {
     return (
       <div className="grid min-h-screen place-items-center">
-        <Loader2 className="h-8 w-8 animate-spin text-zinc-500" />
+        <Loader2 className="h-8 w-8 animate-spin text-[var(--accent)]" />
       </div>
     );
   }
@@ -336,9 +336,9 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
     return (
       <div className="grid min-h-screen place-items-center px-8 text-center">
         <div>
-          <h1 className="text-2xl font-bold">Session not found</h1>
-          <p className="mt-2 text-zinc-500">Project ini belum ada atau sudah dihapus.</p>
-          <Link className="mt-6 inline-flex rounded-full bg-white px-5 py-3 text-sm font-semibold text-black" href="/">
+          <h1 className="text-2xl font-semibold text-[var(--text)]">Session not found</h1>
+          <p className="mt-2 text-[var(--muted)]">Project ini belum ada atau sudah dihapus.</p>
+          <Link className="mt-6 inline-flex rounded-full bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-[#1d1308]" href="/">
             Back to dashboard
           </Link>
         </div>
@@ -347,21 +347,21 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
   }
 
   return (
-    <div className="mx-auto grid min-h-screen w-full min-w-0 max-w-[1500px] gap-8 overflow-x-clip px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+    <div className="mx-auto grid min-h-screen w-full min-w-0 max-w-[1500px] gap-7 overflow-x-clip px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
       <header className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,520px)_auto] xl:items-start">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-zinc-500">{session.data.sourceType}</p>
-          <h1 className="mt-1 max-w-full break-words text-xl font-bold leading-tight sm:text-2xl">
+          <p className="text-sm font-medium text-[var(--muted-soft)]">{session.data.sourceType}</p>
+          <h1 className="mt-1 max-w-full break-words text-xl font-semibold leading-tight text-[var(--text)] sm:text-2xl">
             {session.data.sourceTitle || session.data.sourceUrl || "Local upload"}
           </h1>
         </div>
         <div className="flex min-w-0 justify-center xl:justify-self-center">
           <label className="relative w-full max-w-xl">
-            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted-soft)]" />
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              className="h-12 w-full rounded-lg border border-zinc-800 bg-zinc-950 pl-11 pr-4 text-sm outline-none placeholder:text-zinc-500"
+              className="h-12 w-full rounded-lg border border-[var(--border)] bg-[rgb(9_9_8_/_0.78)] pl-11 pr-4 text-sm text-[var(--text)] outline-none transition placeholder:text-[var(--muted-soft)] focus:border-[var(--accent)]/70 focus:ring-2 focus:ring-[rgb(242_162_58_/_0.13)]"
               placeholder="Find keywords or moments..."
             />
           </label>
@@ -428,17 +428,17 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
         <section
           className={
             isFailed
-              ? "min-w-0 overflow-hidden rounded-lg border border-red-950 bg-red-950/20 p-5"
-              : "min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 p-5"
+              ? "min-w-0 overflow-hidden rounded-lg border border-[rgb(255_107_107_/_0.35)] bg-[rgb(70_18_18_/_0.28)] p-5 shadow-[var(--shadow-tight)]"
+              : "min-w-0 overflow-hidden rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)]"
           }
         >
           <div className="mb-4 flex min-w-0 flex-wrap items-start justify-between gap-4">
             <div className="flex min-w-0 items-start gap-3">
               {isFailed ? (
-                <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-red-300" aria-hidden="true" />
+                <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-[#ff9a9a]" aria-hidden="true" />
               ) : null}
               <div className="min-w-0">
-                <h2 className="text-xl font-bold">
+                <h2 className="text-xl font-semibold text-[var(--text)]">
                   {isReadyToRender
                     ? "Highlights ready"
                     : isCancelled
@@ -447,9 +447,9 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                       ? "Processing failed"
                       : "Your video is processing"}
                 </h2>
-                <p className="mt-1 break-words text-sm leading-6 text-zinc-400">{statusMessage}</p>
+                <p className="mt-1 break-words text-sm leading-6 text-[var(--muted)]">{statusMessage}</p>
                 {!isFailed && !isCancelled ? (
-                  <p className="mt-1 text-xs text-zinc-500">ETA estimate: {etaLabel}</p>
+                  <p className="mt-1 text-xs text-[var(--muted-soft)]">ETA estimate: {etaLabel}</p>
                 ) : null}
               </div>
             </div>
@@ -487,7 +487,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                   Render selected
                 </Button>
               ) : null}
-              <Badge className={isFailed ? "border-red-500/40 bg-red-500/15 text-red-100" : undefined}>
+              <Badge className={isFailed ? "border-[rgb(255_107_107_/_0.38)] bg-[rgb(255_107_107_/_0.12)] text-[#ffd0d0]" : undefined}>
                 {isReadyToRender
                   ? "ready"
                   : session.data.status === "cancelled"
@@ -498,17 +498,17 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
               </Badge>
             </div>
           </div>
-          <div className="h-3 overflow-hidden rounded-full bg-zinc-900">
+          <div className="h-3 overflow-hidden rounded-full bg-[rgb(255_255_255_/_0.06)]">
             <div
-              className={isFailed ? "h-full rounded-full bg-red-400" : "h-full rounded-full bg-lime-300"}
+              className={isFailed ? "h-full rounded-full bg-[var(--danger)]" : "h-full rounded-full bg-[var(--accent)]"}
               style={{ width: `${progress}%` }}
             />
           </div>
           <div className="mt-5 grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {(latestJob?.steps ?? []).map((step) => (
-              <div key={step.id} className="min-w-0 rounded-lg border border-zinc-800 bg-black p-3">
-                <p className="text-sm font-semibold">{step.name.replace(/_/g, " ")}</p>
-                <p className="mt-1 text-xs text-zinc-500">{step.status}</p>
+              <div key={step.id} className="min-w-0 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.58)] p-3">
+                <p className="break-words text-sm font-semibold text-[var(--text)]">{step.name.replace(/_/g, " ")}</p>
+                <p className="mt-1 text-xs text-[var(--muted)]">{step.status}</p>
               </div>
             ))}
           </div>
@@ -516,11 +516,11 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
       ) : null}
 
       {highlights.length > 0 ? (
-        <section className="min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+        <section className="min-w-0 overflow-hidden rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)]">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
-              <h2 className="text-lg font-bold">Highlights</h2>
-              <p className="mt-1 text-sm text-zinc-500">
+              <h2 className="text-lg font-semibold text-[var(--text)]">Highlights</h2>
+              <p className="mt-1 text-sm text-[var(--muted)]">
                 {selectedHighlightCount} selected of {highlights.length}
               </p>
             </div>
@@ -557,7 +557,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
             </div>
           </div>
           {selectionError ? (
-            <p className="mb-4 rounded-lg border border-red-950 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+            <p className="mb-4 break-words rounded-lg border border-[rgb(255_107_107_/_0.35)] bg-[rgb(70_18_18_/_0.28)] px-3 py-2 text-sm text-[#ffd0d0]">
               {selectionError}
             </p>
           ) : null}
@@ -570,37 +570,37 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                   key={highlight.id}
                   className={`min-w-0 rounded-lg border p-4 transition ${
                     selected
-                      ? "border-lime-300/60 bg-lime-300/10"
-                      : "border-zinc-800 bg-black"
+                      ? "border-[rgb(242_162_58_/_0.56)] bg-[var(--accent-muted)]"
+                      : "border-[var(--border)] bg-[rgb(7_7_6_/_0.58)]"
                   }`}
                 >
                   <div className="mb-3 flex items-start justify-between gap-3">
                     <button
-                      className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-zinc-900 text-zinc-200 ring-1 ring-zinc-800"
+                      className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-[var(--panel-raised)] text-[var(--text)] ring-1 ring-[var(--border)]"
                       aria-label={selected ? "Deselect highlight" : "Select highlight"}
                       disabled={setHighlightSelection.isPending}
                       onClick={() => toggleHighlight(highlight.id)}
                     >
                       {selected ? (
-                        <CheckSquare className="h-5 w-5 text-lime-300" aria-hidden="true" />
+                        <CheckSquare className="h-5 w-5 text-[var(--accent-strong)]" aria-hidden="true" />
                       ) : (
                         <Square className="h-5 w-5" aria-hidden="true" />
                       )}
                     </button>
                     <div className="flex flex-wrap justify-end gap-2">
-                      <Badge className="border-lime-300/40 bg-lime-300 text-black">
+                      <Badge className="border-[rgb(242_162_58_/_0.36)] bg-[var(--accent)] text-[#1d1308]">
                         {highlight.viralityScore ?? 50}
                       </Badge>
                       <Badge>{Math.round(duration)}s</Badge>
                     </div>
                   </div>
-                  <h3 className="line-clamp-2 break-words text-base font-semibold">{highlight.title}</h3>
+                  <h3 className="line-clamp-2 break-words text-base font-semibold text-[var(--text)]">{highlight.title}</h3>
                   {highlight.description ? (
-                    <p className="mt-2 line-clamp-3 break-words text-sm leading-6 text-zinc-500">
+                    <p className="mt-2 line-clamp-3 break-words text-sm leading-6 text-[var(--muted)]">
                       {highlight.description}
                     </p>
                   ) : null}
-                  <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-3 text-xs text-zinc-500">
+                  <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-3 text-xs text-[var(--muted-soft)]">
                     <span className="min-w-0 break-words">
                       {highlight.startTime.toFixed(1)}s - {highlight.endTime.toFixed(1)}s
                     </span>
@@ -614,31 +614,31 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
       ) : null}
 
       {latestJob && showLogs ? (
-        <section className="min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+        <section className="min-w-0 overflow-hidden rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)]">
           <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-4">
             <div className="min-w-0">
-              <h2 className="text-lg font-bold">Processing logs</h2>
-              <p className="mt-1 text-sm text-zinc-500">{latestJob.status} - {progress}%</p>
+              <h2 className="text-lg font-semibold text-[var(--text)]">Processing logs</h2>
+              <p className="mt-1 text-sm text-[var(--muted)]">{latestJob.status} - {progress}%</p>
             </div>
             <Badge>{latestJob.events.length} events</Badge>
           </div>
-          <div className="max-h-96 min-w-0 max-w-full overflow-auto rounded-lg border border-zinc-900 bg-black">
+          <div className="max-h-96 min-w-0 max-w-full overflow-auto rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.7)]">
             {latestJob.events.length === 0 ? (
-              <p className="p-4 text-sm text-zinc-500">No logs yet.</p>
+              <p className="p-4 text-sm text-[var(--muted)]">No logs yet.</p>
             ) : (
               latestJob.events.map((event) => {
                 const detail = formatEventData(event.dataJson);
                 return (
-                  <article key={event.id} className="min-w-0 overflow-hidden border-b border-zinc-900 p-4 last:border-b-0">
+                  <article key={event.id} className="min-w-0 overflow-hidden border-b border-[var(--border)] p-4 last:border-b-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge className={eventTone(event.type)}>{event.type}</Badge>
-                      <span className="font-mono text-xs text-zinc-500">
+                      <span className="font-mono text-xs text-[var(--muted-soft)]">
                         {new Date(event.createdAt).toLocaleTimeString()}
                       </span>
                     </div>
-                    <p className="mt-2 break-words text-sm leading-6 text-zinc-200">{event.message}</p>
+                    <p className="mt-2 break-words text-sm leading-6 text-[var(--text)]">{event.message}</p>
                     {detail ? (
-                      <pre className="mt-3 max-h-36 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-lg bg-zinc-950 p-3 text-xs leading-5 text-zinc-400">
+                      <pre className="mt-3 max-h-36 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-lg bg-[rgb(12_12_10_/_0.9)] p-3 text-xs leading-5 text-[var(--muted)]">
                         {detail}
                       </pre>
                     ) : null}
@@ -651,11 +651,11 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
       ) : null}
 
       {showHookBanner ? (
-        <section className="min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+        <section className="min-w-0 overflow-hidden rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)]">
           <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
             <div className="min-w-0">
-              <h2 className="text-xl font-bold">Auto hook</h2>
-              <p className="mt-3 max-w-4xl break-words font-mono text-sm leading-7 text-zinc-300">
+              <h2 className="text-xl font-semibold text-[var(--text)]">Auto hook</h2>
+              <p className="mt-3 max-w-4xl break-words font-mono text-sm leading-7 text-[var(--muted)]">
                 Hooks and captions are rendered into completed clips when the selected settings enable them.
               </p>
             </div>
@@ -667,10 +667,10 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
       ) : null}
 
       {clips.length === 0 ? (
-        <section className="grid min-w-0 place-items-center rounded-lg border border-dashed border-zinc-800 py-20 text-center">
+        <section className="grid min-w-0 place-items-center rounded-lg border border-dashed border-[var(--border-strong)] bg-[rgb(18_18_16_/_0.45)] py-20 text-center">
           <div>
-            <h2 className="text-lg font-semibold">No clips yet</h2>
-            <p className="mt-2 text-sm text-zinc-500">
+            <h2 className="text-lg font-semibold text-[var(--text)]">No clips yet</h2>
+            <p className="mt-2 text-sm text-[var(--muted)]">
               Clips will appear here after rendering finishes.
             </p>
           </div>
@@ -679,8 +679,8 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
         <section className="grid min-w-0 gap-4 overflow-hidden">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
-              <h2 className="text-lg font-bold">Rendered clips</h2>
-              <p className="mt-1 text-sm text-zinc-500">{clips.length} clips ready for review</p>
+              <h2 className="text-lg font-semibold text-[var(--text)]">Rendered clips</h2>
+              <p className="mt-1 text-sm text-[var(--muted)]">{clips.length} clips ready for review</p>
             </div>
             <Badge>{clips.filter((clip) => clip.status === "completed").length} completed</Badge>
           </div>
@@ -692,11 +692,11 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
               return (
                 <article key={clip.id} className="group grid w-full max-w-[280px] gap-3 sm:max-w-none">
                   <button
-                    className="relative aspect-[9/16] w-full overflow-hidden rounded-lg bg-zinc-900 text-left"
+                    className="relative aspect-[9/16] w-full overflow-hidden rounded-lg bg-[var(--panel-raised)] text-left shadow-[var(--shadow-tight)]"
                     onClick={() => setPreviewClipId(clip.id)}
                   >
                     <div className="absolute left-3 top-3 z-10">
-                      <Badge className="border-lime-300/40 bg-lime-300 text-black">
+                      <Badge className="border-[rgb(242_162_58_/_0.36)] bg-[var(--accent)] text-[#1d1308]">
                         {clip.viralityScore ?? 50}
                       </Badge>
                     </div>
@@ -710,33 +710,33 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                         className="h-full w-full object-cover"
                       />
                     ) : (
-                      <div className="grid h-full place-items-center bg-gradient-to-b from-zinc-800 via-zinc-900 to-black px-5 text-center">
-                        <p className="line-clamp-4 break-words rounded-lg bg-white px-3 py-2 text-sm font-black uppercase text-black">
+                      <div className="grid h-full place-items-center bg-[linear-gradient(180deg,var(--panel-raised),var(--bg))] px-5 text-center">
+                        <p className="line-clamp-4 break-words rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-black text-[#1d1308]">
                           {clip.title}
                         </p>
                       </div>
                     )}
-                    <div className="absolute inset-x-3 bottom-3 rounded-lg bg-black/75 p-3 backdrop-blur">
-                      <p className="line-clamp-2 break-words text-sm font-bold">{clipHighlight?.hookText ?? clip.title}</p>
+                    <div className="absolute inset-x-3 bottom-3 rounded-lg bg-[rgb(7_7_6_/_0.82)] p-3 backdrop-blur">
+                      <p className="line-clamp-2 break-words text-sm font-semibold text-[var(--text)]">{clipHighlight?.hookText ?? clip.title}</p>
                       {clipHighlight?.description ? (
-                        <p className="mt-1 line-clamp-2 break-words text-xs leading-5 text-zinc-300">
+                        <p className="mt-1 line-clamp-2 break-words text-xs leading-5 text-[var(--muted)]">
                           {clipHighlight.description}
                         </p>
                       ) : null}
                     </div>
                   </button>
                   <div className="flex min-w-0 items-start justify-between gap-3">
-                    <h3 className="line-clamp-2 min-w-0 break-words text-base font-semibold">{clip.title}</h3>
+                    <h3 className="line-clamp-2 min-w-0 break-words text-base font-semibold text-[var(--text)]">{clip.title}</h3>
                     <div className="flex gap-1 opacity-80 transition group-hover:opacity-100">
                       <a
-                        className="grid h-9 w-9 place-items-center rounded-lg bg-zinc-900"
+                        className="grid h-9 w-9 place-items-center rounded-lg bg-[var(--panel-raised)] text-[var(--text)]"
                         aria-label="Download clip"
                         href={`/api/clips/${clip.id}/download`}
                       >
                         <Download className="h-4 w-4" aria-hidden="true" />
                       </a>
                       <button
-                        className="grid h-9 w-9 place-items-center rounded-lg bg-zinc-900"
+                        className="grid h-9 w-9 place-items-center rounded-lg bg-[var(--panel-raised)] text-[var(--text)]"
                         aria-label="Edit clip"
                         onClick={() => setPreviewClipId(clip.id)}
                       >
@@ -752,11 +752,11 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
       )}
 
       {previewClipId ? (
-        <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/80 p-4 sm:p-6">
-          <div className="grid max-h-[90vh] w-full min-w-0 max-w-6xl gap-5 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950 p-5 lg:grid-cols-[360px_minmax(0,1fr)]">
+        <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-[rgb(0_0_0_/_0.78)] p-4 backdrop-blur-sm sm:p-6">
+          <div className="grid max-h-[90vh] w-full min-w-0 max-w-6xl gap-5 overflow-auto rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.96)] p-5 shadow-[var(--shadow-soft)] lg:grid-cols-[360px_minmax(0,1fr)]">
             {editor.isLoading ? (
-              <div className="grid aspect-[9/16] place-items-center rounded-lg bg-black">
-                <Loader2 className="h-8 w-8 animate-spin text-zinc-500" />
+              <div className="grid aspect-[9/16] place-items-center rounded-lg bg-[rgb(7_7_6_/_0.8)]">
+                <Loader2 className="h-8 w-8 animate-spin text-[var(--accent)]" />
               </div>
             ) : editor.data ? (
               <>
@@ -765,16 +765,16 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                     <video
                       src={`/api/clips/${editor.data.clip.id}/download?inline=1`}
                       controls
-                      className="aspect-[9/16] max-h-[70vh] w-full rounded-lg bg-black object-contain"
+                      className="aspect-[9/16] max-h-[70vh] w-full rounded-lg bg-[rgb(7_7_6_/_0.8)] object-contain"
                     />
                   ) : (
-                    <div className="grid aspect-[9/16] place-items-center rounded-lg bg-black px-6 text-center text-sm text-zinc-500">
+                    <div className="grid aspect-[9/16] place-items-center rounded-lg bg-[rgb(7_7_6_/_0.8)] px-6 text-center text-sm text-[var(--muted)]">
                       Render this draft to create a video preview.
                     </div>
                   )}
                   <div className="grid grid-cols-3 gap-2">
                     <a
-                      className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold text-black"
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-3 text-sm font-semibold text-[#1d1308]"
                       href={`/api/clips/${editor.data.clip.id}/download`}
                     >
                       <Download className="h-4 w-4" />
@@ -812,9 +812,9 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                 <div className="grid min-w-0 content-start gap-5">
                   <div className="flex min-w-0 items-start justify-between gap-4">
                     <div className="min-w-0">
-                      <p className="text-sm font-medium text-zinc-500">Clip editor</p>
-                      <h2 className="mt-1 break-words text-2xl font-bold">{editor.data.clip.title}</h2>
-                      <p className="mt-2 text-sm text-zinc-500">
+                      <p className="text-sm font-medium text-[var(--muted-soft)]">Clip editor</p>
+                      <h2 className="mt-1 break-words text-2xl font-semibold text-[var(--text)]">{editor.data.clip.title}</h2>
+                      <p className="mt-2 text-sm text-[var(--muted)]">
                         {editor.data.clip.status} - {formatTimestamp(editor.data.clip.duration)}
                       </p>
                     </div>
@@ -830,19 +830,19 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
 
                   <div className="grid gap-3 md:grid-cols-2">
                     <label className="grid gap-2">
-                      <span className="text-xs font-semibold uppercase text-zinc-500">Title</span>
+                      <span className="text-xs font-semibold text-[var(--muted-soft)]">Title</span>
                       <input
                         value={editorDraft?.title ?? ""}
                         onChange={(event) => updateEditorDraft({ title: event.target.value })}
-                        className="h-11 rounded-lg border border-zinc-800 bg-black px-3 text-sm outline-none"
+                        className="h-11 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.62)] px-3 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]/70"
                       />
                     </label>
                     <label className="grid gap-2">
-                      <span className="text-xs font-semibold uppercase text-zinc-500">Caption preset</span>
+                      <span className="text-xs font-semibold text-[var(--muted-soft)]">Caption preset</span>
                       <select
                         value={editorDraft?.captionStyleId ?? ""}
                         onChange={(event) => updateEditorDraft({ captionStyleId: event.target.value })}
-                        className="h-11 rounded-lg border border-zinc-800 bg-black px-3 text-sm outline-none"
+                        className="h-11 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.62)] px-3 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]/70"
                       >
                         {editor.data.captionPresets.map((preset) => (
                           <option key={preset.id} value={preset.id}>
@@ -852,36 +852,36 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                       </select>
                     </label>
                     <label className="grid gap-2">
-                      <span className="text-xs font-semibold uppercase text-zinc-500">Start</span>
+                      <span className="text-xs font-semibold text-[var(--muted-soft)]">Start</span>
                       <input
                         type="number"
                         min="0"
                         step="0.1"
                         value={editorDraft?.startTime ?? ""}
                         onChange={(event) => updateEditorDraft({ startTime: event.target.value })}
-                        className="h-11 rounded-lg border border-zinc-800 bg-black px-3 text-sm outline-none"
+                        className="h-11 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.62)] px-3 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]/70"
                       />
                     </label>
                     <label className="grid gap-2">
-                      <span className="text-xs font-semibold uppercase text-zinc-500">End</span>
+                      <span className="text-xs font-semibold text-[var(--muted-soft)]">End</span>
                       <input
                         type="number"
                         min="0"
                         step="0.1"
                         value={editorDraft?.endTime ?? ""}
                         onChange={(event) => updateEditorDraft({ endTime: event.target.value })}
-                        className="h-11 rounded-lg border border-zinc-800 bg-black px-3 text-sm outline-none"
+                        className="h-11 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.62)] px-3 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]/70"
                       />
                     </label>
                   </div>
 
                   <label className="grid gap-2">
-                    <span className="text-xs font-semibold uppercase text-zinc-500">Hook text</span>
+                    <span className="text-xs font-semibold text-[var(--muted-soft)]">Hook text</span>
                     <textarea
                       value={editorDraft?.hookText ?? ""}
                       onChange={(event) => updateEditorDraft({ hookText: event.target.value })}
                       rows={3}
-                      className="resize-none rounded-lg border border-zinc-800 bg-black px-3 py-3 text-sm leading-6 outline-none"
+                      className="resize-none rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.62)] px-3 py-3 text-sm leading-6 text-[var(--text)] outline-none focus:border-[var(--accent)]/70"
                     />
                   </label>
 
@@ -905,7 +905,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                       Save draft
                     </Button>
                     {(updateClipDraft.error || rerenderClip.error || duplicateClip.error) ? (
-                      <p className="text-sm text-red-300">
+                      <p className="break-words text-sm text-[#ff9a9a]">
                         {updateClipDraft.error?.message ??
                           rerenderClip.error?.message ??
                           duplicateClip.error?.message}
@@ -913,18 +913,18 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                     ) : null}
                   </div>
 
-                  <div className="min-w-0 rounded-lg border border-zinc-800 bg-black p-4">
+                  <div className="min-w-0 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.62)] p-4">
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <h3 className="font-semibold">Transcript slice</h3>
                       <Badge>{editor.data.transcriptSlice.segments.length} segments</Badge>
                     </div>
                     <div className="max-h-56 overflow-auto pr-2">
                       {editor.data.transcriptSlice.segments.length === 0 ? (
-                        <p className="text-sm text-zinc-500">No transcript segment in this range.</p>
+                        <p className="text-sm text-[var(--muted)]">No transcript segment in this range.</p>
                       ) : (
                         editor.data.transcriptSlice.segments.map((segment, index) => (
-                          <p key={`${segment.start}-${index}`} className="break-words border-b border-zinc-900 py-2 text-sm leading-6 text-zinc-300 last:border-b-0">
-                            <span className="mr-2 font-mono text-xs text-zinc-500">
+                          <p key={`${segment.start}-${index}`} className="break-words border-b border-[var(--border)] py-2 text-sm leading-6 text-[var(--muted)] last:border-b-0">
+                            <span className="mr-2 font-mono text-xs text-[var(--muted-soft)]">
                               {segment.start.toFixed(1)}s
                             </span>
                             {segment.text}
@@ -938,7 +938,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
             ) : (
               <div className="col-span-full grid min-h-80 place-items-center text-center">
                 <div>
-                  <h2 className="text-xl font-bold">Clip not found</h2>
+                  <h2 className="text-xl font-semibold text-[var(--text)]">Clip not found</h2>
                   <Button className="mt-4" variant="secondary" onClick={() => setPreviewClipId(null)}>
                     Close
                   </Button>
@@ -966,13 +966,13 @@ function formatEventData(dataJson?: string | null) {
 
 function eventTone(type: string) {
   if (type === "error") {
-    return "border-red-500/40 bg-red-500/15 text-red-100";
+    return "border-[rgb(255_107_107_/_0.38)] bg-[rgb(255_107_107_/_0.12)] text-[#ffd0d0]";
   }
   if (type === "warning") {
-    return "border-amber-500/40 bg-amber-500/15 text-amber-100";
+    return "border-[rgb(242_162_58_/_0.38)] bg-[var(--accent-muted)] text-[var(--accent-strong)]";
   }
   if (type === "progress") {
-    return "border-lime-300/40 bg-lime-300 text-black";
+    return "border-[rgb(242_162_58_/_0.36)] bg-[var(--accent)] text-[#1d1308]";
   }
   return "";
 }
