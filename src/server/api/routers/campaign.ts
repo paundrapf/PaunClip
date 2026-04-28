@@ -7,6 +7,7 @@ import { fetchChannelVideos } from "@/server/media/ytdlp";
 import { stringifyJson } from "@/shared/schemas/primitives";
 import { campaignBatchConfigSchema, campaignContentTypeSchema } from "@/shared/schemas/campaign";
 import { sessionConfigSchema } from "@/shared/schemas/session";
+import { shouldSkipCampaignVideoStart } from "@/shared/campaign/status";
 import { enqueueJob, resumeQueuedJobs } from "@/server/jobs/runner";
 import { registerPipelineJobs } from "@/server/pipeline/register";
 import { createTRPCRouter, publicProcedure } from "../trpc";
@@ -16,7 +17,7 @@ export const campaignRouter = createTRPCRouter({
     .input(
       z.object({
         name: z.string().min(1),
-        channelUrl: z.string().url().optional(),
+        channelUrl: z.string().trim().min(1).optional(),
         config: sessionConfigSchema.optional()
       })
     )
@@ -26,6 +27,26 @@ export const campaignRouter = createTRPCRouter({
           name: input.name,
           channelUrl: input.channelUrl,
           configJson: stringifyJson(input.config ?? sessionConfigSchema.parse({}))
+        }
+      });
+    }),
+
+  update: publicProcedure
+    .input(
+      z.object({
+        campaignId: z.string().min(1),
+        name: z.string().trim().min(1).optional(),
+        channelUrl: z.string().trim().min(1).optional(),
+        config: sessionConfigSchema.optional()
+      })
+    )
+    .mutation(async ({ input }) => {
+      return db.campaign.update({
+        where: { id: input.campaignId },
+        data: {
+          ...(input.name ? { name: input.name } : {}),
+          ...(input.channelUrl ? { channelUrl: input.channelUrl } : {}),
+          ...(input.config ? { configJson: stringifyJson(input.config) } : {})
         }
       });
     }),
@@ -99,6 +120,44 @@ export const campaignRouter = createTRPCRouter({
     });
   }),
 
+  getById: publicProcedure.input(z.string().min(1)).query(async ({ input }) => {
+    registerPipelineJobs();
+    await resumeQueuedJobs();
+
+    return db.campaign.findUnique({
+      where: { id: input },
+      include: {
+        videos: {
+          orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }],
+          include: {
+            session: {
+              include: {
+                _count: {
+                  select: {
+                    clips: true,
+                    highlights: true
+                  }
+                },
+                jobs: {
+                  orderBy: { createdAt: "desc" },
+                  take: 1
+                }
+              }
+            }
+          }
+        },
+        sessions: {
+          include: {
+            jobs: {
+              orderBy: { createdAt: "desc" },
+              take: 1
+            }
+          }
+        }
+      }
+    });
+  }),
+
   setVideoSelection: publicProcedure
     .input(
       z.object({
@@ -138,7 +197,20 @@ export const campaignRouter = createTRPCRouter({
       registerPipelineJobs();
       const campaign = await db.campaign.findUnique({
         where: { id: input.campaignId },
-        include: { videos: true }
+        include: {
+          videos: {
+            include: {
+              session: {
+                include: {
+                  jobs: {
+                    orderBy: { createdAt: "desc" },
+                    take: 1
+                  }
+                }
+              }
+            }
+          }
+        }
       });
       if (!campaign) {
         throw new Error("Campaign not found");
@@ -153,6 +225,7 @@ export const campaignRouter = createTRPCRouter({
         throw new Error("Select at least one campaign video before starting batch.");
       }
       const sessions = [];
+      let skippedCount = 0;
 
       await db.campaign.update({
         where: { id: campaign.id },
@@ -168,6 +241,11 @@ export const campaignRouter = createTRPCRouter({
       });
 
       for (const video of videos) {
+        if (shouldSkipCampaignVideoStart(video)) {
+          skippedCount += 1;
+          continue;
+        }
+
         const targetClipCount =
           input.perVideoClipCounts?.[video.id] ?? input.perVideoClipCounts?.[video.videoId] ?? batchConfig.clipsPerVideo;
         const config = buildCampaignSessionConfig({
@@ -204,6 +282,12 @@ export const campaignRouter = createTRPCRouter({
         sessions.push({ session, job });
       }
 
-      return sessions;
+      return {
+        campaignId: campaign.id,
+        queuedCount: sessions.length,
+        skippedCount,
+        sessionIds: sessions.map(({ session }) => session.id),
+        jobs: sessions
+      };
     })
 });

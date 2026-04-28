@@ -843,6 +843,13 @@ Latest known before this handoff expansion:
 - Redesigned the intended Campaign flow as a novice-friendly video picker: find latest videos, select candidates, set clips per video, prepare batch settings, then start processing. "Find moments about" is the optional user intent prompt, not the system prompt.
 - Split Highlight Finder prompting into system and user messages so the base PaunClip curator instruction can be tuned separately from transcript payload and campaign/project intent.
 
+### 2026-04-29
+
+- Campaign UX is moving to a workspace model: `/campaigns` is the hub, `/campaigns/[campaignId]` is the operational workspace for finding videos, picking candidates, starting batches, and tracking progress.
+- After Campaign batch start, the UI should move attention to Batch progress instead of leaving the user with only a toast.
+- Campaign video thumbnails should be derived from YouTube video IDs when `yt-dlp --flat-playlist` does not return thumbnails, using `hqdefault` first and `mqdefault` as UI fallback.
+- Campaign batch start should skip videos that already have a session/job/result, including failed videos; failed sessions should be opened from Results and retried there instead of creating duplicate Campaign sessions.
+
 ## Current Known State
 
 As of this context file:
@@ -850,6 +857,7 @@ As of this context file:
 - Latest committed functional change is highlight fallback failure behavior.
 - Hook audio should no longer be mixed over a moving clip. If a rendered hook clip starts moving before the hook voice ends, inspect `prependHookAudioWithFreeze` and render signature cache invalidation.
 - Campaign sessions should use `promptMode: "campaign_batch"` and `targetClipCount` from the batch setup or per-video override. Projects/default sessions use the same base prompt but `promptMode: "single_video"`.
+- Campaign now has a dedicated workspace route planned/implemented at `/campaigns/[campaignId]`; users should not be stranded on the hub after creating or opening a campaign.
 - `next-env.d.ts` was dirty before creating this file; do not revert it casually.
 - `docs/` is gitignored, so docs under `docs/updates` exist locally but may not be tracked.
 - `assets/` is gitignored; public brand copies are used by app.

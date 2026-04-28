@@ -401,7 +401,7 @@ export async function fetchChannelVideos(params: {
           ? entry.url
           : `https://www.youtube.com/watch?v=${entry.id}`,
         durationSeconds: entry.duration,
-        thumbnailUrl: entry.thumbnail,
+        thumbnailUrl: deriveYoutubeThumbnailUrl(entry.id, entry.thumbnail),
         publishedAt: parseYoutubePublishedAt(entry.timestamp, entry.upload_date)
       });
       if (videos.length >= params.limit) {
@@ -421,11 +421,30 @@ export async function fetchChannelVideos(params: {
   });
 }
 
+export function deriveYoutubeThumbnailUrl(videoId: string, providedThumbnail?: string) {
+  if (providedThumbnail?.trim()) {
+    return providedThumbnail;
+  }
+  return youtubeThumbnailCandidates(videoId)[0];
+}
+
+export function youtubeThumbnailCandidates(videoId: string) {
+  const encodedVideoId = encodeURIComponent(videoId);
+  return [
+    `https://i.ytimg.com/vi/${encodedVideoId}/hqdefault.jpg`,
+    `https://i.ytimg.com/vi/${encodedVideoId}/mqdefault.jpg`
+  ];
+}
+
 export function normalizeYoutubeChannelTargets(
   channelUrl: string,
   contentType: "videos" | "shorts" | "all" = "videos"
 ) {
   const trimmed = channelUrl.trim();
+  if (/^@[\w.-]+$/i.test(trimmed)) {
+    return buildYoutubeTabTargets(`https://www.youtube.com/${trimmed}`, contentType);
+  }
+
   const url = parseYoutubeUrl(trimmed);
   if (!url) {
     return [trimmed];
@@ -438,7 +457,11 @@ export function normalizeYoutubeChannelTargets(
 
   const cleanPath = url.pathname.replace(/\/+$/, "");
   const withoutTab = cleanPath.replace(/\/(videos|shorts|streams|featured|playlists)$/i, "");
-  const base = `${url.origin}${withoutTab || cleanPath || "/"}`.replace(/\/$/, "");
+  return buildYoutubeTabTargets(`${url.origin}${withoutTab || cleanPath || "/"}`, contentType);
+}
+
+function buildYoutubeTabTargets(baseUrl: string, contentType: "videos" | "shorts" | "all") {
+  const base = baseUrl.replace(/\/$/, "");
   const targets =
     contentType === "all"
       ? [`${base}/videos`, `${base}/shorts`]
