@@ -1,6 +1,6 @@
 # PaunClip Project Context
 
-Last updated: 2026-04-28 19:14:29 +07:00, Asia/Bangkok.
+Last updated: 2026-04-29 02:20:51 +07:00, Asia/Bangkok.
 
 This file is a memory ledger for PaunClip across multiple Codex context compactions. It is intentionally practical: future agents should be able to re-enter the project, understand the product direction, understand what has already been changed, and avoid repeating old mistakes.
 
@@ -17,6 +17,7 @@ This snapshot is meant to help the next AI agent start without guessing.
 - Runtime folders such as `.next/`, `storage/`, and `node_modules/` are not source-of-truth handoff content.
 - `docs/` and `assets/` are ignored by git in this project state. Root-level `CONTEXT.md` and `AGENTS.md` are the durable handoff docs.
 - The user wants informative commits after changes, especially because they may rollback by commit.
+- Current technical direction: PaunClip is desktop-first/local-first for heavy video processing. Cloudflare can be useful later for lightweight docs/control-plane/update metadata, but not for FFmpeg/yt-dlp/render jobs.
 - This project is actively changing. Before implementing anything, inspect current files instead of trusting this document blindly.
 
 ## Architecture Map
@@ -57,6 +58,8 @@ Important implementation anchors:
 - `src/server/transcription/openai-transcriber.ts` owns audio transcription and SRT fallback policy.
 - `src/server/transcription/normalize-transcript.ts` owns transcript timing normalization.
 - `src/server/rendering/ffmpeg-renderer.ts` owns render orchestration and caption alignment.
+- `src/server/media/ffmpeg.ts` owns fast reframe filters such as center/left/right crop and full-frame blur.
+- `src/server/vision/smart-face.ts` owns Smart Face Fast crop planning. It samples selected clip frames only and must fallback instead of failing renders.
 - `src/server/captions/ass-renderer.ts` owns ASS subtitle generation.
 - `src/server/media/ytdlp.ts` and `src/server/media/ffmpeg.ts` own external media tooling.
 - `src/features/clips/results-screen.tsx` is the highest-risk UI surface because it combines long titles, logs, cards, media, and actions.
@@ -849,6 +852,16 @@ Latest known before this handoff expansion:
 - After Campaign batch start, the UI should move attention to Batch progress instead of leaving the user with only a toast.
 - Campaign video thumbnails should be derived from YouTube video IDs when `yt-dlp --flat-playlist` does not return thumbnails, using `hqdefault` first and `mqdefault` as UI fallback.
 - Campaign batch start should skip videos that already have a session/job/result, including failed videos; failed sessions should be opened from Results and retried there instead of creating duplicate Campaign sessions.
+- Added Reframe Engine V1 direction:
+  - `reframeMode`: `auto_fast`, `center_crop`, `left_subject`, `right_subject`, `full_frame_blur`, `smart_face`.
+  - `contentPreset`: `auto`, `podcast`, `interview`, `sports`, `gaming`, `tutorial`.
+  - Podcast/interview auto mode resolves to Smart Face first, with full-frame blur fallback.
+  - Gaming/tutorial defaults toward full-frame blur so HUD/UI/screen content is not cropped away.
+  - Sports remains center crop for now; ball/object tracking is explicitly future work.
+- Added Desktop foundation direction:
+  - Electron is selected over Tauri because PaunClip needs Node, child processes, Prisma SQLite, local storage, ffmpeg, and yt-dlp.
+  - Desktop mode should store DB/storage/output under Electron `userData`, not the install folder.
+  - Desktop bootstrap should keep secrets local and never commit runtime artifacts.
 
 ## Current Known State
 
@@ -858,6 +871,16 @@ As of this context file:
 - Hook audio should no longer be mixed over a moving clip. If a rendered hook clip starts moving before the hook voice ends, inspect `prependHookAudioWithFreeze` and render signature cache invalidation.
 - Campaign sessions should use `promptMode: "campaign_batch"` and `targetClipCount` from the batch setup or per-video override. Projects/default sessions use the same base prompt but `promptMode: "single_video"`.
 - Campaign now has a dedicated workspace route planned/implemented at `/campaigns/[campaignId]`; users should not be stranded on the hub after creating or opening a campaign.
+- Reframe Engine V1 is implemented in source:
+  - Fast modes: center crop, left subject, right subject, full-frame blur.
+  - Smart Face Fast samples clip frames at low FPS and computes a stable face-like crop center using a lightweight heuristic.
+  - If Smart Face is uncertain, render falls back to full-frame blur and logs the fallback.
+  - Render cache signatures include `reframeMode`, `contentPreset`, legacy `faceTrackingMode`, and `REFRAME_RENDERER_VERSION`.
+- Desktop foundation is scaffolded:
+  - Next standalone output is enabled.
+  - Electron main process can run a packaged local server on `127.0.0.1` with per-user storage/database/output env vars.
+  - Desktop scripts exist for dev/build/pack.
+  - Packaging still needs real-world `.exe` smoke testing and installer-icon hardening.
 - `next-env.d.ts` was dirty before creating this file; do not revert it casually.
 - `docs/` is gitignored, so docs under `docs/updates` exist locally but may not be tracked.
 - `assets/` is gitignored; public brand copies are used by app.
@@ -906,7 +929,7 @@ Medium-priority:
 - More granular render progress per clip.
 - GPU/encoder settings investigation for faster render.
 - Download all clips ZIP.
-- Optional Electron wrapper after core workflow stabilizes.
+- Desktop packaging hardening: icon `.ico`, bundled yt-dlp binary strategy, packaged migration smoke test, and Windows installer QA.
 
 Explicitly deferred:
 
@@ -948,6 +971,8 @@ The conversation hit context compaction multiple times. Important memory preserv
 - Equal-interval clips are acceptable only as internal debugging, not as auto-rendered creator output.
 - Caption sync bugs can come from transcript timing, fallback mode, renderer normalization, or provider capability mismatch.
 - Hook intro bugs can come from accidentally using audio `amix` again; expected behavior is prepend/concat audio and `tpad` first-frame video freeze.
+- Reframe/tracking failure must be fail-soft. If Smart Face fails, use full-frame blur and log it; do not fail clip rendering.
+- Sports/ball tracking is not active in V1. Do not market it as working until there is a real detector/object tracker.
 - Campaign UX should not expose "system prompt" language to normal users. Use "Find moments about" for optional creator intent and keep system prompts in server prompt modules.
 - UI should not force horizontal scroll. Always use `min-w-0`, `max-w-full`, wrapping, and bounded media previews in dense pages.
 - The user wants PaunClip to feel obvious and capable, not like a prototype requiring manual interpretation.

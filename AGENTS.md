@@ -1,6 +1,6 @@
 # PaunClip Agent Operating Manual
 
-Last updated: 2026-04-28 19:14:29 +07:00.
+Last updated: 2026-04-29 02:20:51 +07:00.
 
 This file tells future AI agents how to work safely in PaunClip. Read `CONTEXT.md` first for the full memory ledger, then use this file as the day-to-day operating guide.
 
@@ -77,7 +77,10 @@ Main backend flow:
 - Transcription: `src/server/transcription/openai-transcriber.ts`.
 - Transcript normalization: `src/server/transcription/normalize-transcript.ts`.
 - Render orchestration: `src/server/rendering/ffmpeg-renderer.ts`.
+- Reframe FFmpeg filters: `src/server/media/ffmpeg.ts`.
+- Smart Face Fast crop planning: `src/server/vision/smart-face.ts`.
 - ASS captions: `src/server/captions/ass-renderer.ts`.
+- Desktop runtime: `electron/main.cjs`, `scripts/prepare-standalone.cjs`, `next.config.ts`, and desktop scripts in `package.json`.
 
 Main UI flow:
 
@@ -97,6 +100,9 @@ Main UI flow:
 - Per-clip failures should be isolated when possible, but Highlight Finder failure should stop the analysis flow.
 - Equal-interval fallback highlights are not acceptable as user-facing clips.
 - Campaign mode should process only selected videos and show per-video status.
+- Reframe mode must be respected in render signatures and renderer input. Do not let old center-crop cache hits hide new framing behavior.
+- Smart Face tracking must fallback to full-frame blur if detection is unavailable or uncertain. Tracking failure is not a render failure.
+- Desktop mode is local-first: DB, storage, output, and provider secrets stay in user-local paths.
 
 ## AI Provider Rules
 
@@ -187,6 +193,21 @@ Campaign confusing:
 - Ensure fetched videos are selectable.
 - Ensure only selected videos start.
 - Ensure per-video queue status and result links are visible.
+
+Smart Reframe:
+
+- Check `reframeMode`, `contentPreset`, and legacy `faceTrackingMode` in session config.
+- `auto_fast` should resolve by content type, not blindly center crop every video.
+- For podcast/interview, Smart Face can be a little slower but should only sample selected clips.
+- If Smart Face logs fallback, inspect sample confidence before changing crop filters.
+- `full_frame_blur` is the safe low-cost fallback for two-person wide shots, gaming HUDs, and tutorials.
+
+Desktop:
+
+- Use `npm run desktop:dev` for Electron dev smoke after normal web checks.
+- Desktop build uses Next standalone; run `npm run desktop:build` before `desktop:pack`.
+- Packaged DB/storage/output must live under Electron `userData`, never install directories such as `Program Files`.
+- Do not commit desktop build output under `dist/desktop`.
 
 ## Handoff Checklist For Next Agent
 
