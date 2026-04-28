@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Image from "next/image";
 import {
   Activity,
   CheckCircle2,
@@ -26,6 +27,8 @@ import {
   type AIProviderTask
 } from "@/shared/constants/ai-providers";
 import { DEFAULT_CAPTION_PRESETS } from "@/shared/constants/caption-presets";
+import { APP_NAME } from "@/shared/constants/app";
+import { BRAND_ASSETS } from "@/shared/constants/brand";
 import type { CaptionPreset } from "@/shared/schemas/caption-style";
 import type { AIProviderConfig, AppSettings } from "@/shared/schemas/settings";
 import { trpc } from "@/features/trpc/client";
@@ -256,12 +259,27 @@ export function SettingsScreen() {
 
   return (
     <div className="mx-auto grid min-h-screen max-w-[1360px] gap-8 px-8 py-8">
-      <header className="flex items-center justify-between">
+      <header className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <p className="text-sm font-medium text-zinc-500">Settings</p>
           <h1 className="mt-1 text-2xl font-bold">BYOK configuration</h1>
         </div>
-        <Badge className="border-lime-300/40 bg-lime-300 text-black">Local only</Badge>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
+            <Image
+              src={BRAND_ASSETS.logoTransparent}
+              alt={APP_NAME}
+              width={36}
+              height={36}
+              className="h-9 w-9 object-contain"
+            />
+            <div className="hidden sm:block">
+              <p className="text-sm font-semibold">{APP_NAME}</p>
+              <p className="text-xs text-zinc-500">Brand active</p>
+            </div>
+          </div>
+          <Badge className="border-lime-300/40 bg-lime-300 text-black">Local only</Badge>
+        </div>
       </header>
 
       {message ? (

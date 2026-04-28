@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import type { Route } from "next";
 import {
   Film,
@@ -6,10 +7,10 @@ import {
   Home,
   LayoutGrid,
   Link2,
-  Settings,
-  Sparkles
+  Settings
 } from "lucide-react";
 import { APP_NAME } from "@/shared/constants/app";
+import { BRAND_ASSETS } from "@/shared/constants/brand";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -29,7 +30,14 @@ export function AppShell({ children, active = "/" }: { children: React.ReactNode
           className="mb-8 flex h-11 w-11 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950"
           aria-label={`${APP_NAME} home`}
         >
-          <Sparkles className="h-5 w-5 text-lime-300" aria-hidden="true" />
+          <Image
+            src={BRAND_ASSETS.logoTransparent}
+            alt={APP_NAME}
+            width={34}
+            height={34}
+            className="h-8 w-8 object-contain"
+            priority
+          />
         </Link>
         <nav className="grid gap-3">
           {navItems.map((item) => {

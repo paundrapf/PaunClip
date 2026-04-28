@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import {
@@ -21,6 +22,8 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { trpc } from "@/features/trpc/client";
+import { APP_NAME } from "@/shared/constants/app";
+import { BRAND_ASSETS } from "@/shared/constants/brand";
 import { sessionConfigSchema } from "@/shared/schemas/session";
 
 const tools = [
@@ -116,12 +119,26 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
 
   return (
     <div className="mx-auto flex min-h-screen max-w-[1500px] flex-col px-8 py-8">
-      <header className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium text-zinc-500">Local workspace</p>
-          <h1 className="mt-1 text-2xl font-bold text-white">
-            {mode === "projects" ? "Projects" : "PaunClip"}
-          </h1>
+      <header className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-3">
+          {mode === "home" ? (
+            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-zinc-800 bg-zinc-950">
+              <Image
+                src={BRAND_ASSETS.logoTransparent}
+                alt={APP_NAME}
+                width={40}
+                height={40}
+                className="h-10 w-10 object-contain"
+                priority
+              />
+            </span>
+          ) : null}
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-zinc-500">Local workspace</p>
+            <h1 className="mt-1 break-words text-2xl font-bold text-white">
+              {mode === "projects" ? "Projects" : APP_NAME}
+            </h1>
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <Badge>{visibleSessions.length} projects</Badge>
@@ -133,6 +150,24 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
 
       <section className="grid flex-1 gap-5 py-10 xl:grid-cols-[1fr_360px]">
         <div className="rounded-lg border border-zinc-800 bg-black/60 p-7 shadow-2xl shadow-black/30">
+          {mode === "home" ? (
+            <div className="mb-5 flex min-w-0 items-center gap-4 overflow-hidden rounded-lg border border-zinc-900 bg-black px-4 py-3">
+              <div className="relative h-12 w-44 shrink-0 sm:w-56">
+                <Image
+                  src={BRAND_ASSETS.bannerDark}
+                  alt={`${APP_NAME} banner`}
+                  fill
+                  sizes="(max-width: 640px) 176px, 224px"
+                  className="object-cover"
+                  style={{ objectPosition: "left 62%" }}
+                  priority
+                />
+              </div>
+              <p className="hidden min-w-0 text-sm text-zinc-500 md:block">
+                Local-first clipping workspace for fast short-form output.
+              </p>
+            </div>
+          ) : null}
           <form
             className="grid gap-5"
             onSubmit={(event) => {
