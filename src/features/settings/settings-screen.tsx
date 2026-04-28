@@ -13,6 +13,7 @@ import {
   Palette,
   RefreshCw,
   Save,
+  ScanFace,
   Upload,
   Volume2
 } from "lucide-react";
@@ -29,6 +30,12 @@ import {
 import { DEFAULT_CAPTION_PRESETS } from "@/shared/constants/caption-presets";
 import { APP_NAME } from "@/shared/constants/app";
 import { BRAND_ASSETS } from "@/shared/constants/brand";
+import {
+  CONTENT_PRESET_OPTIONS,
+  REFRAME_MODE_OPTIONS,
+  getContentPresetLabel,
+  getReframeModeLabel
+} from "@/shared/reframe";
 import type { CaptionPreset } from "@/shared/schemas/caption-style";
 import type { AIProviderConfig, AppSettings } from "@/shared/schemas/settings";
 import { trpc } from "@/features/trpc/client";
@@ -65,6 +72,7 @@ export function SettingsScreen() {
   const utils = trpc.useUtils();
   const [active, setActive] = useState("AI providers");
   const [providerDrafts, setProviderDrafts] = useState<Partial<AppSettings["aiProviders"]>>({});
+  const [preferenceDraft, setPreferenceDraft] = useState<Partial<AppSettings["preferences"]>>({});
   const [captionDrafts, setCaptionDrafts] = useState<Record<string, CaptionPreset>>({});
   const [activeCaptionId, setActiveCaptionId] = useState("karaoke");
   const [modelOptions, setModelOptions] = useState<Partial<Record<AIProviderTask, string[]>>>({});
@@ -100,6 +108,15 @@ export function SettingsScreen() {
     },
     onError: (error) =>
       showMessage("error", "Output directory was not saved", error.message)
+  });
+  const updatePreferences = trpc.settings.updatePreferences.useMutation({
+    onSuccess: async () => {
+      setPreferenceDraft({});
+      showMessage("success", "Reframe defaults saved");
+      await utils.settings.get.invalidate();
+    },
+    onError: (error) =>
+      showMessage("error", "Reframe defaults were not saved", error.message)
   });
   const openOutput = trpc.settings.openOutputDirectory.useMutation({
     onSuccess: (result) => showMessage("success", "Output folder opened", result.path),
@@ -254,8 +271,11 @@ export function SettingsScreen() {
     await utils.settings.health.invalidate();
   }
 
-  const tabs = ["AI providers", "Caption styles", "Output", "Cookies"];
+  const tabs = ["AI providers", "Caption styles", "Reframe", "Output", "Cookies"];
   const currentOutputDirectory = outputDirectory ?? settings.data?.outputDirectory ?? "./storage/output";
+  const currentPreferences = settings.data?.preferences
+    ? { ...settings.data.preferences, ...preferenceDraft }
+    : undefined;
 
   return (
     <div className="mx-auto grid min-h-screen w-full max-w-[1360px] gap-7 overflow-hidden px-5 py-6 sm:px-8">
@@ -773,6 +793,80 @@ export function SettingsScreen() {
                   No caption preset available.
                 </div>
               )}
+            </section>
+          ) : null}
+
+          {active === "Reframe" && currentPreferences ? (
+            <section className="grid gap-5 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)]">
+              <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="text-lg font-semibold text-[var(--text)]">Default reframe</h2>
+                  <p className="mt-1 max-w-2xl text-sm text-[var(--muted)]">
+                    Choose how PaunClip frames 16:9 sources into vertical clips before each workflow overrides it.
+                  </p>
+                </div>
+                <Badge>{getReframeModeLabel(currentPreferences.defaultReframeMode)}</Badge>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <SelectField
+                  label="Content preset"
+                  value={currentPreferences.defaultContentPreset}
+                  onChange={(value) =>
+                    setPreferenceDraft((current) => ({
+                      ...current,
+                      defaultContentPreset: value as AppSettings["preferences"]["defaultContentPreset"]
+                    }))
+                  }
+                  options={CONTENT_PRESET_OPTIONS.map((option) => ({
+                    label: option.label,
+                    value: option.value
+                  }))}
+                />
+                <SelectField
+                  label="Reframe mode"
+                  value={currentPreferences.defaultReframeMode}
+                  onChange={(value) =>
+                    setPreferenceDraft((current) => ({
+                      ...current,
+                      defaultReframeMode: value as AppSettings["preferences"]["defaultReframeMode"]
+                    }))
+                  }
+                  options={REFRAME_MODE_OPTIONS.map((option) => ({
+                    label: option.label,
+                    value: option.value
+                  }))}
+                />
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.56)] p-4">
+                  <div className="flex items-center gap-2">
+                    <ScanFace className="h-4 w-4 text-[var(--accent-strong)]" aria-hidden="true" />
+                    <h3 className="font-semibold text-[var(--text)]">Smart face behavior</h3>
+                  </div>
+                  <p className="mt-2 text-sm text-[var(--muted)]">
+                    Track faces samples selected clips only. If detection is uncertain, PaunClip keeps the full frame with a blurred background.
+                  </p>
+                </div>
+                <div className="rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.56)] p-4">
+                  <p className="text-xs font-semibold text-[var(--muted-soft)]">Current default</p>
+                  <p className="mt-2 text-lg font-semibold text-[var(--text)]">
+                    {getContentPresetLabel(currentPreferences.defaultContentPreset)} /{" "}
+                    {getReframeModeLabel(currentPreferences.defaultReframeMode)}
+                  </p>
+                </div>
+              </div>
+
+              <Button
+                variant="primary"
+                className="w-max"
+                disabled={updatePreferences.isPending}
+                onClick={() => updatePreferences.mutate(currentPreferences)}
+              >
+                {updatePreferences.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Save reframe defaults
+              </Button>
             </section>
           ) : null}
 

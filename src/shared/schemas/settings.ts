@@ -2,6 +2,7 @@ import { z } from "zod";
 import { DEFAULT_LANGUAGE, DEFAULT_OUTPUT_DIR } from "@/shared/constants/app";
 import { aspectRatioSchema, clipModelSchema } from "./primitives";
 import { captionPresetSchema } from "./caption-style";
+import { CONTENT_PRESETS, REFRAME_MODES } from "@/shared/reframe";
 
 export const aiProviderConfigSchema = z.object({
   provider: z.enum(["openai", "anthropic", "groq", "gemini", "custom"]),
@@ -25,6 +26,8 @@ export const appPreferencesSchema = z.object({
   defaultLanguage: z.string().default(DEFAULT_LANGUAGE),
   defaultAspectRatio: aspectRatioSchema.default("9:16"),
   defaultClipModel: clipModelSchema.default("auto"),
+  defaultContentPreset: z.enum(CONTENT_PRESETS).default("auto"),
+  defaultReframeMode: z.enum(REFRAME_MODES).default("auto_fast"),
   autoSave: z.boolean().default(true),
   autoImport: z.boolean().default(false)
 });

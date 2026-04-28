@@ -33,6 +33,8 @@ export const defaultAppSettings: AppSettings = {
     defaultLanguage: DEFAULT_LANGUAGE,
     defaultAspectRatio: "9:16",
     defaultClipModel: "auto",
+    defaultContentPreset: "auto",
+    defaultReframeMode: "auto_fast",
     autoSave: true,
     autoImport: false
   }

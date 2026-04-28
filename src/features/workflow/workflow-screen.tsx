@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Check, Clock, Layers3, Loader2, Play, Upload, WandSparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { SelectField } from "@/components/ui/select-field";
 import { useToast } from "@/components/ui/toast";
 import { DEFAULT_CAPTION_PRESETS } from "@/shared/constants/caption-presets";
+import { CONTENT_PRESET_OPTIONS, REFRAME_MODE_OPTIONS } from "@/shared/reframe";
 import { sessionConfigSchema, type SessionConfig } from "@/shared/schemas/session";
 import { trpc } from "@/features/trpc/client";
 
@@ -24,6 +25,8 @@ export function WorkflowScreen() {
   const [manualTranscriptSrt, setManualTranscriptSrt] = useState("");
   const [error, setError] = useState("");
   const [config, setConfig] = useState<SessionConfig>(sessionConfigSchema.parse({}));
+  const [preferencesApplied, setPreferencesApplied] = useState(false);
+  const settings = trpc.settings.get.useQuery();
   const createSession = trpc.session.create.useMutation({
     onSuccess: ({ session }) => {
       notify({
@@ -44,6 +47,33 @@ export function WorkflowScreen() {
   });
 
   const isWorking = createSession.isPending;
+
+  useEffect(() => {
+    if (preferencesApplied || !settings.data?.preferences) {
+      return;
+    }
+    const preferences = settings.data.preferences;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) {
+        return;
+      }
+      setConfig((current) =>
+        sessionConfigSchema.parse({
+          ...current,
+          clipModel: preferences.defaultClipModel,
+          aspectRatio: preferences.defaultAspectRatio,
+          language: preferences.defaultLanguage,
+          contentPreset: preferences.defaultContentPreset,
+          reframeMode: preferences.defaultReframeMode
+        })
+      );
+      setPreferencesApplied(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [preferencesApplied, settings.data?.preferences]);
 
   function updateConfig<K extends keyof SessionConfig>(key: K, value: SessionConfig[K]) {
     setConfig((current) => ({ ...current, [key]: value }));
@@ -309,6 +339,37 @@ export function WorkflowScreen() {
                 >
                   Review first
                 </Button>
+              </div>
+            </div>
+
+            <div className="grid gap-4 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.52)] p-4">
+              <div>
+                <h2 className="text-sm font-semibold text-[var(--text)]">Reframe</h2>
+                <p className="mt-1 text-xs text-[var(--muted)]">
+                  Keep speakers, screens, or full frames visible when converting landscape videos to vertical.
+                </p>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <SelectField
+                  label="Content preset"
+                  value={config.contentPreset}
+                  onChange={(value) =>
+                    updateConfig("contentPreset", value as SessionConfig["contentPreset"])
+                  }
+                  options={CONTENT_PRESET_OPTIONS.map((option) => ({
+                    label: option.label,
+                    value: option.value
+                  }))}
+                />
+                <SelectField
+                  label="Framing"
+                  value={config.reframeMode}
+                  onChange={(value) => updateConfig("reframeMode", value as SessionConfig["reframeMode"])}
+                  options={REFRAME_MODE_OPTIONS.map((option) => ({
+                    label: option.label,
+                    value: option.value
+                  }))}
+                />
               </div>
             </div>
 

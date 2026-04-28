@@ -25,6 +25,7 @@ import { fileExists } from "@/server/storage/files";
 import { ensureSessionLayout, sessionPath } from "@/server/storage/paths";
 import { parseJsonWithSchema, stringifyJson } from "@/shared/schemas/primitives";
 import { providerSupportsCapability } from "@/shared/constants/ai-providers";
+import { REFRAME_RENDERER_VERSION } from "@/shared/reframe";
 import {
   sessionConfigSchema,
   transcriptSchema,
@@ -405,6 +406,12 @@ async function renderHighlights(sessionId: string, context: JobContext) {
       captionModel: settings.aiProviders.captionMaker.model,
       captionProvider: settings.aiProviders.captionMaker.provider,
       aspectRatio: config.aspectRatio,
+      rendererVersion: REFRAME_RENDERER_VERSION,
+      reframe: {
+        mode: config.reframeMode,
+        contentPreset: config.contentPreset,
+        faceTrackingMode: config.faceTrackingMode
+      },
       hook: buildHookSignature(config.autoHook, highlight.hookText, settings.aiProviders.hookMaker)
     });
     const existingMetadata = readClipRenderMetadata(existingClip?.renderJson);
@@ -450,7 +457,9 @@ async function renderHighlights(sessionId: string, context: JobContext) {
             captionOffsetMs: config.captionOffsetMs ?? 0,
             language,
             onLog: context.log,
-            hookAudioPath
+            hookAudioPath,
+            contentPreset: config.contentPreset,
+            reframeMode: config.reframeMode
           }),
         retryOptions(context, "render_clip", 2)
       );
@@ -478,7 +487,8 @@ async function renderHighlights(sessionId: string, context: JobContext) {
           renderJson: stringifyJson(
             buildClipRenderMetadata({
               signature: renderSignature,
-              versionId
+              versionId,
+              cropPlan: output.cropPlan
             })
           ),
           sessionId,
@@ -499,7 +509,8 @@ async function renderHighlights(sessionId: string, context: JobContext) {
           renderJson: stringifyJson(
             buildClipRenderMetadata({
               signature: renderSignature,
-              versionId
+              versionId,
+              cropPlan: output.cropPlan
             })
           )
         }
@@ -656,6 +667,12 @@ async function rerenderClip(clipId: string, context: JobContext) {
     captionModel: settings.aiProviders.captionMaker.model,
     captionProvider: settings.aiProviders.captionMaker.provider,
     aspectRatio: config.aspectRatio,
+    rendererVersion: REFRAME_RENDERER_VERSION,
+    reframe: {
+      mode: config.reframeMode,
+      contentPreset: config.contentPreset,
+      faceTrackingMode: config.faceTrackingMode
+    },
     hook: buildHookSignature(config.autoHook, highlight.hookText, settings.aiProviders.hookMaker)
   });
 
@@ -668,7 +685,8 @@ async function rerenderClip(clipId: string, context: JobContext) {
             signature,
             versionId: metadata.versionId,
             draft: metadata.draft,
-            cacheHit: true
+            cacheHit: true,
+            cropPlan: metadata.cropPlan
           })
         )
       }
@@ -711,7 +729,9 @@ async function rerenderClip(clipId: string, context: JobContext) {
           captionOffsetMs: config.captionOffsetMs ?? 0,
           language,
           onLog: context.log,
-          hookAudioPath
+          hookAudioPath,
+          contentPreset: config.contentPreset,
+          reframeMode: config.reframeMode
         }),
       retryOptions(context, "rerender_clip", 2)
     );
@@ -748,7 +768,8 @@ async function rerenderClip(clipId: string, context: JobContext) {
       renderJson: stringifyJson(
         buildClipRenderMetadata({
           signature,
-          versionId
+          versionId,
+          cropPlan: output.cropPlan
         })
       )
     }
@@ -887,6 +908,8 @@ function defaultConfig(): SessionConfig {
     aspectRatio: "9:16",
     renderMode: "auto",
     processingStart: 0,
+    contentPreset: "auto",
+    reframeMode: "auto_fast",
     faceTrackingMode: "center_crop",
     captionOffsetMs: 0,
     language: "id",

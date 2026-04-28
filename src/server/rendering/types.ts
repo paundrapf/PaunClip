@@ -1,6 +1,7 @@
 import type { CaptionStyle } from "@/shared/schemas/caption-style";
 import type { Highlight, Transcript } from "@/shared/schemas/session";
 import type { AIProviderConfig } from "@/shared/schemas/settings";
+import type { ContentPreset, ReframeMode } from "@/shared/reframe";
 
 export type RenderClipInput = {
   sessionId: string;
@@ -17,6 +18,8 @@ export type RenderClipInput = {
   language?: string;
   onLog?: (message: string, data?: Record<string, unknown>) => Promise<void>;
   hookAudioPath?: string;
+  contentPreset?: ContentPreset;
+  reframeMode?: ReframeMode;
 };
 
 export type RenderClipOutput = {
@@ -27,6 +30,7 @@ export type RenderClipOutput = {
   fileSizeMb: number;
   captionBurned: boolean;
   hookAdded: boolean;
+  cropPlan?: Record<string, unknown>;
 };
 
 export interface ClipRenderer {

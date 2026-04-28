@@ -7,6 +7,7 @@ import {
   secondsSchema,
   sourceTypeSchema
 } from "./primitives";
+import { CONTENT_PRESETS, REFRAME_MODES } from "@/shared/reframe";
 
 export const sessionConfigSchema = z
   .object({
@@ -20,6 +21,8 @@ export const sessionConfigSchema = z
     renderMode: z.enum(["auto", "review"]).default("auto"),
     processingStart: secondsSchema.default(0),
     processingEnd: secondsSchema.optional(),
+    contentPreset: z.enum(CONTENT_PRESETS).default("auto"),
+    reframeMode: z.enum(REFRAME_MODES).default("auto_fast"),
     faceTrackingMode: z.enum(["center_crop", "mediapipe"]).default("center_crop"),
     language: z.string().default("id"),
     captionOffsetMs: z.number().int().min(-1500).max(1500).default(0),

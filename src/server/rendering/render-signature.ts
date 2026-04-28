@@ -2,6 +2,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import type { CaptionStyle } from "@/shared/schemas/caption-style";
 import type { Highlight, Transcript } from "@/shared/schemas/session";
+import type { ContentPreset, ReframeMode } from "@/shared/reframe";
 
 export type ClipRenderSignatureInput = {
   sourcePath: string;
@@ -12,6 +13,12 @@ export type ClipRenderSignatureInput = {
   captionModel?: string;
   captionProvider?: string;
   aspectRatio: string;
+  rendererVersion?: string;
+  reframe?: {
+    mode?: ReframeMode;
+    contentPreset?: ContentPreset;
+    faceTrackingMode?: "center_crop" | "mediapipe";
+  };
   hook?: {
     enabled?: boolean;
     text?: string;
@@ -29,6 +36,7 @@ export type ClipRenderMetadata = {
   renderedAt?: string;
   draft?: ClipDraftMetadata;
   cacheHit?: boolean;
+  cropPlan?: unknown;
   error?: unknown;
 };
 
@@ -58,6 +66,7 @@ export function readClipRenderMetadata(renderJson?: string | null): ClipRenderMe
       renderedAt: typeof parsed.renderedAt === "string" ? parsed.renderedAt : undefined,
       draft: isDraftMetadata(parsed.draft) ? parsed.draft : undefined,
       cacheHit: typeof parsed.cacheHit === "boolean" ? parsed.cacheHit : undefined,
+      cropPlan: parsed.cropPlan,
       error: parsed.error
     };
   } catch {
@@ -70,13 +79,15 @@ export function buildClipRenderMetadata(input: {
   versionId?: string;
   draft?: ClipDraftMetadata;
   cacheHit?: boolean;
+  cropPlan?: unknown;
 }) {
   return {
     signature: input.signature,
     versionId: input.versionId,
     renderedAt: new Date().toISOString(),
     draft: input.draft,
-    cacheHit: input.cacheHit
+    cacheHit: input.cacheHit,
+    cropPlan: input.cropPlan
   } satisfies ClipRenderMetadata;
 }
 

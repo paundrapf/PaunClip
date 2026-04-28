@@ -4,8 +4,9 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   burnAssSubtitles,
-  cutAndCropPortraitSegment,
+  cutAndReframePortraitSegment,
   extractAudio,
+  type FastReframeMode,
   generateThumbnail,
   prependHookAudioWithFreeze,
   probeMedia
@@ -15,7 +16,9 @@ import { getFileSizeMb } from "@/server/storage/files";
 import { sessionPath } from "@/server/storage/paths";
 import { transcribeAudioWithOpenAICompatible } from "@/server/transcription/openai-transcriber";
 import { sliceTranscript } from "@/server/transcription/srt";
+import { buildSmartFaceCropPlan } from "@/server/vision/smart-face";
 import { providerSupportsCapability } from "@/shared/constants/ai-providers";
+import { resolveReframeMode, type ResolvedReframeMode } from "@/shared/reframe";
 import type { ClipRenderer, RenderClipInput } from "./types";
 
 export class FfmpegClipRenderer implements ClipRenderer {
@@ -34,13 +37,18 @@ export class FfmpegClipRenderer implements ClipRenderer {
     const masterPath = path.join(clipDir, "master.mp4");
     const thumbnailPath = path.join(clipDir, "thumbnail.jpg");
     const duration = input.highlight.endTime - input.highlight.startTime;
+    const reframePlan = await this.resolveReframePlan(input);
 
-    await cutAndCropPortraitSegment(
+    await cutAndReframePortraitSegment(
       input.sourcePath,
       portraitPath,
       input.highlight.startTime,
       input.highlight.endTime,
-      { jobId: input.jobId }
+      {
+        jobId: input.jobId,
+        mode: reframePlan.mode,
+        cropCenterRatio: reframePlan.cropCenterRatio
+      }
     );
 
     const fallbackTranscript = sliceTranscript(
@@ -119,7 +127,54 @@ export class FfmpegClipRenderer implements ClipRenderer {
       duration: outputDuration,
       fileSizeMb: await getFileSizeMb(masterPath),
       captionBurned,
-      hookAdded
+      hookAdded,
+      cropPlan: reframePlan.cropPlan
+    };
+  }
+
+  private async resolveReframePlan(input: RenderClipInput): Promise<{
+    mode: FastReframeMode;
+    cropCenterRatio?: number;
+    cropPlan: Record<string, unknown>;
+  }> {
+    const resolvedMode = resolveReframeMode({
+      reframeMode: input.reframeMode,
+      contentPreset: input.contentPreset
+    });
+    await input.onLog?.("Applying reframe mode", {
+      requestedMode: input.reframeMode ?? "auto_fast",
+      contentPreset: input.contentPreset ?? "auto",
+      resolvedMode
+    });
+
+    if (resolvedMode !== "smart_face") {
+      return {
+        mode: resolvedMode,
+        cropPlan: buildFixedCropPlan(input, resolvedMode)
+      };
+    }
+
+    const smartPlan = await buildSmartFaceCropPlan({
+      sessionId: input.sessionId,
+      sourcePath: input.sourcePath,
+      startTime: input.highlight.startTime,
+      endTime: input.highlight.endTime,
+      clipId: input.clipId,
+      jobId: input.jobId,
+      onLog: input.onLog
+    });
+
+    if (smartPlan.type === "fallback") {
+      return {
+        mode: "full_frame_blur",
+        cropPlan: smartPlan as unknown as Record<string, unknown>
+      };
+    }
+
+    return {
+      mode: "center_crop",
+      cropCenterRatio: smartPlan.cropCenterRatio,
+      cropPlan: smartPlan as unknown as Record<string, unknown>
     };
   }
 
@@ -218,4 +273,13 @@ export class FfmpegClipRenderer implements ClipRenderer {
       return params.fallbackTranscript;
     }
   }
+}
+
+function buildFixedCropPlan(input: RenderClipInput, resolvedMode: Exclude<ResolvedReframeMode, "smart_face">) {
+  return {
+    type: "fixed",
+    mode: resolvedMode,
+    requestedMode: input.reframeMode ?? "auto_fast",
+    contentPreset: input.contentPreset ?? "auto"
+  };
 }

@@ -12,7 +12,12 @@ import {
 } from "@/shared/constants/ai-providers";
 import { DEFAULT_CAPTION_PRESETS } from "@/shared/constants/caption-presets";
 import { captionPresetSchema } from "@/shared/schemas/caption-style";
-import { aiProviderConfigSchema, appSettingsSchema, aiSettingsSchema } from "@/shared/schemas/settings";
+import {
+  aiProviderConfigSchema,
+  aiSettingsSchema,
+  appPreferencesSchema,
+  appSettingsSchema
+} from "@/shared/schemas/settings";
 import { createTRPCRouter, publicProcedure } from "../trpc";
 
 const taskSchema = z.enum(AI_PROVIDER_TASKS);
@@ -42,6 +47,16 @@ export const settingsRouter = createTRPCRouter({
       await saveSettings({
         ...current,
         aiProviders: input
+      })
+    );
+  }),
+
+  updatePreferences: publicProcedure.input(appPreferencesSchema).mutation(async ({ input }) => {
+    const current = await getSettings();
+    return maskSettings(
+      await saveSettings({
+        ...current,
+        preferences: input
       })
     );
   }),

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import Link from "next/link";
 import {
@@ -15,6 +15,7 @@ import {
   Minus,
   PlayCircle,
   Plus,
+  ScanFace,
   Search,
   Settings2,
   Sparkles,
@@ -33,6 +34,11 @@ import {
 } from "@/shared/campaign/status";
 import type { CampaignBatchConfig, CampaignContentType } from "@/shared/schemas/campaign";
 import { sessionConfigSchema, type SessionConfig } from "@/shared/schemas/session";
+import {
+  CONTENT_PRESET_OPTIONS,
+  REFRAME_MODE_OPTIONS,
+  getReframeModeLabel
+} from "@/shared/reframe";
 
 const DEFAULT_BATCH_CONFIG: CampaignBatchConfig = {
   clipsPerVideo: 3,
@@ -40,6 +46,8 @@ const DEFAULT_BATCH_CONFIG: CampaignBatchConfig = {
   captionStyleId: "karaoke",
   renderMode: "review",
   clipLength: "auto",
+  contentPreset: "auto",
+  reframeMode: "auto_fast",
   language: "id",
   prompt: ""
 };
@@ -81,6 +89,7 @@ export function CampaignWorkspaceScreen({ campaignId }: { campaignId: string }) 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]["value"]>("all");
   const [focusedStep, setFocusedStep] = useState<"find" | "pick" | "prepare" | "progress" | "review">("find");
+  const [preferencesApplied, setPreferencesApplied] = useState(false);
 
   const campaignQuery = trpc.campaign.getById.useQuery(campaignId, {
     refetchInterval: 2000
@@ -111,6 +120,29 @@ export function CampaignWorkspaceScreen({ campaignId }: { campaignId: string }) 
   const allVideosSelected = Boolean(videos.length) && videos.every((video) => selectedVideoIds.includes(video.id));
   const selectedClipTotal = selectedVideoIds.reduce((total, videoId) => total + getVideoClipCount(videoId), 0);
   const captionPresets = settings.data?.captionPresets ?? [];
+
+  useEffect(() => {
+    if (preferencesApplied || !settings.data?.preferences) {
+      return;
+    }
+    const preferences = settings.data.preferences;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) {
+        return;
+      }
+      setBatchConfig((current) => ({
+        ...current,
+        language: preferences.defaultLanguage,
+        contentPreset: preferences.defaultContentPreset,
+        reframeMode: preferences.defaultReframeMode
+      }));
+      setPreferencesApplied(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [preferencesApplied, settings.data?.preferences]);
 
   const visibleVideos = (() => {
     const query = searchQuery.trim().toLowerCase();
@@ -816,6 +848,48 @@ function PrepareBatchModal({
                 </label>
               </div>
 
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="grid gap-2">
+                  <span className="flex items-center gap-2 text-xs font-semibold text-[var(--muted-soft)]">
+                    <ScanFace className="h-4 w-4" aria-hidden="true" />
+                    Content preset
+                  </span>
+                  <select
+                    value={batchConfig.contentPreset}
+                    onChange={(event) =>
+                      onChange({ contentPreset: event.target.value as CampaignBatchConfig["contentPreset"] })
+                    }
+                    className="h-12 rounded-lg border border-[var(--border)] bg-[rgb(9_9_8_/_0.78)] px-4 text-sm text-[var(--text)] outline-none"
+                  >
+                    {CONTENT_PRESET_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="grid gap-2">
+                  <span className="flex items-center gap-2 text-xs font-semibold text-[var(--muted-soft)]">
+                    <ScanFace className="h-4 w-4" aria-hidden="true" />
+                    Reframe
+                  </span>
+                  <select
+                    value={batchConfig.reframeMode}
+                    onChange={(event) =>
+                      onChange({ reframeMode: event.target.value as CampaignBatchConfig["reframeMode"] })
+                    }
+                    className="h-12 rounded-lg border border-[var(--border)] bg-[rgb(9_9_8_/_0.78)] px-4 text-sm text-[var(--text)] outline-none"
+                  >
+                    {REFRAME_MODE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
               <label className="grid gap-2">
                 <span className="flex items-center gap-2 text-xs font-semibold text-[var(--muted-soft)]">
                   <MessageSquareText className="h-4 w-4" aria-hidden="true" />
@@ -837,6 +911,7 @@ function PrepareBatchModal({
             <SummaryRow label="Maximum clips" value={selectedClipTotal} />
             <SummaryRow label="Hook" value={batchConfig.autoHook ? "Enabled" : "Disabled"} />
             <SummaryRow label="Mode" value={batchConfig.renderMode === "review" ? "Review" : "Auto render"} />
+            <SummaryRow label="Reframe" value={getReframeModeLabel(batchConfig.reframeMode)} />
             <SummaryRow label="Language" value={batchConfig.language.toUpperCase()} />
             <Button type="button" variant="primary" className="mt-3 w-full" onClick={onConfirm} disabled={startPending}>
               {startPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}

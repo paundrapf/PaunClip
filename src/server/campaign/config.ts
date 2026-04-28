@@ -21,6 +21,8 @@ export function buildCampaignSessionConfig(input: {
     captionStyleId: batchConfig.captionStyleId,
     renderMode: batchConfig.renderMode,
     clipLength: batchConfig.clipLength,
+    contentPreset: batchConfig.contentPreset,
+    reframeMode: batchConfig.reframeMode,
     language: batchConfig.language,
     prompt: batchConfig.prompt,
     targetClipCount: input.targetClipCount ?? batchConfig.clipsPerVideo,

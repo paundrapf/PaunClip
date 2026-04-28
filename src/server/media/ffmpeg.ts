@@ -8,6 +8,12 @@ type MediaProcessOptions = {
   onLine?: (event: ProcessLine) => void;
 };
 
+export type FastReframeMode =
+  | "center_crop"
+  | "left_subject"
+  | "right_subject"
+  | "full_frame_blur";
+
 export type MediaProbe = {
   durationSeconds: number;
   width?: number;
@@ -126,7 +132,7 @@ export async function centerCropPortrait(
     "-i",
     inputPath,
     "-vf",
-    "crop=min(iw\\,ih*9/16):min(ih\\,iw*16/9):(iw-ow)/2:(ih-oh)/2,scale=1080:1920",
+    buildPortraitCropFilter({ mode: "center_crop" }),
     "-c:v",
     "libx264",
     "-crf",
@@ -148,9 +154,26 @@ export async function cutAndCropPortraitSegment(
   end: number,
   options: MediaProcessOptions = {}
 ) {
+  await cutAndReframePortraitSegment(inputPath, outputPath, start, end, {
+    ...options,
+    mode: "center_crop"
+  });
+}
+
+export async function cutAndReframePortraitSegment(
+  inputPath: string,
+  outputPath: string,
+  start: number,
+  end: number,
+  options: MediaProcessOptions & {
+    mode: FastReframeMode;
+    cropCenterRatio?: number;
+  }
+) {
   const seekStart = Math.max(0, start - 5);
   const innerSeek = Math.max(0, start - seekStart);
-  await runProcess(getFfmpegCommand(), [
+  const duration = String(Math.max(0.1, end - start));
+  const args = [
     "-y",
     "-ss",
     String(seekStart),
@@ -159,13 +182,33 @@ export async function cutAndCropPortraitSegment(
     "-ss",
     String(innerSeek),
     "-t",
-    String(Math.max(0.1, end - start)),
-    "-map",
-    "0:v:0",
-    "-map",
-    "0:a?",
-    "-vf",
-    "crop=min(iw\\,ih*9/16):min(ih\\,iw*16/9):(iw-ow)/2:(ih-oh)/2,scale=1080:1920",
+    duration
+  ];
+
+  if (options.mode === "full_frame_blur") {
+    args.push(
+      "-filter_complex",
+      buildFullFrameBlurFilter(),
+      "-map",
+      "[v]",
+      "-map",
+      "0:a?"
+    );
+  } else {
+    args.push(
+      "-map",
+      "0:v:0",
+      "-map",
+      "0:a?",
+      "-vf",
+      buildPortraitCropFilter({
+        mode: options.mode,
+        cropCenterRatio: options.cropCenterRatio
+      })
+    );
+  }
+
+  args.push(
     "-c:v",
     "libx264",
     "-crf",
@@ -181,7 +224,28 @@ export async function cutAndCropPortraitSegment(
     "-avoid_negative_ts",
     "make_zero",
     outputPath
-  ], { jobId: options.jobId, onLine: options.onLine });
+  );
+
+  await runProcess(getFfmpegCommand(), args, { jobId: options.jobId, onLine: options.onLine });
+}
+
+export function buildPortraitCropFilter(input: {
+  mode: Exclude<FastReframeMode, "full_frame_blur">;
+  cropCenterRatio?: number;
+}) {
+  const cropWidth = "min(iw\\,ih*9/16)";
+  const cropHeight = "min(ih\\,iw*16/9)";
+  const x = buildCropXExpression(input.mode, input.cropCenterRatio);
+  return `crop=${cropWidth}:${cropHeight}:${x}:(ih-oh)/2,scale=1080:1920,format=yuv420p`;
+}
+
+export function buildFullFrameBlurFilter() {
+  return [
+    "[0:v]split=2[bgsrc][fgsrc]",
+    "[bgsrc]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:2[bg]",
+    "[fgsrc]scale=1080:1920:force_original_aspect_ratio=decrease[fg]",
+    "[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]"
+  ].join(";");
 }
 
 export async function burnAssSubtitles(
@@ -360,6 +424,26 @@ function parseFps(value?: string) {
 
 function formatFfmpegSeconds(value: number) {
   return Math.max(0, value).toFixed(3);
+}
+
+function buildCropXExpression(
+  mode: Exclude<FastReframeMode, "full_frame_blur">,
+  cropCenterRatio?: number
+) {
+  if (typeof cropCenterRatio === "number" && Number.isFinite(cropCenterRatio)) {
+    const ratio = Math.min(0.92, Math.max(0.08, cropCenterRatio));
+    return `min(max(iw*${ratio.toFixed(4)}-ow/2\\,0)\\,iw-ow)`;
+  }
+
+  switch (mode) {
+    case "left_subject":
+      return "0";
+    case "right_subject":
+      return "iw-ow";
+    case "center_crop":
+    default:
+      return "(iw-ow)/2";
+  }
 }
 
 async function probeMediaWithFfmpeg(inputPath: string): Promise<MediaProbe> {
