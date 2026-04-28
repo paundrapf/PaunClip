@@ -36,6 +36,16 @@ type ClipEditorDraft = {
   captionStyleId: string;
 };
 
+type EventWithData = {
+  dataJson?: string | null;
+};
+
+type DownloadProgressSnapshot = {
+  percent: number;
+  speed?: string;
+  eta?: string;
+};
+
 export function ResultsScreen({ sessionId }: { sessionId: string }) {
   const [search, setSearch] = useState("");
   const [highScoreOnly, setHighScoreOnly] = useState(false);
@@ -240,6 +250,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
   const latestSignalEvent =
     latestErrorEvent ??
     latestJob?.events.find((event) => ["progress", "log", "status"].includes(event.type));
+  const latestDownload = extractLatestDownloadProgress(latestJob?.events);
   const isFailed =
     session.data?.status === "failed" ||
     session.data?.status === "partially_failed" ||
@@ -248,13 +259,23 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
   const isReadyToRender =
     session.data?.status === "ready" || session.data?.stage === "ready_to_render";
   const isRunning = latestJob?.status === "running" || latestJob?.status === "queued";
+  const isHighlightFinderFailure = session.data?.stage === "find_highlights_failed";
   const statusMessage = isReadyToRender
     ? "Highlights are ready for review"
-    : latestSignalEvent?.message ?? session.data?.stage ?? "Waiting for job";
+    : isHighlightFinderFailure
+      ? latestErrorEvent?.message ?? "Highlight Finder failed. Check the provider, model, or prompt before retrying."
+      : latestDownload && !latestErrorEvent
+        ? `Downloading source video: ${formatPercent(latestDownload.percent)}`
+        : latestSignalEvent?.message ?? session.data?.stage ?? "Waiting for job";
   const progress =
     latestJob?.progress ??
     (session.data?.status === "completed" || isReadyToRender ? 100 : session.isLoading ? 0 : 0);
-  const etaLabel = progress > 0 && progress < 100 ? estimateEta(progress) : "ready";
+  const etaLabel =
+    latestDownload && !latestErrorEvent
+      ? formatDownloadEta(latestDownload)
+      : progress > 0 && progress < 100
+        ? estimateEta(progress)
+        : "ready";
   const selectedHighlightCount = selectedHighlightIds.length;
   const allVisibleHighlightsSelected =
     highlights.length > 0 &&
@@ -376,7 +397,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
             <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
             {allVisibleHighlightsSelected ? "Clear" : "Select all"}
           </Button>
-          {highlights.length > 0 ? (
+          {highlights.length > 0 && !isRunning ? (
             <Button
               variant="primary"
               size="sm"
@@ -462,7 +483,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                   onClick={() => retrySession.mutate(sessionId)}
                 >
                   {retrySession.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  Retry
+                  {isHighlightFinderFailure ? "Retry highlight analysis" : "Retry"}
                 </Button>
               ) : null}
               {isRunning && latestJob ? (
@@ -476,7 +497,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                   Cancel
                 </Button>
               ) : null}
-              {isReadyToRender ? (
+              {isReadyToRender && !isRunning ? (
                 <Button
                   variant="primary"
                   size="sm"
@@ -494,7 +515,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                     ? "cancelled"
                     : isFailed
                       ? "failed"
-                      : `${progress}%`}
+                      : `${progress}% overall`}
               </Badge>
             </div>
           </div>
@@ -541,19 +562,21 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
               >
                 Clear
               </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                disabled={!canRenderSelected || renderSelected.isPending}
-                onClick={renderSelectedHighlights}
-              >
-                {renderSelected.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                ) : (
-                  <Clapperboard className="h-4 w-4" aria-hidden="true" />
-                )}
-                Render selected
-              </Button>
+              {!isRunning ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={!canRenderSelected || renderSelected.isPending}
+                  onClick={renderSelectedHighlights}
+                >
+                  {renderSelected.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Clapperboard className="h-4 w-4" aria-hidden="true" />
+                  )}
+                  Render selected
+                </Button>
+              ) : null}
             </div>
           </div>
           {selectionError ? (
@@ -618,7 +641,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
           <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-4">
             <div className="min-w-0">
               <h2 className="text-lg font-semibold text-[var(--text)]">Processing logs</h2>
-              <p className="mt-1 text-sm text-[var(--muted)]">{latestJob.status} - {progress}%</p>
+              <p className="mt-1 text-sm text-[var(--muted)]">{latestJob.status} - {progress}% overall</p>
             </div>
             <Badge>{latestJob.events.length} events</Badge>
           </div>
@@ -962,6 +985,58 @@ function formatEventData(dataJson?: string | null) {
   } catch {
     return dataJson;
   }
+}
+
+function extractLatestDownloadProgress(
+  events?: EventWithData[]
+): DownloadProgressSnapshot | null {
+  for (const event of events ?? []) {
+    const data = parseEventData(event.dataJson);
+    const download = data?.download;
+    if (!isRecord(download) || typeof download.percent !== "number") {
+      continue;
+    }
+
+    return {
+      percent: download.percent,
+      speed: typeof download.speed === "string" ? download.speed : undefined,
+      eta: typeof download.eta === "string" ? download.eta : undefined
+    };
+  }
+
+  return null;
+}
+
+function parseEventData(dataJson?: string | null) {
+  if (!dataJson) {
+    return null;
+  }
+
+  try {
+    const data = JSON.parse(dataJson) as unknown;
+    return isRecord(data) ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function formatPercent(value: number) {
+  return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}%`;
+}
+
+function formatDownloadEta(download: DownloadProgressSnapshot) {
+  const parts = [];
+  if (download.eta) {
+    parts.push(`download ETA ${download.eta}`);
+  }
+  if (download.speed) {
+    parts.push(download.speed);
+  }
+  return parts.length > 0 ? parts.join(" at ") : "download in progress";
 }
 
 function eventTone(type: string) {

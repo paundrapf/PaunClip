@@ -281,22 +281,41 @@ async function analyzeHighlights(sessionId: string, context: JobContext) {
   const session = await getSessionOrThrow(sessionId);
   const settings = await getSettings();
   const router = new AIProviderRouter(settings.aiProviders);
+  const highlightConfig = settings.aiProviders.highlightFinder;
   const config = parseJsonWithSchema(sessionConfigSchema, session.configJson, defaultConfig());
   const language = config.language ?? "id";
   const transcript = parseJsonWithSchema(transcriptSchema, session.transcriptJson, {
     language,
     segments: []
   });
-  const highlights = await withRetry(
-    () =>
-      findHighlights({
-        router,
-        transcript,
-        prompt: config.prompt,
-        targetCount: 8
-      }),
-    retryOptions(context, "find_highlights", 2)
-  );
+  let highlights: Highlight[];
+  try {
+    highlights = await withRetry(
+      () =>
+        findHighlights({
+          router,
+          transcript,
+          prompt: config.prompt,
+          targetCount: 8
+        }),
+      retryOptions(context, "find_highlights", 2)
+    );
+  } catch (error) {
+    await db.highlight.deleteMany({ where: { sessionId } });
+    await db.session.update({
+      where: { id: sessionId },
+      data: {
+        status: "failed",
+        stage: "find_highlights_failed"
+      }
+    });
+    await context.log("Highlight Finder failed", {
+      provider: highlightConfig.provider,
+      model: highlightConfig.model,
+      error: serializeError(error)
+    });
+    throw error;
+  }
   await context.log("Highlight analysis completed", { count: highlights.length });
 
   await db.highlight.deleteMany({ where: { sessionId } });

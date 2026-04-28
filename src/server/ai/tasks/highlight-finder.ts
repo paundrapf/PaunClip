@@ -8,6 +8,27 @@ import { improveHighlights } from "./highlight-quality";
 
 const highlightArraySchema = highlightSchema.array();
 
+export type HighlightFinderFailureReason =
+  | "missing_api_key"
+  | "provider_error"
+  | "prompt_too_large"
+  | "invalid_json"
+  | "empty_result";
+
+export class HighlightFinderError extends Error {
+  constructor(
+    message: string,
+    public readonly reason: HighlightFinderFailureReason,
+    public readonly provider: AIProviderConfig["provider"],
+    public readonly model: string,
+    public readonly causeMessage?: string,
+    public readonly responsePreview?: string
+  ) {
+    super(message);
+    this.name = "HighlightFinderError";
+  }
+}
+
 type AIClient = OpenAI | Anthropic;
 
 type Chunk = {
@@ -25,8 +46,13 @@ export async function findHighlights(params: {
   const config = params.router.getConfig("highlightFinder");
   const client = params.router.getClient("highlightFinder");
 
-  if (!config.apiKey) {
-    return improveHighlights(fallbackHighlights(params.transcript, targetCount), params.transcript, targetCount);
+  if (!config.apiKey && config.provider !== "custom") {
+    throw new HighlightFinderError(
+      "Highlight Finder API key is missing.",
+      "missing_api_key",
+      config.provider,
+      config.model
+    );
   }
 
   try {
@@ -38,11 +64,35 @@ export async function findHighlights(params: {
       targetCount
     });
     if (highlights.length === 0) {
-      return improveHighlights(fallbackHighlights(params.transcript, targetCount), params.transcript, targetCount);
+      throw new HighlightFinderError(
+        "No usable highlights returned by Highlight Finder.",
+        "empty_result",
+        config.provider,
+        config.model
+      );
     }
-    return improveHighlights(highlights, params.transcript, targetCount);
-  } catch {
-    return improveHighlights(fallbackHighlights(params.transcript, targetCount), params.transcript, targetCount);
+    const improved = improveHighlights(highlights, params.transcript, targetCount);
+    if (improved.length === 0) {
+      throw new HighlightFinderError(
+        "Highlight Finder returned highlights, but none survived quality checks.",
+        "empty_result",
+        config.provider,
+        config.model
+      );
+    }
+    return improved;
+  } catch (error) {
+    if (error instanceof HighlightFinderError) {
+      throw error;
+    }
+
+    throw new HighlightFinderError(
+      "Highlight Finder failed.",
+      classifyHighlightFinderError(error),
+      config.provider,
+      config.model,
+      error instanceof Error ? error.message : String(error)
+    );
   }
 }
 
@@ -64,7 +114,7 @@ async function findHighlightsWithAI(params: {
         "final"
       );
       const raw = await callAI(params.client, params.config.model, prompt);
-      return parseHighlights(raw, params.transcript, params.targetCount, false);
+      return parseHighlights(raw, params.transcript, params.targetCount, false, params.config);
     } catch (error) {
       if (!isPromptTooLargeError(error)) {
         throw error;
@@ -88,6 +138,7 @@ async function findHighlightsByChunks(params: {
 }) {
   const chunks = splitTranscriptIntoChunks(params.transcript, params.chunkBudget);
   const candidates: Highlight[] = [];
+  let firstError: unknown;
   const perChunkTarget = Math.max(3, Math.ceil((params.targetCount * 1.5) / Math.max(1, chunks.length)));
 
   for (const chunk of chunks) {
@@ -99,7 +150,7 @@ async function findHighlightsByChunks(params: {
         "chunk"
       );
       const raw = await callAI(params.client, params.config.model, prompt);
-      candidates.push(...parseHighlights(raw, chunk.transcript, perChunkTarget, false));
+      candidates.push(...parseHighlights(raw, chunk.transcript, perChunkTarget, false, params.config));
     } catch (error) {
       if (isPromptTooLargeError(error) && chunk.tokenEstimate > 1800) {
         const smallerChunks = splitTranscriptIntoChunks(chunk.transcript, Math.floor(chunk.tokenEstimate / 2));
@@ -112,17 +163,28 @@ async function findHighlightsByChunks(params: {
               "chunk"
             );
             const raw = await callAI(params.client, params.config.model, prompt);
-            candidates.push(...parseHighlights(raw, smallerChunk.transcript, perChunkTarget, false));
-          } catch {
-            // Skip a noisy chunk instead of failing the whole session.
+            candidates.push(...parseHighlights(raw, smallerChunk.transcript, perChunkTarget, false, params.config));
+          } catch (nestedError) {
+            firstError ??= nestedError;
           }
         }
+      } else {
+        firstError ??= error;
       }
     }
   }
 
   if (candidates.length === 0) {
-    return fallbackHighlights(params.transcript, params.targetCount);
+    if (firstError) {
+      throw firstError;
+    }
+
+    throw new HighlightFinderError(
+      "No usable highlights returned by Highlight Finder.",
+      "empty_result",
+      params.config.provider,
+      params.config.model
+    );
   }
 
   return candidates;
@@ -212,7 +274,8 @@ function parseHighlights(
   raw: string,
   transcript: Transcript,
   targetCount: number,
-  fallbackOnError: boolean
+  fallbackOnError: boolean,
+  config: AIProviderConfig
 ) {
   try {
     const parsed = JSON.parse(extractJson(raw));
@@ -231,12 +294,26 @@ function parseHighlights(
       hookText: item.hookText ? String(item.hookText) : item.hook_text ? String(item.hook_text) : undefined
     }));
     return highlightArraySchema.parse(normalized);
-  } catch {
-    return fallbackOnError ? fallbackHighlights(transcript, targetCount) : [];
+  } catch (error) {
+    if (fallbackOnError) {
+      return buildEqualIntervalFallbackHighlights(transcript, targetCount);
+    }
+
+    throw new HighlightFinderError(
+      "Highlight Finder returned invalid JSON.",
+      "invalid_json",
+      config.provider,
+      config.model,
+      error instanceof Error ? error.message : String(error),
+      raw.slice(0, 500)
+    );
   }
 }
 
-function fallbackHighlights(transcript: Transcript, targetCount: number): Highlight[] {
+export function buildEqualIntervalFallbackHighlights(
+  transcript: Transcript,
+  targetCount: number
+): Highlight[] {
   const duration = transcript.segments.at(-1)?.end ?? 0;
   if (!duration) {
     return [];
@@ -320,6 +397,10 @@ function isPromptTooLargeError(error: unknown) {
   return /request too large|tokens per minute|context_length|maximum context|413|too many tokens/i.test(
     message
   );
+}
+
+function classifyHighlightFinderError(error: unknown): HighlightFinderFailureReason {
+  return isPromptTooLargeError(error) ? "prompt_too_large" : "provider_error";
 }
 
 function isResponseFormatError(error: unknown) {

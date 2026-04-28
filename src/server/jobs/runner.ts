@@ -169,11 +169,15 @@ export async function runJob(jobId: string, input: CreateJobInput) {
 
     await failJob(jobId, error);
     if (input.sessionId) {
+      const session = await db.session.findUnique({
+        where: { id: input.sessionId },
+        select: { stage: true }
+      });
       await db.session.update({
         where: { id: input.sessionId },
         data: {
           status: "failed",
-          stage: "failed"
+          stage: session?.stage?.endsWith("_failed") ? session.stage : "failed"
         }
       });
       await updateCampaignVideoStatus(input.sessionId, "failed");
