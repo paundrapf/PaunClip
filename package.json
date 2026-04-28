@@ -2,11 +2,15 @@
   "name": "paunclip",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "desktop:dev": "concurrently -k \"npm run dev\" \"wait-on http://127.0.0.1:3000 && electron .\"",
+    "desktop:build": "npm run build && node scripts/prepare-standalone.cjs",
+    "desktop:pack": "npm run desktop:build && electron-builder --win --x64",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "db:generate": "prisma generate",
@@ -42,6 +46,9 @@
     "@types/node": "^22.14.1",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
+    "concurrently": "^9.2.1",
+    "electron": "^41.3.0",
+    "electron-builder": "^26.8.1",
     "eslint": "^9.25.1",
     "eslint-config-next": "^16.2.2",
     "postcss": "^8.5.3",
@@ -49,9 +56,32 @@
     "tailwindcss": "^4.1.4",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
-    "vitest": "^3.1.2"
+    "vitest": "^3.1.2",
+    "wait-on": "^9.0.5"
   },
   "engines": {
     "node": ">=22.0.0"
+  },
+  "build": {
+    "appId": "com.paunclip.desktop",
+    "productName": "PaunClip",
+    "asar": false,
+    "directories": {
+      "output": "dist/desktop"
+    },
+    "files": [
+      "electron/**",
+      ".next/standalone/**",
+      ".next/static/**",
+      "public/**",
+      "prisma/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    }
   }
 }
