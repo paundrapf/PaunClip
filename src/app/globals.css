@@ -39,8 +39,8 @@ body {
   background:
     linear-gradient(135deg, #0b0b0a 0%, #100f0d 52%, #0d1112 100%);
   font-family:
-    var(--font-geist-sans),
-    Geist,
+    Inter,
+    "Segoe UI",
     ui-sans-serif,
     system-ui,
     -apple-system,
@@ -76,8 +76,8 @@ pre,
 kbd,
 samp {
   font-family:
-    var(--font-geist-mono),
-    "Geist Mono",
+    "Cascadia Mono",
+    "SFMono-Regular",
     ui-monospace,
     SFMono-Regular,
     Menlo,

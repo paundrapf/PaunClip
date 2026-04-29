@@ -1,6 +1,6 @@
 # PaunClip Agent Operating Manual
 
-Last updated: 2026-04-29 02:20:51 +07:00.
+Last updated: 2026-04-29 08:24:40 +07:00.
 
 This file tells future AI agents how to work safely in PaunClip. Read `CONTEXT.md` first for the full memory ledger, then use this file as the day-to-day operating guide.
 
@@ -207,6 +207,10 @@ Desktop:
 - Use `npm run desktop:dev` for Electron dev smoke after normal web checks.
 - Desktop build uses Next standalone; run `npm run desktop:build` before `desktop:pack`.
 - Packaged DB/storage/output must live under Electron `userData`, never install directories such as `Program Files`.
+- Desktop packaging must not copy root `storage/`, `.env*`, or root `node_modules/`; check `scripts/prepare-standalone.cjs` and `package.json` build `files` patterns if pack becomes huge.
+- Avoid `next/font/google` in this app unless the build flow is changed to vendor fonts locally; desktop builds should work offline with the system font stack.
+- Local Windows packs are unsigned for now via `win.signAndEditExecutable: false`; do not turn signing back on without testing normal non-admin Windows shells.
+- `npm run desktop:pack` is expected to produce ignored artifacts under `dist/desktop`; do not commit them.
 - Do not commit desktop build output under `dist/desktop`.
 
 ## Handoff Checklist For Next Agent

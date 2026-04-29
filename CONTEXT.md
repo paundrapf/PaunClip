@@ -1,6 +1,6 @@
 # PaunClip Project Context
 
-Last updated: 2026-04-29 02:20:51 +07:00, Asia/Bangkok.
+Last updated: 2026-04-29 08:24:40 +07:00, Asia/Bangkok.
 
 This file is a memory ledger for PaunClip across multiple Codex context compactions. It is intentionally practical: future agents should be able to re-enter the project, understand the product direction, understand what has already been changed, and avoid repeating old mistakes.
 
@@ -880,7 +880,10 @@ As of this context file:
   - Next standalone output is enabled.
   - Electron main process can run a packaged local server on `127.0.0.1` with per-user storage/database/output env vars.
   - Desktop scripts exist for dev/build/pack.
-  - Packaging still needs real-world `.exe` smoke testing and installer-icon hardening.
+  - Desktop packaging must exclude runtime `storage/`, `.env*`, and root `node_modules/`; `scripts/prepare-standalone.cjs` removes accidental standalone storage/secrets before pack.
+  - Desktop/web builds should not depend on remote Google Fonts fetches; app typography now uses a system font stack so offline desktop builds are reliable.
+  - Local Windows packaging currently disables `signAndEditExecutable` to avoid `winCodeSign` symlink privilege failures on normal Windows shells; release signing/icon metadata should be handled as a later packaging pass.
+  - `npm run desktop:pack` now succeeds and emits Windows installer/portable artifacts under ignored `dist/desktop`; packaged `.exe` runtime smoke testing and installer-icon hardening are still pending.
 - `next-env.d.ts` was dirty before creating this file; do not revert it casually.
 - `docs/` is gitignored, so docs under `docs/updates` exist locally but may not be tracked.
 - `assets/` is gitignored; public brand copies are used by app.

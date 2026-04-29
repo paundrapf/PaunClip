@@ -66,6 +66,7 @@
     "appId": "com.paunclip.desktop",
     "productName": "PaunClip",
     "asar": false,
+    "npmRebuild": false,
     "directories": {
       "output": "dist/desktop"
     },
@@ -75,9 +76,18 @@
       ".next/static/**",
       "public/**",
       "prisma/**",
-      "package.json"
+      "package.json",
+      "!node_modules/**",
+      "!storage/**",
+      "!.env",
+      "!.env.*",
+      "!.next/standalone/storage/**",
+      "!.next/standalone/.env",
+      "!.next/standalone/.env.*",
+      "!.next/standalone/**/*.map"
     ],
     "win": {
+      "signAndEditExecutable": false,
       "target": [
         "nsis",
         "portable"
