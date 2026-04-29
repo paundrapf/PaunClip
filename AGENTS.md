@@ -207,14 +207,31 @@ Desktop:
 - Use `npm run desktop:dev` for Electron dev smoke after normal web checks.
 - Desktop build uses Next standalone; run `npm run desktop:build` before `desktop:pack`.
 - Packaged DB/storage/output must live under Electron `userData`, never install directories such as `Program Files`.
+- User output paths must go through `resolveOutputDirectory()`; never derive user output from `process.cwd()` in desktop runtime.
 - Desktop packaging must not copy root `storage/`, `.env*`, or root `node_modules/`; check `scripts/prepare-standalone.cjs` and `package.json` build `files` patterns if pack becomes huge.
+- If Next tracing accidentally copies `.env`, `storage`, `src`, `tests`, docs, or raw workspace artifacts into `.next/standalone`, treat it as a packaging regression and update `prepare-standalone.cjs`/tracing excludes.
 - Avoid `next/font/google` in this app unless the build flow is changed to vendor fonts locally; desktop builds should work offline with the system font stack.
 - Local Windows packs are unsigned for now via `win.signAndEditExecutable: false`; do not turn signing back on without testing normal non-admin Windows shells.
 - `npm run desktop:pack` is expected to produce ignored artifacts under `dist/desktop`; do not commit them.
 - ESLint intentionally ignores `dist/**` because desktop package output contains generated Next/server files.
 - Electron main must resolve packaged Prisma with `createRequire(serverEntry)` from `.next/standalone/server.js`; do not use a bare `require("@prisma/client")` in desktop bootstrap.
+- Electron DB bootstrap must apply migrations through `_paunclip_migrations`; do not reintroduce "skip if DB file exists".
+- Packaged media tools should resolve from env/bundled package resources before PATH. Do not require a fresh user to install Node, Python, FFmpeg, FFprobe, or yt-dlp separately for normal Windows desktop usage.
+- Electron logs belong under userData `logs`, and server stdout/stderr should be persisted there.
 - Run `npm run desktop:smoke` after `desktop:pack` when changing Electron or package files.
 - Do not commit desktop build output under `dist/desktop`.
+
+## Production Gates
+
+- All clipping entrypoints must pass shared preflight before creating or queuing jobs:
+  - `session.create`
+  - `session.retry`
+  - `session.renderSelected`
+  - `campaign.startBatch`
+- Dashboard, Workflow, and Campaign UI should show the preflight checklist and disable start actions when blockers exist.
+- Upload routes must enforce size limits, clean partial files on failure, and probe uploaded media before accepting it.
+- API keys/cookies are still file-backed for now, but writes must be atomic/private and UI must not reveal raw keys.
+- In desktop mode, `/api/*` must remain guarded by the local token proxy. Dev mode can stay flexible.
 
 ## Handoff Checklist For Next Agent
 

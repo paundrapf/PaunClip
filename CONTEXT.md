@@ -910,6 +910,51 @@ Recent successful checks after latest feature/fix work:
 Known recurring warning:
 
 - Node deprecation warning for `punycode`. It appears during dev/build/test but has not been treated as blocking.
+- Next/Turbopack may warn that the project was broadly traced because runtime path helpers resolve local storage paths. `next.config.ts` excludes `storage`, `docs`, `assets`, `dist`, and `vendor/bin` from file tracing, and `scripts/prepare-standalone.cjs` strips accidental traced source/docs/config files from `.next/standalone` before packaging. Treat accidental packaged `.env`, `storage`, `src`, or `tests` as a production-blocking packaging regression.
+
+## Changelog 2026-04-29 Production Readiness Batch
+
+Implemented the first production hardening sweep for the 10 review findings:
+
+- Output path policy:
+  - Runtime output paths are resolved through `src/server/runtime/paths.ts`.
+  - Legacy `./storage/output` settings are normalized to a stable absolute runtime output directory.
+  - Desktop output/log/database paths are surfaced in Settings Output.
+  - Do not resolve user output from `process.cwd()` in packaged app code.
+- Transcript fallback policy:
+  - Dummy fallback transcripts now carry `source: "fallback"` and `quality: "fallback"`.
+  - Normal pipeline transcription now fails with actionable setup errors instead of generating fake highlight clips from placeholder transcript text.
+  - Highlight/render paths reject fallback transcripts before analysis/render.
+- Preflight gate:
+  - Added `src/server/system/preflight.ts`.
+  - `session.create`, `session.retry`, `session.renderSelected`, and `campaign.startBatch` all run the shared preflight gate.
+  - Dashboard, Workflow, and Campaign workspace show a `Ready to clip` checklist and disable start actions when blockers exist.
+- Desktop tools:
+  - Added `ffprobe-static`.
+  - Added `scripts/download-ytdlp.cjs`; `desktop:build` downloads yt-dlp into ignored `vendor/bin/<platform>/<arch>`.
+  - Electron sets `FFMPEG_PATH`, `FFPROBE_PATH`, and `YTDLP_PATH` for packaged runtime.
+  - `tool-resolver.ts` now resolves FFprobe from package before PATH fallback.
+- Desktop database:
+  - Electron bootstrap now keeps `_paunclip_migrations` and applies only missing migrations.
+  - Existing v0.1 databases with `Session` table mark initial migration as applied instead of skipping future migrations forever.
+- Local API guard:
+  - Added `src/proxy.ts` for desktop-only local token guard.
+  - Electron generates `PAUNCLIP_LOCAL_TOKEN`.
+  - Desktop app page sets an HttpOnly local cookie, and `/api/*` requires the cookie or header. Dev mode remains open.
+- Upload hardening:
+  - Upload route has max byte limit from `MAX_UPLOAD_BYTES` (default 2GB).
+  - Upload stream counts bytes, cleans partial files on failure, and probes media with FFprobe before accepting the upload.
+- Secrets baseline:
+  - Settings JSON and YouTube cookies use atomic private-file writes with best-effort `0600` permissions.
+  - UI now warns users that API keys/cookies are local secrets.
+  - OS vault/keytar/electron `safeStorage` remains deferred.
+- Logs:
+  - Electron writes `electron.log` and server stdout/stderr to userData `logs`.
+  - Settings Output has `Open logs folder`.
+  - Packaged server startup errors should point users to logs instead of only showing a generic dialog.
+- Packaging:
+  - `scripts/prepare-standalone.cjs` removes accidental traced `storage`, `.env*`, `src`, `tests`, docs, assets, scripts, and config files from standalone output.
+  - `scripts/smoke-desktop-package.cjs` now validates packaged FFmpeg, FFprobe, yt-dlp, Prisma client, and query engine.
 
 ## Current User-Facing Recommendations
 
