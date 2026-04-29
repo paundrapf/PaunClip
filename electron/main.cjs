@@ -3,6 +3,7 @@ const { app, BrowserWindow, dialog } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
+const { createRequire } = require("node:module");
 const net = require("node:net");
 const path = require("node:path");
 
@@ -60,6 +61,10 @@ async function startPackagedServer() {
   const port = await findFreePort();
   const serverEntry = path.join(appRoot, ".next", "standalone", "server.js");
 
+  if (!fs.existsSync(serverEntry)) {
+    throw new Error(`Packaged Next server entry was not found at ${serverEntry}`);
+  }
+
   fs.mkdirSync(storageRoot, { recursive: true });
   fs.mkdirSync(outputDir, { recursive: true });
 
@@ -75,7 +80,7 @@ async function startPackagedServer() {
     DATABASE_URL: `file:${dbPath.replace(/\\/g, "/")}`
   };
 
-  await ensureDesktopDatabase(appRoot, dbPath, desktopEnv.DATABASE_URL);
+  await ensureDesktopDatabase(appRoot, dbPath, desktopEnv.DATABASE_URL, serverEntry);
 
   serverProcess = spawn(process.execPath, [serverEntry], {
     cwd: appRoot,
@@ -98,7 +103,7 @@ async function startPackagedServer() {
   return url;
 }
 
-async function ensureDesktopDatabase(appRoot, dbPath, databaseUrl) {
+async function ensureDesktopDatabase(appRoot, dbPath, databaseUrl, serverEntry) {
   if (fs.existsSync(dbPath) && fs.statSync(dbPath).size > 0) {
     return;
   }
@@ -111,7 +116,8 @@ async function ensureDesktopDatabase(appRoot, dbPath, databaseUrl) {
     .filter((file) => fs.existsSync(file));
 
   process.env.DATABASE_URL = databaseUrl;
-  const { PrismaClient } = require("@prisma/client");
+  const standaloneRequire = createRequire(serverEntry);
+  const { PrismaClient } = standaloneRequire("@prisma/client");
   const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
 
   try {

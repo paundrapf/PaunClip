@@ -1,6 +1,6 @@
 # PaunClip Project Context
 
-Last updated: 2026-04-29 08:24:40 +07:00, Asia/Bangkok.
+Last updated: 2026-04-29 09:49:34 +07:00, Asia/Bangkok.
 
 This file is a memory ledger for PaunClip across multiple Codex context compactions. It is intentionally practical: future agents should be able to re-enter the project, understand the product direction, understand what has already been changed, and avoid repeating old mistakes.
 
@@ -884,6 +884,12 @@ As of this context file:
   - Desktop/web builds should not depend on remote Google Fonts fetches; app typography now uses a system font stack so offline desktop builds are reliable.
   - Local Windows packaging currently disables `signAndEditExecutable` to avoid `winCodeSign` symlink privilege failures on normal Windows shells; release signing/icon metadata should be handled as a later packaging pass.
   - `npm run desktop:pack` now succeeds and emits Windows installer/portable artifacts under ignored `dist/desktop`; packaged `.exe` runtime smoke testing and installer-icon hardening are still pending.
+  - ESLint ignores ignored package output under `dist/**`; otherwise generated desktop files can break `npm run lint` after a package build.
+  - Electron main process must resolve `@prisma/client` through `createRequire(serverEntry)` from `.next/standalone/server.js`; a bare `require("@prisma/client")` from `electron/main.cjs` fails after install because root `resources/app/node_modules` is intentionally excluded.
+  - `npm run desktop:smoke` verifies packaged standalone server, Prisma client resolution, generated Prisma client, and Windows query engine presence.
+- Git identity:
+  - Repo-local future commit author is `paundrapf <paundrapf@users.noreply.github.com>`.
+  - Older Codex-authored commits are intentionally not rewritten so rollback hashes remain stable.
 - `next-env.d.ts` was dirty before creating this file; do not revert it casually.
 - `docs/` is gitignored, so docs under `docs/updates` exist locally but may not be tracked.
 - `assets/` is gitignored; public brand copies are used by app.
@@ -898,6 +904,8 @@ Recent successful checks after latest feature/fix work:
 - `npm run lint`
 - `npm test`
 - `npm run build`
+- `npm run desktop:pack`
+- `npm run desktop:smoke`
 
 Known recurring warning:
 
