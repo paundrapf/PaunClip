@@ -75,11 +75,12 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
+  const [config, setConfig] = useState(defaultConfig);
   const sessions = trpc.session.list.useQuery(undefined, { refetchInterval: 3000 });
   const preflight = trpc.settings.preflight.useQuery({
     sourceType: "youtube",
     operation: "create",
-    config: defaultConfig
+    config
   });
   const createSession = trpc.session.create.useMutation({
     onSuccess: ({ session }) => {
@@ -129,7 +130,7 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
       .mutateAsync({
         sourceType: "youtube",
         sourceUrl: url.trim(),
-        config: defaultConfig
+        config
       })
       .catch(() => undefined);
   }
@@ -158,7 +159,7 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
       .mutateAsync({
         sourceType: "upload",
         uploadId: uploaded.uploadId,
-        config: defaultConfig
+        config
       })
       .catch(() => undefined);
   }
@@ -238,6 +239,47 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
               </div>
             </label>
             {error ? <p className="break-words text-sm font-medium text-[#ff9a9a]">{error}</p> : null}
+            <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.52)] p-3">
+              <span className="text-sm font-semibold text-[var(--text)]">Clips to make</span>
+              <div className="flex items-center rounded-full border border-[var(--border)] bg-[rgb(9_9_8_/_0.72)] p-1">
+                <button
+                  type="button"
+                  className="grid h-8 w-8 place-items-center rounded-full bg-[var(--panel-raised)] text-lg text-[var(--text)] disabled:opacity-40"
+                  disabled={config.targetClipCount <= 1 || isWorking}
+                  onClick={() =>
+                    setConfig((current) =>
+                      sessionConfigSchema.parse({
+                        ...current,
+                        targetClipCount: Math.max(1, current.targetClipCount - 1)
+                      })
+                    )
+                  }
+                  aria-label="Reduce clips to make"
+                >
+                  -
+                </button>
+                <span className="min-w-14 px-3 text-center text-sm font-semibold text-[var(--text)]">
+                  {config.targetClipCount}
+                </span>
+                <button
+                  type="button"
+                  className="grid h-8 w-8 place-items-center rounded-full bg-[var(--panel-raised)] text-lg text-[var(--text)] disabled:opacity-40"
+                  disabled={config.targetClipCount >= 10 || isWorking}
+                  onClick={() =>
+                    setConfig((current) =>
+                      sessionConfigSchema.parse({
+                        ...current,
+                        targetClipCount: Math.min(10, current.targetClipCount + 1)
+                      })
+                    )
+                  }
+                  aria-label="Increase clips to make"
+                >
+                  +
+                </button>
+              </div>
+              <span className="text-xs text-[var(--muted)]">PaunClip will try to find exactly this many moments.</span>
+            </div>
             <input
               ref={fileInputRef}
               type="file"

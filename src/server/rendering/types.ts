@@ -9,6 +9,8 @@ export type RenderClipInput = {
   clipId?: string;
   versionId?: string;
   sourcePath: string;
+  sourceMode?: "full" | "section";
+  sourceTimeOffsetSeconds?: number;
   highlightId: string;
   highlight: Highlight;
   transcript: Transcript;

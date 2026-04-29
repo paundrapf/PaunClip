@@ -7,6 +7,7 @@ import { generateHookSpeech } from "@/server/ai/tasks/hook-tts";
 import { extractAudio, probeMedia } from "@/server/media/ffmpeg";
 import {
   downloadYoutubeAudio,
+  downloadYoutubeVideoSection,
   downloadYoutubeVideo,
   fetchYoutubeTranscript,
   getYoutubeMetadata
@@ -26,6 +27,7 @@ import { ensureSessionLayout, sessionPath } from "@/server/storage/paths";
 import { parseJsonWithSchema, stringifyJson } from "@/shared/schemas/primitives";
 import { providerSupportsCapability } from "@/shared/constants/ai-providers";
 import { REFRAME_RENDERER_VERSION } from "@/shared/reframe";
+import { getHighlightBoundaryScorerVersion } from "@/server/ai/tasks/highlight-quality";
 import {
   sessionConfigSchema,
   transcriptSchema,
@@ -39,6 +41,7 @@ import { parseSrt } from "@/server/transcription/srt";
 import type { JobContext } from "@/server/jobs/runner";
 
 const renderer = new FfmpegClipRenderer();
+const RENDER_SOURCE_VERSION = "section_source_v1";
 
 type PipelineSession = Awaited<ReturnType<typeof getSessionOrThrow>>;
 
@@ -259,7 +262,7 @@ async function transcribeSession(sessionId: string, context: JobContext) {
 
   const settings = await getSettings();
   const config = parseJsonWithSchema(sessionConfigSchema, session.configJson, defaultConfig());
-  const audioPath = sessionPath(sessionId, "audio.wav");
+  const audioPath = await resolveTranscriptAudioPath(sessionId);
   const language = config.language ?? "id";
   const transcript = config.manualTranscriptSrt
     ? withTranscriptMetadata(parseSrt(config.manualTranscriptSrt, language), "manual_srt", undefined, "segment_timestamps")
@@ -287,6 +290,16 @@ async function transcribeSession(sessionId: string, context: JobContext) {
   });
 }
 
+async function resolveTranscriptAudioPath(sessionId: string) {
+  const candidates = ["audio.mp3", "audio.m4a", "audio.webm", "audio.wav"].map((name) => sessionPath(sessionId, name));
+  for (const candidate of candidates) {
+    if (await fileExists(candidate)) {
+      return candidate;
+    }
+  }
+  return sessionPath(sessionId, "audio.wav");
+}
+
 async function analyzeHighlights(sessionId: string, context: JobContext) {
   const session = await getSessionOrThrow(sessionId);
   const settings = await getSettings();
@@ -299,6 +312,16 @@ async function analyzeHighlights(sessionId: string, context: JobContext) {
     segments: []
   });
   assertUsableTranscript(transcript);
+  await context.log("Transcript ready for highlight analysis", {
+    source: transcript.source ?? "unknown",
+    quality: transcript.quality ?? "unknown",
+    segments: transcript.segments.length,
+    averageSegmentDuration: getAverageSegmentDuration(transcript),
+    targetClipCount: config.targetClipCount,
+    clipLength: config.clipLength,
+    processingStart: config.processingStart,
+    processingEnd: config.processingEnd
+  });
   let highlights: Highlight[];
   try {
     highlights = await withRetry(
@@ -308,7 +331,11 @@ async function analyzeHighlights(sessionId: string, context: JobContext) {
           transcript,
           prompt: config.prompt,
           promptMode: config.promptMode,
-          targetCount: config.targetClipCount
+          targetCount: config.targetClipCount,
+          clipLength: config.clipLength,
+          processingStart: config.processingStart,
+          processingEnd: config.processingEnd,
+          onLog: context.log
         }),
       retryOptions(context, "find_highlights", 2)
     );
@@ -328,7 +355,11 @@ async function analyzeHighlights(sessionId: string, context: JobContext) {
     });
     throw error;
   }
-  await context.log("Highlight analysis completed", { count: highlights.length });
+  await context.log("Highlight analysis completed", {
+    requestedCount: config.targetClipCount,
+    count: highlights.length,
+    boundaryScorerVersion: getHighlightBoundaryScorerVersion()
+  });
 
   await db.highlight.deleteMany({ where: { sessionId } });
 
@@ -342,7 +373,12 @@ async function analyzeHighlights(sessionId: string, context: JobContext) {
         description: highlight.description,
         viralityScore: highlight.viralityScore,
         selected: highlight.selected,
-        hookText: highlight.hookText
+        hookText: highlight.hookText,
+        analysisJson: stringifyJson({
+          targetClipCount: config.targetClipCount,
+          clipLength: config.clipLength,
+          boundaryScorerVersion: getHighlightBoundaryScorerVersion()
+        })
       }))
     });
   }
@@ -357,7 +393,6 @@ async function analyzeHighlights(sessionId: string, context: JobContext) {
 
 async function renderHighlights(sessionId: string, context: JobContext) {
   const session = await getSessionOrThrow(sessionId);
-  const sourcePath = await ensureSourceVideoForRendering(session, context);
 
   const settings = await getSettings();
   const config = parseJsonWithSchema(sessionConfigSchema, session.configJson, defaultConfig());
@@ -408,8 +443,12 @@ async function renderHighlights(sessionId: string, context: JobContext) {
       selected: highlightRecord.selected,
       hookText: highlightRecord.hookText ?? undefined
     };
+    const renderSource = await resolveRenderSourceForHighlight(session, highlight, highlightRecord.id, context);
     const renderSignature = buildClipRenderSignature({
-      sourcePath,
+      sourcePath: renderSource.sourcePath,
+      sourceMode: renderSource.sourceMode,
+      sourceTimeOffsetSeconds: renderSource.sourceTimeOffsetSeconds,
+      sourceSection: renderSource.sourceSection,
       highlight,
       transcript,
       captionStyle: captionPreset.config,
@@ -417,7 +456,7 @@ async function renderHighlights(sessionId: string, context: JobContext) {
       captionModel: settings.aiProviders.captionMaker.model,
       captionProvider: settings.aiProviders.captionMaker.provider,
       aspectRatio: config.aspectRatio,
-      rendererVersion: REFRAME_RENDERER_VERSION,
+      rendererVersion: getRenderSignatureVersion(),
       reframe: {
         mode: config.reframeMode,
         contentPreset: config.contentPreset,
@@ -459,7 +498,9 @@ async function renderHighlights(sessionId: string, context: JobContext) {
             jobId: context.jobId,
             clipId: existingClip?.id,
             versionId,
-            sourcePath,
+            sourcePath: renderSource.sourcePath,
+            sourceMode: renderSource.sourceMode,
+            sourceTimeOffsetSeconds: renderSource.sourceTimeOffsetSeconds,
             highlightId: highlightRecord.id,
             highlight,
             transcript,
@@ -588,9 +629,109 @@ async function renderHighlights(sessionId: string, context: JobContext) {
   });
 }
 
+type RenderSource = {
+  sourcePath: string;
+  sourceMode: "full" | "section";
+  sourceTimeOffsetSeconds: number;
+  sourceSection?: {
+    startTime: number;
+    endTime: number;
+  };
+};
+
+async function resolveRenderSourceForHighlight(
+  session: PipelineSession,
+  highlight: Highlight,
+  highlightId: string,
+  context: JobContext
+): Promise<RenderSource> {
+  const latestDownloadedPath =
+    session.downloadedPath ??
+    (
+      await db.session.findUnique({
+        where: { id: session.id },
+        select: { downloadedPath: true }
+      })
+    )?.downloadedPath;
+  if (latestDownloadedPath || session.sourceType !== "youtube" || !session.sourceUrl) {
+    return {
+      sourcePath: latestDownloadedPath ?? (await ensureSourceVideoForRendering(session, context)),
+      sourceMode: "full",
+      sourceTimeOffsetSeconds: 0
+    };
+  }
+
+  const settings = await getSettings();
+  const sectionDir = sessionPath(session.id, "source-sections", highlightId);
+  try {
+    await context.log("Downloading YouTube source section for rendering", {
+      highlightId,
+      startTime: highlight.startTime,
+      endTime: highlight.endTime
+    });
+    const section = await withRetry(
+      () =>
+        downloadYoutubeVideoSection({
+          url: session.sourceUrl!,
+          outputDir: sectionDir,
+          startTime: highlight.startTime,
+          endTime: highlight.endTime,
+          cookiesPath: settings.cookies.youtubePath ?? undefined,
+          jobId: context.jobId,
+          onLog: context.log,
+          onProgress: async (download) => {
+            const progress = Math.min(89, 70 + Math.round((download.percent ?? 0) * 0.18));
+            await context.progress(progress, "Downloading source section for rendering", {
+              step: "render_clips",
+              download,
+              highlightId
+            });
+          }
+        }),
+      retryOptions(context, "download_youtube_video_section", 2)
+    );
+    await context.log("YouTube source section ready", {
+      highlightId,
+      sourcePath: section.sourcePath,
+      sectionStartTime: section.sectionStartTime,
+      sectionEndTime: section.sectionEndTime
+    });
+    return {
+      sourcePath: section.sourcePath,
+      sourceMode: "section",
+      sourceTimeOffsetSeconds: section.sectionStartTime,
+      sourceSection: {
+        startTime: section.sectionStartTime,
+        endTime: section.sectionEndTime
+      }
+    };
+  } catch (error) {
+    await context.log("YouTube section download failed; falling back to full source video", {
+      highlightId,
+      error: serializeError(error)
+    });
+    return {
+      sourcePath: await ensureSourceVideoForRendering(session, context),
+      sourceMode: "full",
+      sourceTimeOffsetSeconds: 0
+    };
+  }
+}
+
 async function ensureSourceVideoForRendering(session: PipelineSession, context: JobContext) {
   if (session.downloadedPath) {
     return session.downloadedPath;
+  }
+
+  const latestSession =
+    session.downloadedPath
+      ? session
+      : await db.session.findUnique({
+          where: { id: session.id },
+          select: { downloadedPath: true }
+        });
+  if (latestSession?.downloadedPath) {
+    return latestSession.downloadedPath;
   }
 
   if (session.sourceType !== "youtube" || !session.sourceUrl) {
@@ -660,7 +801,6 @@ async function rerenderClip(clipId: string, context: JobContext) {
     throw new Error("No caption preset configured");
   }
 
-  const sourcePath = await ensureSourceVideoForRendering(clip.session, context);
   const highlight: Highlight = {
     startTime: clip.startTime,
     endTime: clip.endTime,
@@ -670,8 +810,12 @@ async function rerenderClip(clipId: string, context: JobContext) {
     selected: clip.highlight.selected,
     hookText: clip.highlight.hookText ?? undefined
   };
+  const renderSource = await resolveRenderSourceForHighlight(clip.session, highlight, clip.highlightId, context);
   const signature = buildClipRenderSignature({
-    sourcePath,
+    sourcePath: renderSource.sourcePath,
+    sourceMode: renderSource.sourceMode,
+    sourceTimeOffsetSeconds: renderSource.sourceTimeOffsetSeconds,
+    sourceSection: renderSource.sourceSection,
     highlight,
     transcript,
     captionStyle: captionPreset.config,
@@ -679,7 +823,7 @@ async function rerenderClip(clipId: string, context: JobContext) {
     captionModel: settings.aiProviders.captionMaker.model,
     captionProvider: settings.aiProviders.captionMaker.provider,
     aspectRatio: config.aspectRatio,
-    rendererVersion: REFRAME_RENDERER_VERSION,
+    rendererVersion: getRenderSignatureVersion(),
     reframe: {
       mode: config.reframeMode,
       contentPreset: config.contentPreset,
@@ -732,7 +876,9 @@ async function rerenderClip(clipId: string, context: JobContext) {
           jobId: context.jobId,
           clipId: clip.id,
           versionId,
-          sourcePath,
+          sourcePath: renderSource.sourcePath,
+          sourceMode: renderSource.sourceMode,
+          sourceTimeOffsetSeconds: renderSource.sourceTimeOffsetSeconds,
           highlightId: clip.highlightId,
           highlight,
           transcript,
@@ -930,6 +1076,10 @@ function defaultConfig(): SessionConfig {
   };
 }
 
+function getRenderSignatureVersion() {
+  return `${REFRAME_RENDERER_VERSION}:${getHighlightBoundaryScorerVersion()}:${RENDER_SOURCE_VERSION}`;
+}
+
 async function getSessionConfig(sessionId: string) {
   const session = await getSessionOrThrow(sessionId);
   return parseJsonWithSchema(sessionConfigSchema, session.configJson, defaultConfig());
@@ -1068,4 +1218,15 @@ function assertUsableTranscript(transcript: Transcript) {
   if (transcript.segments.length === 0) {
     throw new Error("No transcript is available. Configure Caption Maker or upload an SRT transcript.");
   }
+}
+
+function getAverageSegmentDuration(transcript: Transcript) {
+  if (transcript.segments.length === 0) {
+    return 0;
+  }
+  const total = transcript.segments.reduce(
+    (sum, segment) => sum + Math.max(0, segment.end - segment.start),
+    0
+  );
+  return Math.round((total / transcript.segments.length) * 10) / 10;
 }

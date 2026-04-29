@@ -100,7 +100,8 @@ describe("campaign workflow helpers", () => {
     });
 
     expect(prompt.system).toContain("PaunClip");
-    expect(prompt.user).toContain("Find up to 3");
+    expect(prompt.user).toContain("Return exactly 3");
+    expect(prompt.user).toContain("Do not start at 0.0");
     expect(prompt.user).toContain("campaign");
     expect(prompt.user).toContain("Cari momen kegagalan bisnis");
     expect(prompt.user).toContain('"highlights" array');

@@ -6,6 +6,12 @@ import type { ContentPreset, ReframeMode } from "@/shared/reframe";
 
 export type ClipRenderSignatureInput = {
   sourcePath: string;
+  sourceMode?: "full" | "section";
+  sourceTimeOffsetSeconds?: number;
+  sourceSection?: {
+    startTime: number;
+    endTime: number;
+  };
   highlight: Highlight;
   transcript: Transcript;
   captionStyle: CaptionStyle;

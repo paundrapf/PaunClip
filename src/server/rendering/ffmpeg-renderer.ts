@@ -36,14 +36,17 @@ export class FfmpegClipRenderer implements ClipRenderer {
     const captionedPath = path.join(clipDir, "captioned.mp4");
     const masterPath = path.join(clipDir, "master.mp4");
     const thumbnailPath = path.join(clipDir, "thumbnail.jpg");
+    const sourceTimeOffsetSeconds = input.sourceTimeOffsetSeconds ?? 0;
+    const localStartTime = Math.max(0, input.highlight.startTime - sourceTimeOffsetSeconds);
+    const localEndTime = Math.max(localStartTime + 0.1, input.highlight.endTime - sourceTimeOffsetSeconds);
     const duration = input.highlight.endTime - input.highlight.startTime;
     const reframePlan = await this.resolveReframePlan(input);
 
     await cutAndReframePortraitSegment(
       input.sourcePath,
       portraitPath,
-      input.highlight.startTime,
-      input.highlight.endTime,
+      localStartTime,
+      localEndTime,
       {
         jobId: input.jobId,
         mode: reframePlan.mode,
@@ -154,11 +157,14 @@ export class FfmpegClipRenderer implements ClipRenderer {
       };
     }
 
+    const sourceTimeOffsetSeconds = input.sourceTimeOffsetSeconds ?? 0;
+    const localStartTime = Math.max(0, input.highlight.startTime - sourceTimeOffsetSeconds);
+    const localEndTime = Math.max(localStartTime + 0.1, input.highlight.endTime - sourceTimeOffsetSeconds);
     const smartPlan = await buildSmartFaceCropPlan({
       sessionId: input.sessionId,
       sourcePath: input.sourcePath,
-      startTime: input.highlight.startTime,
-      endTime: input.highlight.endTime,
+      startTime: localStartTime,
+      endTime: localEndTime,
       clipId: input.clipId,
       jobId: input.jobId,
       onLog: input.onLog

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { improveHighlights, normalizeViralityScore } from "@/server/ai/tasks/highlight-quality";
+import {
+  improveHighlights,
+  improveHighlightsWithDiagnostics,
+  normalizeViralityScore
+} from "@/server/ai/tasks/highlight-quality";
 import type { Highlight, Transcript } from "@/shared/schemas/session";
 
 describe("highlight quality", () => {
@@ -35,5 +39,42 @@ describe("highlight quality", () => {
     expect(highlight?.viralityScore).toBe(90);
     expect((highlight?.endTime ?? 0) - (highlight?.startTime ?? 0)).toBeGreaterThanOrEqual(24);
     expect(highlight?.startTime).toBeLessThanOrEqual(21);
+  });
+
+  it("does not drag normal mid-video highlights back to zero", () => {
+    const [highlight] = improveHighlights(
+      [
+        {
+          startTime: 86,
+          endTime: 97,
+          title: "Mid video lesson",
+          viralityScore: 80,
+          selected: true
+        }
+      ],
+      transcript,
+      1
+    );
+
+    expect(highlight?.startTime).toBeGreaterThan(75);
+  });
+
+  it("uses transcript repair windows to satisfy the requested count", () => {
+    const result = improveHighlightsWithDiagnostics(
+      [
+        {
+          startTime: 44,
+          endTime: 55,
+          title: "First useful moment",
+          viralityScore: 85,
+          selected: true
+        }
+      ],
+      transcript,
+      { targetCount: 3, clipLength: "auto" }
+    );
+
+    expect(result.highlights).toHaveLength(3);
+    expect(result.diagnostics.repairAddedCount).toBeGreaterThanOrEqual(1);
   });
 });

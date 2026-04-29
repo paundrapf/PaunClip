@@ -19,6 +19,7 @@ export function buildHighlightPromptMessages(input: {
   scope: HighlightPromptScope;
   promptMode?: HighlightPromptMode;
   systemMessage?: string;
+  feedback?: string;
 }): HighlightPromptMessages {
   const compactTranscript = input.transcript.segments
     .map((segment) => `[${segment.start.toFixed(1)}-${segment.end.toFixed(1)}] ${segment.text}`)
@@ -37,15 +38,18 @@ export function buildHighlightPromptMessages(input: {
     user: `${modeInstruction}
 
 ${scopeInstruction}
-Find up to ${input.targetCount} standalone highlight clips from this transcript.
+Return exactly ${input.targetCount} usable, standalone, non-overlapping highlight clips unless the transcript is genuinely too short.
 Return JSON only. The JSON must be an object with a "highlights" array.
 Each highlight object must have:
 startTime, endTime, title, description, viralityScore, selected, hookText.
+Optional helper fields are allowed: reason, contextStartTime, contextEndTime.
 
 Rules:
 - startTime and endTime are seconds from the original video.
 - Prefer complete thoughts with setup, core point, and payoff/reaction.
 - Avoid clips that start in the middle of a sentence or end before the speaker finishes.
+- Do not start at 0.0 unless the video's opening is truly the best standalone moment.
+- Keep clips meaningfully separated; do not return overlapping variations of the same moment.
 - Podcast/story clips should usually be 24-75 seconds.
 - Short punchline clips can be shorter only when the joke is complete.
 - viralityScore is 0-100.
@@ -53,6 +57,7 @@ Rules:
 - hookText is max 12 words and should make the first second understandable.
 - If transcript language is Indonesian, use Indonesian titles and hooks.
 - User intent: ${input.userPrompt?.trim() || "No specific request"}.
+${input.feedback ? `\nRetry feedback:\n${input.feedback}\n` : ""}
 
 Transcript:
 ${compactTranscript}`

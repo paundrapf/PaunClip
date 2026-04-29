@@ -285,7 +285,7 @@ export function WorkflowScreen() {
 
         <div className="grid gap-6">
           <div className="grid min-w-0 gap-4 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)]">
-            <div className="grid gap-4 md:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-5">
               <SelectField
                 label="Clip model"
                 value={config.clipModel}
@@ -320,6 +320,30 @@ export function WorkflowScreen() {
                   { label: "90s-3m", value: "90s_3m" }
                 ]}
               />
+              <label className="grid gap-2">
+                <span className="text-xs font-semibold text-[var(--muted-soft)]">Clips to make</span>
+                <span className="flex h-11 items-center justify-between rounded-lg border border-[var(--border)] bg-[rgb(9_9_8_/_0.72)] px-2">
+                  <button
+                    type="button"
+                    className="grid h-7 w-7 place-items-center rounded-full bg-[var(--panel-raised)] text-lg text-[var(--text)] disabled:opacity-40"
+                    disabled={config.targetClipCount <= 1}
+                    onClick={() => updateConfig("targetClipCount", Math.max(1, config.targetClipCount - 1))}
+                    aria-label="Reduce clips to make"
+                  >
+                    -
+                  </button>
+                  <strong className="text-sm text-[var(--text)]">{config.targetClipCount}</strong>
+                  <button
+                    type="button"
+                    className="grid h-7 w-7 place-items-center rounded-full bg-[var(--panel-raised)] text-lg text-[var(--text)] disabled:opacity-40"
+                    disabled={config.targetClipCount >= 10}
+                    onClick={() => updateConfig("targetClipCount", Math.min(10, config.targetClipCount + 1))}
+                    aria-label="Increase clips to make"
+                  >
+                    +
+                  </button>
+                </span>
+              </label>
               <label className="grid gap-2">
                 <span className="text-xs font-semibold text-[var(--muted-soft)]">Auto hook</span>
                 <button

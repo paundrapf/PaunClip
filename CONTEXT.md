@@ -964,6 +964,34 @@ Implemented the first production hardening sweep for the 10 review findings:
   - `scripts/prepare-standalone.cjs` removes accidental traced `storage`, `.env*`, `src`, `tests`, docs, assets, scripts, and config files from standalone output.
   - `scripts/smoke-desktop-package.cjs` now validates packaged FFmpeg, FFprobe, yt-dlp, Prisma client, and query engine.
 
+## Changelog 2026-04-30 Highlight Count And Lightweight Render Batch
+
+- Root cause for "requested 3 clips but only got 1":
+  - `targetClipCount` was already being passed from Dashboard/Workflow/Campaign into session config.
+  - The weak points were Highlight Finder prompt wording (`up to N`), AI results that overlapped, and `improveHighlights()`/dedupe collapsing multiple candidates into one.
+  - New policy: Highlight Finder should pursue exactly the requested count unless the transcript is genuinely too short.
+- Highlight prompt policy:
+  - `src/server/ai/prompts/highlight-finder.ts` now asks for exactly N usable, standalone, non-overlapping clips.
+  - The prompt explicitly discourages `startTime: 0.0` unless the opening is truly the best standalone moment.
+  - Optional helper fields (`reason`, `contextStartTime`, `contextEndTime`) are allowed so future scorers can understand AI intent.
+- Highlight quality policy:
+  - `src/server/ai/tasks/highlight-quality.ts` is now a boundary scorer with diagnostics.
+  - It applies duration policies per `clipLength`, limits backward expansion, avoids unjustified 0.0 starts, dedupes by score/overlap, and can repair shortage using transcript-derived candidate windows.
+  - Equal-interval fallback remains disabled for user-facing output. Local repair is transcript-window based, not fake equal chunks.
+- Highlight retry/diagnostics:
+  - `findHighlights()` logs raw candidate count, improved count, final count, retry attempts, local repair count, and boundary scorer diagnostics.
+  - If the final count is still below target and the transcript is not too short, the job fails clearly instead of silently succeeding with one weak clip.
+- YouTube render flow:
+  - Analysis remains subtitle/audio-first.
+  - YouTube transcription fallback now downloads compressed `audio.mp3` instead of WAV.
+  - Rendering tries `yt-dlp --download-sections` per selected highlight before falling back to full MP4.
+  - Renderer input now supports `sourceMode`, `sourceTimeOffsetSeconds`, and section metadata so original video timestamps map safely to local section timestamps.
+  - Render cache signatures include section/full source mode, source offset, source section range, boundary scorer version, and section render source version.
+- UI feedback:
+  - Dashboard and Workflow expose `Clips to make`.
+  - Results shows requested clip count vs found usable moments.
+  - Campaign workspace cards and progress rows show requested vs found moments per video.
+
 ## Current User-Facing Recommendations
 
 For best current behavior:
@@ -973,7 +1001,7 @@ For best current behavior:
 - Hook Maker: use Groq Orpheus with supported voice/format or OpenAI TTS.
 - For YouTube: use cookies if the video hits bot/auth/challenge restrictions.
 - For caption sync: prefer providers that return word timestamps.
-- For long videos: expect full source download during render if transcript-first ingest was used.
+- For long videos: render now attempts section download first; full source download is a fallback when section download fails.
 
 ## Things Still Worth Doing
 

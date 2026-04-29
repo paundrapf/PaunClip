@@ -246,6 +246,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
   }, [draft, editor.data]);
 
   const latestJob = session.data?.jobs[0];
+  const requestedHighlightCount = session.data?.config?.targetClipCount ?? 3;
   const latestErrorEvent = latestJob?.events.find((event) => event.type === "error");
   const latestSignalEvent =
     latestErrorEvent ??
@@ -469,6 +470,9 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
                       : "Your video is processing"}
                 </h2>
                 <p className="mt-1 break-words text-sm leading-6 text-[var(--muted)]">{statusMessage}</p>
+                <p className="mt-1 text-xs text-[var(--muted-soft)]">
+                  Requested {requestedHighlightCount} clips, found {highlights.length} usable moments.
+                </p>
                 {!isFailed && !isCancelled ? (
                   <p className="mt-1 text-xs text-[var(--muted-soft)]">ETA estimate: {etaLabel}</p>
                 ) : null}
@@ -542,7 +546,7 @@ export function ResultsScreen({ sessionId }: { sessionId: string }) {
             <div className="min-w-0">
               <h2 className="text-lg font-semibold text-[var(--text)]">Highlights</h2>
               <p className="mt-1 text-sm text-[var(--muted)]">
-                {selectedHighlightCount} selected of {highlights.length}
+                {selectedHighlightCount} selected of {highlights.length} found / {requestedHighlightCount} requested
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">

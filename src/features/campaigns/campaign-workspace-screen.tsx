@@ -595,6 +595,11 @@ function CampaignVideoCard({
     session?: {
       status?: string | null;
       stage?: string | null;
+      configJson?: unknown;
+      _count?: {
+        highlights?: number;
+        clips?: number;
+      };
       jobs?: Array<{ status?: string | null; progress?: number | null }>;
     } | null;
   };
@@ -605,6 +610,8 @@ function CampaignVideoCard({
 }) {
   const status = getCampaignVideoDisplayStatus(video);
   const progress = getVideoProgress(video, status);
+  const requestedCount = getRequestedClipCount(video, clipCount);
+  const foundCount = video.session?._count?.highlights ?? 0;
 
   return (
     <article
@@ -640,6 +647,11 @@ function CampaignVideoCard({
           <ClipCountStepper value={clipCount} onChange={onClipCountChange} />
           <StatusBadge status={status} />
         </div>
+        <p className="text-xs text-[var(--muted)]">
+          {status === "not_queued"
+            ? `Will look for ${requestedCount} clips`
+            : `Found ${foundCount} of ${requestedCount} requested moments`}
+        </p>
 
         <div className="grid gap-2">
           <div className="h-2 overflow-hidden rounded-full bg-[rgb(255_255_255_/_0.06)]">
@@ -666,6 +678,14 @@ function BatchProgressPanel({
     title: string;
     thumbnailUrl?: string | null;
     sessionId?: string | null;
+    session?: {
+      configJson?: unknown;
+      _count?: {
+        highlights?: number;
+        clips?: number;
+      };
+      jobs?: Array<{ progress?: number | null }>;
+    } | null;
   }>;
 }) {
   const queuedVideos = videos.filter((video) => getCampaignVideoDisplayStatus(video) !== "not_queued");
@@ -685,6 +705,8 @@ function BatchProgressPanel({
           {queuedVideos.map((video) => {
             const status = getCampaignVideoDisplayStatus(video);
             const progress = getVideoProgress(video, status);
+            const requestedCount = getRequestedClipCount(video, 3);
+            const foundCount = video.session?._count?.highlights ?? 0;
             return (
               <div key={video.id} className="grid min-w-0 gap-3 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.5)] p-3 md:grid-cols-[96px_minmax(0,1fr)_180px]">
                 <div className="aspect-video overflow-hidden rounded-md bg-[var(--panel-raised)]">
@@ -696,6 +718,9 @@ function BatchProgressPanel({
                     <span className="text-xs text-[var(--muted)]">{progress}%</span>
                   </div>
                   <p className="line-clamp-2 break-words text-sm font-semibold text-[var(--text)]">{video.title}</p>
+                  <p className="text-xs text-[var(--muted)]">
+                    {foundCount} of {requestedCount} requested moments found
+                  </p>
                   <div className="h-2 overflow-hidden rounded-full bg-[rgb(255_255_255_/_0.06)]">
                     <div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${progress}%` }} />
                   </div>
@@ -1147,6 +1172,11 @@ function getVideoProgress(video: { session?: { jobs?: Array<{ progress?: number 
     return 100;
   }
   return video.session?.jobs?.[0]?.progress ?? 0;
+}
+
+function getRequestedClipCount(video: { session?: { configJson?: unknown } | null }, fallback: number) {
+  const parsed = sessionConfigSchema.safeParse(video.session?.configJson);
+  return parsed.success ? parsed.data.targetClipCount : fallback;
 }
 
 function formatDuration(totalSeconds: number) {

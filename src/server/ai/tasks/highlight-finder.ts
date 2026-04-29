@@ -2,14 +2,14 @@ import "server-only";
 import type OpenAI from "openai";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { AIProviderConfig } from "@/shared/schemas/settings";
-import { highlightSchema, type Highlight, type Transcript } from "@/shared/schemas/session";
+import { highlightSchema, type Highlight, type SessionConfig, type Transcript } from "@/shared/schemas/session";
 import { AIProviderRouter, isOpenAIClient } from "@/server/ai/provider-router";
 import {
   buildHighlightPromptMessages,
   type HighlightPromptMessages,
   type HighlightPromptMode
 } from "@/server/ai/prompts/highlight-finder";
-import { improveHighlights } from "./highlight-quality";
+import { improveHighlightsWithDiagnostics } from "./highlight-quality";
 
 const highlightArraySchema = highlightSchema.array();
 
@@ -35,6 +35,7 @@ export class HighlightFinderError extends Error {
 }
 
 type AIClient = OpenAI | Anthropic;
+type HighlightFinderLog = (message: string, data?: Record<string, unknown>) => Promise<void> | void;
 
 type Chunk = {
   transcript: Transcript;
@@ -47,6 +48,10 @@ export async function findHighlights(params: {
   prompt?: string;
   promptMode?: HighlightPromptMode;
   targetCount?: number;
+  clipLength?: SessionConfig["clipLength"];
+  processingStart?: number;
+  processingEnd?: number;
+  onLog?: HighlightFinderLog;
 }): Promise<Highlight[]> {
   const targetCount = params.targetCount ?? 8;
   const config = params.router.getConfig("highlightFinder");
@@ -62,7 +67,7 @@ export async function findHighlights(params: {
   }
 
   try {
-    const highlights = await findHighlightsWithAI({
+    const candidates = await findHighlightsWithAI({
       client,
       config,
       transcript: params.transcript,
@@ -70,7 +75,7 @@ export async function findHighlights(params: {
       promptMode: params.promptMode,
       targetCount
     });
-    if (highlights.length === 0) {
+    if (candidates.length === 0) {
       throw new HighlightFinderError(
         "No usable highlights returned by Highlight Finder.",
         "empty_result",
@@ -78,8 +83,85 @@ export async function findHighlights(params: {
         config.model
       );
     }
-    const improved = improveHighlights(highlights, params.transcript, targetCount);
-    if (improved.length === 0) {
+
+    let quality = improveHighlightsWithDiagnostics(candidates, params.transcript, {
+      targetCount,
+      clipLength: params.clipLength,
+      processingStart: params.processingStart,
+      processingEnd: params.processingEnd,
+      allowRepair: false
+    });
+    await params.onLog?.("Highlight Finder quality pass completed", {
+      attempt: 1,
+      rawCount: candidates.length,
+      finalCount: quality.highlights.length,
+      diagnostics: summarizeDiagnostics(quality.diagnostics)
+    });
+
+    let allCandidates = candidates;
+    for (let retry = 1; quality.highlights.length < targetCount && retry <= 2; retry += 1) {
+      const retryFeedback = buildRetryFeedback({
+        targetCount,
+        selected: quality.highlights,
+        diagnostics: quality.diagnostics
+      });
+      await params.onLog?.("Highlight Finder retrying for additional moments", {
+        retry,
+        targetCount,
+        currentCount: quality.highlights.length,
+        feedback: retryFeedback
+      });
+      let retryCandidates: Highlight[] = [];
+      try {
+        retryCandidates = await findHighlightsWithAI({
+          client,
+          config,
+          transcript: params.transcript,
+          userPrompt: params.prompt,
+          promptMode: params.promptMode,
+          targetCount: Math.max(1, targetCount - quality.highlights.length),
+          feedback: retryFeedback
+        });
+      } catch (error) {
+        await params.onLog?.("Highlight Finder retry failed; continuing with local repair", {
+          retry,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        break;
+      }
+      allCandidates = [...allCandidates, ...retryCandidates];
+      quality = improveHighlightsWithDiagnostics(allCandidates, params.transcript, {
+        targetCount,
+        clipLength: params.clipLength,
+        processingStart: params.processingStart,
+        processingEnd: params.processingEnd,
+        allowRepair: false
+      });
+      await params.onLog?.("Highlight Finder retry quality pass completed", {
+        retry,
+        rawCount: allCandidates.length,
+        retryRawCount: retryCandidates.length,
+        finalCount: quality.highlights.length,
+        diagnostics: summarizeDiagnostics(quality.diagnostics)
+      });
+    }
+
+    if (quality.highlights.length < targetCount) {
+      quality = improveHighlightsWithDiagnostics(allCandidates, params.transcript, {
+        targetCount,
+        clipLength: params.clipLength,
+        processingStart: params.processingStart,
+        processingEnd: params.processingEnd,
+        allowRepair: true
+      });
+      await params.onLog?.("Highlight Finder local repair pass completed", {
+        rawCount: allCandidates.length,
+        finalCount: quality.highlights.length,
+        diagnostics: summarizeDiagnostics(quality.diagnostics)
+      });
+    }
+
+    if (quality.highlights.length === 0) {
       throw new HighlightFinderError(
         "Highlight Finder returned highlights, but none survived quality checks.",
         "empty_result",
@@ -87,7 +169,16 @@ export async function findHighlights(params: {
         config.model
       );
     }
-    return improved;
+    if (quality.highlights.length < targetCount && !isTranscriptTooShortForTarget(params.transcript, targetCount)) {
+      throw new HighlightFinderError(
+        `Only ${quality.highlights.length} usable highlights found for requested ${targetCount}.`,
+        "empty_result",
+        config.provider,
+        config.model
+      );
+    }
+
+    return quality.highlights;
   } catch (error) {
     if (error instanceof HighlightFinderError) {
       throw error;
@@ -110,6 +201,7 @@ async function findHighlightsWithAI(params: {
   userPrompt?: string;
   promptMode?: HighlightPromptMode;
   targetCount: number;
+  feedback?: string;
 }) {
   const budget = getPromptTokenBudget(params.config);
   const transcriptTokens = estimateTranscriptTokens(params.transcript);
@@ -121,7 +213,8 @@ async function findHighlightsWithAI(params: {
         targetCount: params.targetCount,
         scope: "final",
         promptMode: params.promptMode,
-        systemMessage: params.config.systemMessage
+        systemMessage: params.config.systemMessage,
+        feedback: params.feedback
       });
       const raw = await callAI(params.client, params.config.model, prompt);
       return parseHighlights(raw, params.transcript, params.targetCount, false, params.config);
@@ -146,6 +239,7 @@ async function findHighlightsByChunks(params: {
   promptMode?: HighlightPromptMode;
   targetCount: number;
   chunkBudget: number;
+  feedback?: string;
 }) {
   const chunks = splitTranscriptIntoChunks(params.transcript, params.chunkBudget);
   const candidates: Highlight[] = [];
@@ -160,7 +254,8 @@ async function findHighlightsByChunks(params: {
         targetCount: perChunkTarget,
         scope: "chunk",
         promptMode: params.promptMode,
-        systemMessage: params.config.systemMessage
+        systemMessage: params.config.systemMessage,
+        feedback: params.feedback
       });
       const raw = await callAI(params.client, params.config.model, prompt);
       candidates.push(...parseHighlights(raw, chunk.transcript, perChunkTarget, false, params.config));
@@ -175,7 +270,8 @@ async function findHighlightsByChunks(params: {
               targetCount: Math.max(2, perChunkTarget - 1),
               scope: "chunk",
               promptMode: params.promptMode,
-              systemMessage: params.config.systemMessage
+              systemMessage: params.config.systemMessage,
+              feedback: params.feedback
             });
             const raw = await callAI(params.client, params.config.model, prompt);
             candidates.push(...parseHighlights(raw, smallerChunk.transcript, perChunkTarget, false, params.config));
@@ -400,4 +496,51 @@ function extractJson(value: string) {
   }
   const last = value.lastIndexOf("}");
   return first >= 0 && last >= 0 ? value.slice(first, last + 1) : value;
+}
+
+function summarizeDiagnostics(
+  diagnostics: ReturnType<typeof improveHighlightsWithDiagnostics>["diagnostics"]
+) {
+  return {
+    version: diagnostics.version,
+    targetCount: diagnostics.targetCount,
+    inputCount: diagnostics.inputCount,
+    normalizedCount: diagnostics.normalizedCount,
+    expandedCount: diagnostics.expandedCount,
+    dedupedCount: diagnostics.dedupedCount,
+    repairCandidateCount: diagnostics.repairCandidateCount,
+    repairAddedCount: diagnostics.repairAddedCount,
+    rejectedCount: diagnostics.rejected.length,
+    rejectedReasons: diagnostics.rejected.reduce<Record<string, number>>((counts, item) => {
+      counts[item.reason] = (counts[item.reason] ?? 0) + 1;
+      return counts;
+    }, {})
+  };
+}
+
+function buildRetryFeedback(input: {
+  targetCount: number;
+  selected: Highlight[];
+  diagnostics: ReturnType<typeof improveHighlightsWithDiagnostics>["diagnostics"];
+}) {
+  const selectedRanges = input.selected
+    .map((highlight) => `${highlight.startTime.toFixed(1)}-${highlight.endTime.toFixed(1)} "${highlight.title}"`)
+    .join("\n");
+  const rejectedReasons = input.diagnostics.rejected
+    .slice(-8)
+    .map((item) => `- ${item.reason}: ${item.startTime?.toFixed(1) ?? "?"}-${item.endTime?.toFixed(1) ?? "?"} ${item.title}`)
+    .join("\n");
+  return [
+    `Need ${input.targetCount} final clips, but only ${input.selected.length} survived quality checks.`,
+    selectedRanges ? `Already selected ranges to avoid:\n${selectedRanges}` : "No selected ranges survived yet.",
+    rejectedReasons ? `Recent rejected candidates:\n${rejectedReasons}` : "",
+    "Return different, complete moments from other timestamps. Avoid overlapping the selected ranges."
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function isTranscriptTooShortForTarget(transcript: Transcript, targetCount: number) {
+  const duration = transcript.segments.at(-1)?.end ?? 0;
+  return duration > 0 && duration < targetCount * 14;
 }

@@ -1,5 +1,5 @@
 import "server-only";
-import { readFile, readdir, unlink } from "node:fs/promises";
+import { mkdir, readFile, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { ACCEPTED_VIDEO_EXTENSIONS } from "@/shared/constants/app";
 import type { Transcript } from "@/shared/schemas/session";
@@ -199,6 +199,145 @@ export async function downloadYoutubeVideo(params: {
   throw createYoutubeDownloadError(attemptResults);
 }
 
+export async function downloadYoutubeVideoSection(params: {
+  url: string;
+  outputDir: string;
+  startTime: number;
+  endTime: number;
+  paddingBefore?: number;
+  paddingAfter?: number;
+  cookiesPath?: string;
+  jobId?: string;
+  onLog?: DownloadLog;
+  onProgress?: DownloadProgress;
+}) {
+  await mkdir(params.outputDir, { recursive: true });
+  const sectionStartTime = Math.max(0, params.startTime - (params.paddingBefore ?? 6));
+  const sectionEndTime = Math.max(sectionStartTime + 1, params.endTime + (params.paddingAfter ?? 4));
+  const outputTemplate = path.join(params.outputDir, "source.%(ext)s");
+  const section = `*${formatYoutubeSectionTime(sectionStartTime)}-${formatYoutubeSectionTime(sectionEndTime)}`;
+  const attempts: DownloadAttempt[] = [
+    {
+      label: "1080p section video/audio",
+      format: "bv*[height<=1080]+ba/b[height<=1080]/b"
+    },
+    {
+      label: "720p section video/audio fallback",
+      format: "bv*[height<=720]+ba/b[height<=720]/b"
+    },
+    {
+      label: "mp4 section single-file fallback",
+      format: "best[ext=mp4][height<=1080]/best[ext=mp4]/best[height<=1080]/best"
+    }
+  ];
+  const attemptResults: DownloadAttemptResult[] = [];
+
+  for (const attempt of attempts) {
+    await cleanPreviousSourceFiles(params.outputDir);
+    await params.onLog?.("yt-dlp section download attempt started", {
+      label: attempt.label,
+      format: attempt.format,
+      section,
+      sectionStartTime,
+      sectionEndTime
+    });
+
+    try {
+      let lastProgressPercent = -1;
+      await runProcess(
+        getYtdlpCommand(),
+        [
+          "--no-playlist",
+          "--newline",
+          ...youtubeChallengeArgs,
+          "-f",
+          attempt.format,
+          "--download-sections",
+          section,
+          "--force-keyframes-at-cuts",
+          "--ffmpeg-location",
+          getFfmpegCommand(),
+          "--merge-output-format",
+          "mp4",
+          "--remux-video",
+          "mp4",
+          "-o",
+          outputTemplate,
+          ...(params.cookiesPath ? ["--cookies", params.cookiesPath] : []),
+          params.url
+        ],
+        {
+          timeoutMs: 20 * 60_000,
+          idleTimeoutMs: 90_000,
+          heartbeatMs: 15_000,
+          jobId: params.jobId,
+          onHeartbeat: ({ elapsedMs, idleMs }) =>
+            params.onLog?.("yt-dlp section download heartbeat", {
+              elapsedSeconds: Math.round(elapsedMs / 1000),
+              idleSeconds: Math.round(idleMs / 1000),
+              label: attempt.label
+            }),
+          onLine: async (event) => {
+            const progress = parseYtdlpProgress(event);
+            if (!progress) {
+              if (shouldLogYtdlpLine(event.line)) {
+                await params.onLog?.("yt-dlp section output", {
+                  stream: event.stream,
+                  line: truncateOutput(event.line, 500)
+                });
+              }
+              return;
+            }
+
+            const percent = progress.percent ?? 0;
+            if (Math.floor(percent) > Math.floor(lastProgressPercent)) {
+              lastProgressPercent = percent;
+              await params.onProgress?.(progress);
+            }
+          }
+        }
+      );
+
+      const sourcePath = await findDownloadedSource(params.outputDir);
+      if (!sourcePath) {
+        throw new Error("yt-dlp finished but no section video file was created.");
+      }
+
+      attemptResults.push({ ...attempt, ok: true });
+      await params.onLog?.("yt-dlp section download attempt completed", {
+        label: attempt.label,
+        outputPath: sourcePath,
+        sectionStartTime,
+        sectionEndTime
+      });
+      return {
+        sourcePath,
+        sectionStartTime,
+        sectionEndTime
+      };
+    } catch (error) {
+      const output =
+        error instanceof ProcessError
+          ? truncateOutput(error.result.stderr || error.result.stdout)
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      attemptResults.push({
+        ...attempt,
+        ok: false,
+        exitCode: error instanceof ProcessError ? error.result.exitCode : undefined,
+        output
+      });
+      await params.onLog?.("yt-dlp section download attempt failed", {
+        label: attempt.label,
+        output
+      });
+    }
+  }
+
+  throw createYoutubeDownloadError(attemptResults);
+}
+
 export async function fetchYoutubeTranscript(params: {
   url: string;
   outputDir: string;
@@ -313,7 +452,7 @@ export async function downloadYoutubeAudio(params: {
       "ba/bestaudio/b",
       "--extract-audio",
       "--audio-format",
-      "wav",
+      "mp3",
       "--ffmpeg-location",
       getFfmpegCommand(),
       "-o",
@@ -342,7 +481,7 @@ export async function downloadYoutubeAudio(params: {
     }
   );
 
-  const audioPath = path.join(params.outputDir, "audio.wav");
+  const audioPath = path.join(params.outputDir, "audio.mp3");
   return audioPath;
 }
 
@@ -496,6 +635,19 @@ function parseYoutubePublishedAt(timestamp?: number, uploadDate?: string) {
     return undefined;
   }
   return new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00.000Z`);
+}
+
+function formatYoutubeSectionTime(value: number) {
+  const totalMillis = Math.max(0, Math.round(value * 1000));
+  const hours = Math.floor(totalMillis / 3_600_000);
+  const minutes = Math.floor((totalMillis % 3_600_000) / 60_000);
+  const seconds = Math.floor((totalMillis % 60_000) / 1000);
+  const millis = totalMillis % 1000;
+  return `${padTime(hours)}:${padTime(minutes)}:${padTime(seconds)}.${String(millis).padStart(3, "0")}`;
+}
+
+function padTime(value: number) {
+  return String(value).padStart(2, "0");
 }
 
 async function cleanPreviousSourceFiles(outputDir: string) {
