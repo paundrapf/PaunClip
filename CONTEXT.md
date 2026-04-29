@@ -914,6 +914,14 @@ Known recurring warning:
 
 ## Changelog 2026-04-29 Production Readiness Batch
 
+### 2026-04-29 Packaged API Route Runtime Regression
+
+- Symptom in desktop app: Campaign create failed with toast `Unexpected token 'I', "Internal S"... is not valid JSON`.
+- Root cause: packaged standalone Next server returned plain `Internal Server Error` because `node_modules/next/dist/compiled/next-server/app-route-turbo.runtime.prod.js` was missing from `.next/standalone`.
+- Why it happened: Next/Turbopack standalone file tracing included page runtimes but skipped the app-route turbo runtime needed by API routes. The previous desktop smoke test checked Prisma/tools, but not this Next API-route runtime file.
+- Fix policy: `scripts/prepare-standalone.cjs` must copy missing `*.runtime.prod.js` files from root `node_modules/next/dist/compiled/next-server` into standalone output, and `scripts/smoke-desktop-package.cjs` must assert the app-route turbo runtime exists.
+- Diagnostic note: if the desktop UI loads but tRPC/API mutations show JSON parse errors beginning with `Unexpected token 'I'`, check packaged server logs for missing Next runtime modules before debugging feature routers.
+
 Implemented the first production hardening sweep for the 10 review findings:
 
 - Output path policy:

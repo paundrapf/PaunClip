@@ -12,6 +12,17 @@ const queryEnginePath = path.join(generatedClientDir, "query_engine-windows.dll.
 const ffmpegPath = path.join(appRoot, ".next", "standalone", "node_modules", "ffmpeg-static", "ffmpeg.exe");
 const ffprobePath = path.join(appRoot, ".next", "standalone", "node_modules", "ffprobe-static", "bin", "win32", "x64", "ffprobe.exe");
 const ytdlpPath = path.join(root, "dist", "desktop", "win-unpacked", "resources", "bin", "win32", "x64", "yt-dlp.exe");
+const appRouteTurboRuntimePath = path.join(
+  appRoot,
+  ".next",
+  "standalone",
+  "node_modules",
+  "next",
+  "dist",
+  "compiled",
+  "next-server",
+  "app-route-turbo.runtime.prod.js"
+);
 
 assertExists(appRoot, "desktop app root");
 assertExists(serverEntry, "Next standalone server entry");
@@ -21,6 +32,7 @@ assertExists(queryEnginePath, "Prisma Windows query engine");
 assertExists(ffmpegPath, "packaged FFmpeg binary");
 assertExists(ffprobePath, "packaged FFprobe binary");
 assertExists(ytdlpPath, "packaged yt-dlp binary");
+assertExists(appRouteTurboRuntimePath, "Next app-route turbo runtime");
 
 const standaloneRequire = createRequire(serverEntry);
 const prismaClientPath = standaloneRequire.resolve("@prisma/client");
@@ -41,6 +53,7 @@ console.log("Desktop package smoke check passed.");
 console.log(`@prisma/client: ${prismaClientPath}`);
 console.log(`query engine: ${queryEnginePath}`);
 console.log(`yt-dlp: ${ytdlpVersion}`);
+console.log(`app route runtime: ${appRouteTurboRuntimePath}`);
 
 function assertExists(target, label) {
   if (!fs.existsSync(target)) {

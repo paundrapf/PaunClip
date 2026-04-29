@@ -8,6 +8,7 @@ const standaloneDir = path.join(root, ".next", "standalone");
 copyIfExists(path.join(root, ".next", "static"), path.join(standaloneDir, ".next", "static"));
 copyIfExists(path.join(root, "public"), path.join(standaloneDir, "public"));
 copyIfExists(path.join(root, "prisma"), path.join(standaloneDir, "prisma"));
+copyNextServerRuntimeFiles();
 removeIfExists(path.join(standaloneDir, "storage"));
 removeIfExists(path.join(standaloneDir, ".env"));
 removeIfExists(path.join(standaloneDir, ".env.local"));
@@ -45,6 +46,28 @@ function removeIfExists(target) {
     return;
   }
   fs.rmSync(target, { recursive: true, force: true });
+}
+
+function copyNextServerRuntimeFiles() {
+  const sourceDir = path.join(root, "node_modules", "next", "dist", "compiled", "next-server");
+  const targetDir = path.join(
+    standaloneDir,
+    "node_modules",
+    "next",
+    "dist",
+    "compiled",
+    "next-server"
+  );
+  if (!fs.existsSync(sourceDir) || !fs.existsSync(targetDir)) {
+    return;
+  }
+
+  for (const file of fs.readdirSync(sourceDir)) {
+    if (!file.endsWith(".runtime.prod.js")) {
+      continue;
+    }
+    fs.copyFileSync(path.join(sourceDir, file), path.join(targetDir, file));
+  }
 }
 
 function materializeReparsePoints(targetDir) {

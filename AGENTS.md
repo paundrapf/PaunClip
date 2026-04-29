@@ -218,6 +218,7 @@ Desktop:
 - Electron DB bootstrap must apply migrations through `_paunclip_migrations`; do not reintroduce "skip if DB file exists".
 - Packaged media tools should resolve from env/bundled package resources before PATH. Do not require a fresh user to install Node, Python, FFmpeg, FFprobe, or yt-dlp separately for normal Windows desktop usage.
 - Electron logs belong under userData `logs`, and server stdout/stderr should be persisted there.
+- Next standalone packaging can miss app-route runtime files under `node_modules/next/dist/compiled/next-server`; keep `prepare-standalone.cjs` copying `*.runtime.prod.js`, and keep `desktop:smoke` checking `app-route-turbo.runtime.prod.js`.
 - Run `npm run desktop:smoke` after `desktop:pack` when changing Electron or package files.
 - Do not commit desktop build output under `dist/desktop`.
 
