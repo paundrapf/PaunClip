@@ -23,6 +23,9 @@ export function createFallbackTranscript(params: {
 
   return {
     language: params.language,
-    segments
+    segments,
+    source: "fallback",
+    quality: "fallback",
+    failureReason: params.label ?? "Fallback transcript"
   };
 }

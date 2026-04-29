@@ -12,6 +12,24 @@ removeIfExists(path.join(standaloneDir, "storage"));
 removeIfExists(path.join(standaloneDir, ".env"));
 removeIfExists(path.join(standaloneDir, ".env.local"));
 removeIfExists(path.join(standaloneDir, ".env.production"));
+removeIfExists(path.join(standaloneDir, "src"));
+removeIfExists(path.join(standaloneDir, "tests"));
+removeIfExists(path.join(standaloneDir, "docs"));
+removeIfExists(path.join(standaloneDir, "assets"));
+removeIfExists(path.join(standaloneDir, "dist"));
+removeIfExists(path.join(standaloneDir, "electron"));
+removeIfExists(path.join(standaloneDir, "vendor"));
+removeIfExists(path.join(standaloneDir, "scripts"));
+removeIfExists(path.join(standaloneDir, "CONTEXT.md"));
+removeIfExists(path.join(standaloneDir, "AGENTS.md"));
+removeIfExists(path.join(standaloneDir, "README.md"));
+removeIfExists(path.join(standaloneDir, "eslint.config.mjs"));
+removeIfExists(path.join(standaloneDir, "next.config.ts"));
+removeIfExists(path.join(standaloneDir, "package-lock.json"));
+removeIfExists(path.join(standaloneDir, "postcss.config.mjs"));
+removeIfExists(path.join(standaloneDir, "tsconfig.json"));
+removeIfExists(path.join(standaloneDir, "tsconfig.tsbuildinfo"));
+removeIfExists(path.join(standaloneDir, "vitest.config.ts"));
 materializeReparsePoints(path.join(standaloneDir, ".next", "node_modules"));
 
 function copyIfExists(from, to) {

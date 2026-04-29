@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const fs = require("node:fs");
+const { execFileSync } = require("node:child_process");
 const { createRequire } = require("node:module");
 const path = require("node:path");
 
@@ -8,12 +9,18 @@ const appRoot = path.join(root, "dist", "desktop", "win-unpacked", "resources", 
 const serverEntry = path.join(appRoot, ".next", "standalone", "server.js");
 const generatedClientDir = path.join(appRoot, ".next", "standalone", "node_modules", ".prisma", "client");
 const queryEnginePath = path.join(generatedClientDir, "query_engine-windows.dll.node");
+const ffmpegPath = path.join(appRoot, ".next", "standalone", "node_modules", "ffmpeg-static", "ffmpeg.exe");
+const ffprobePath = path.join(appRoot, ".next", "standalone", "node_modules", "ffprobe-static", "bin", "win32", "x64", "ffprobe.exe");
+const ytdlpPath = path.join(root, "dist", "desktop", "win-unpacked", "resources", "bin", "win32", "x64", "yt-dlp.exe");
 
 assertExists(appRoot, "desktop app root");
 assertExists(serverEntry, "Next standalone server entry");
 assertMissing(path.join(appRoot, "node_modules"), "root app node_modules");
 assertExists(generatedClientDir, "Prisma generated client");
 assertExists(queryEnginePath, "Prisma Windows query engine");
+assertExists(ffmpegPath, "packaged FFmpeg binary");
+assertExists(ffprobePath, "packaged FFprobe binary");
+assertExists(ytdlpPath, "packaged yt-dlp binary");
 
 const standaloneRequire = createRequire(serverEntry);
 const prismaClientPath = standaloneRequire.resolve("@prisma/client");
@@ -25,10 +32,15 @@ const { PrismaClient } = standaloneRequire("@prisma/client");
 if (typeof PrismaClient !== "function") {
   throw new Error("@prisma/client did not export PrismaClient");
 }
+const ytdlpVersion = execFileSync(ytdlpPath, ["--version"], { encoding: "utf8" }).trim();
+if (!ytdlpVersion) {
+  throw new Error("Packaged yt-dlp did not return a version.");
+}
 
 console.log("Desktop package smoke check passed.");
 console.log(`@prisma/client: ${prismaClientPath}`);
 console.log(`query engine: ${queryEnginePath}`);
+console.log(`yt-dlp: ${ytdlpVersion}`);
 
 function assertExists(target, label) {
   if (!fs.existsSync(target)) {

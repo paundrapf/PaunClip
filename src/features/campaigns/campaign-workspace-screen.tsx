@@ -26,6 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
+import { PreflightPanel } from "@/features/system/preflight-panel";
 import { trpc } from "@/features/trpc/client";
 import {
   campaignVideoStatusLabel,
@@ -95,6 +96,16 @@ export function CampaignWorkspaceScreen({ campaignId }: { campaignId: string }) 
     refetchInterval: 2000
   });
   const settings = trpc.settings.get.useQuery();
+  const preflightConfig = sessionConfigSchema.parse({
+    ...batchConfig,
+    targetClipCount: batchConfig.clipsPerVideo,
+    promptMode: "campaign_batch"
+  });
+  const preflight = trpc.settings.preflight.useQuery({
+    sourceType: "youtube",
+    operation: "campaign",
+    config: preflightConfig
+  });
   const updateCampaign = trpc.campaign.update.useMutation();
   const fetchVideos = trpc.campaign.fetchVideos.useMutation();
   const setVideoSelection = trpc.campaign.setVideoSelection.useMutation({
@@ -120,6 +131,7 @@ export function CampaignWorkspaceScreen({ campaignId }: { campaignId: string }) 
   const allVideosSelected = Boolean(videos.length) && videos.every((video) => selectedVideoIds.includes(video.id));
   const selectedClipTotal = selectedVideoIds.reduce((total, videoId) => total + getVideoClipCount(videoId), 0);
   const captionPresets = settings.data?.captionPresets ?? [];
+  const startBlocked = Boolean(preflight.data?.blockers.length);
 
   useEffect(() => {
     if (preferencesApplied || !settings.data?.preferences) {
@@ -283,11 +295,31 @@ export function CampaignWorkspaceScreen({ campaignId }: { campaignId: string }) 
       });
       return;
     }
+    if (startBlocked) {
+      const description = preflight.data?.blockers[0]?.message ?? "Complete setup before starting a campaign batch.";
+      notify({
+        type: "warning",
+        title: "Setup required",
+        description
+      });
+      setMessage(description);
+      return;
+    }
     setFocusedStep("prepare");
     setPrepareOpen(true);
   }
 
   async function startSelectedVideos() {
+    if (startBlocked) {
+      const description = preflight.data?.blockers[0]?.message ?? "Complete setup before starting a campaign batch.";
+      setMessage(description);
+      notify({
+        type: "warning",
+        title: "Setup required",
+        description
+      });
+      return;
+    }
     try {
       const result = await startBatch.mutateAsync({
         campaignId,
@@ -383,6 +415,7 @@ export function CampaignWorkspaceScreen({ campaignId }: { campaignId: string }) 
           {message}
         </div>
       ) : null}
+      <PreflightPanel report={preflight.data} />
 
       <section className="grid min-w-0 gap-5 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.72)] p-5 shadow-[var(--shadow-tight)] sm:p-6">
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
@@ -467,7 +500,7 @@ export function CampaignWorkspaceScreen({ campaignId }: { campaignId: string }) 
                 </Button>
               </>
             ) : null}
-            <Button type="button" variant="primary" disabled={selectedVideoIds.length === 0 || startBatch.isPending} onClick={openPrepareBatch}>
+            <Button type="button" variant="primary" disabled={selectedVideoIds.length === 0 || startBatch.isPending || startBlocked} onClick={openPrepareBatch}>
               <PlayCircle className="h-4 w-4" />
               Start clipping selected videos
             </Button>

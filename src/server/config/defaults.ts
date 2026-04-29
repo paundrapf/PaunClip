@@ -1,9 +1,10 @@
 import "server-only";
 import type { AppSettings } from "@/shared/schemas/settings";
 import { DEFAULT_CAPTION_PRESETS } from "@/shared/constants/caption-presets";
-import { DEFAULT_LANGUAGE, DEFAULT_OUTPUT_DIR } from "@/shared/constants/app";
+import { DEFAULT_LANGUAGE } from "@/shared/constants/app";
 import { buildProviderConfig } from "@/shared/constants/ai-providers";
 import { DEFAULT_HIGHLIGHT_SYSTEM_PROMPT } from "@/server/ai/prompts/highlight-finder";
+import { resolveOutputDirectory } from "@/server/runtime/paths";
 
 export const defaultAppSettings: AppSettings = {
   aiProviders: {
@@ -28,7 +29,7 @@ export const defaultAppSettings: AppSettings = {
     youtubePath: null,
     lastUpdated: null
   },
-  outputDirectory: DEFAULT_OUTPUT_DIR,
+  outputDirectory: resolveOutputDirectory(),
   preferences: {
     defaultLanguage: DEFAULT_LANGUAGE,
     defaultAspectRatio: "9:16",

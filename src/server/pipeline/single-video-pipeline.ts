@@ -36,7 +36,6 @@ import {
 import { transcribeAudioWithOpenAICompatible } from "@/server/transcription/openai-transcriber";
 import { normalizeTranscriptForShorts } from "@/server/transcription/normalize-transcript";
 import { parseSrt } from "@/server/transcription/srt";
-import { createFallbackTranscript } from "@/server/transcription/fallback";
 import type { JobContext } from "@/server/jobs/runner";
 
 const renderer = new FfmpegClipRenderer();
@@ -200,7 +199,12 @@ async function ingestSource(sessionId: string, context: JobContext) {
     );
     const durationSeconds = Math.round(metadata.duration ?? session.durationSeconds ?? 60);
     const normalizedSubtitleTranscript = subtitleResult
-      ? normalizeTranscriptForShorts(subtitleResult.transcript, { language: config.language ?? "id" })
+      ? withTranscriptMetadata(
+          normalizeTranscriptForShorts(subtitleResult.transcript, { language: config.language ?? "id" }),
+          "youtube_subtitle",
+          undefined,
+          "segment_timestamps"
+        )
       : undefined;
 
     await db.session.update({
@@ -258,8 +262,8 @@ async function transcribeSession(sessionId: string, context: JobContext) {
   const audioPath = sessionPath(sessionId, "audio.wav");
   const language = config.language ?? "id";
   const transcript = config.manualTranscriptSrt
-    ? parseSrt(config.manualTranscriptSrt, language)
-    : await transcribeOrFallback({
+    ? withTranscriptMetadata(parseSrt(config.manualTranscriptSrt, language), "manual_srt", undefined, "segment_timestamps")
+    : await transcribeOrThrow({
         sessionId,
         audioPath,
         language,
@@ -267,7 +271,12 @@ async function transcribeSession(sessionId: string, context: JobContext) {
         captionConfig: settings.aiProviders.captionMaker,
         log: context.log
       });
-  const normalizedTranscript = normalizeTranscriptForShorts(transcript, { language });
+  const normalizedTranscript = withTranscriptMetadata(
+    normalizeTranscriptForShorts(transcript, { language }),
+    transcript.source ?? "ai_transcription",
+    transcript.failureReason,
+    transcript.quality
+  );
 
   await db.session.update({
     where: { id: sessionId },
@@ -289,6 +298,7 @@ async function analyzeHighlights(sessionId: string, context: JobContext) {
     language,
     segments: []
   });
+  assertUsableTranscript(transcript);
   let highlights: Highlight[];
   try {
     highlights = await withRetry(
@@ -356,6 +366,7 @@ async function renderHighlights(sessionId: string, context: JobContext) {
     language,
     segments: []
   });
+  assertUsableTranscript(transcript);
   const captionPreset =
     settings.captionPresets.find((preset) => preset.id === config.captionStyleId) ??
     settings.captionPresets[0];
@@ -639,6 +650,7 @@ async function rerenderClip(clipId: string, context: JobContext) {
     language,
     segments: []
   });
+  assertUsableTranscript(transcript);
   const metadata = readClipRenderMetadata(clip.renderJson);
   const captionStyleId = metadata.draft?.captionStyleId ?? config.captionStyleId;
   const captionPreset =
@@ -974,7 +986,7 @@ function retryOptions(context: JobContext, label: string, attempts = 3) {
   };
 }
 
-async function transcribeOrFallback(params: {
+async function transcribeOrThrow(params: {
   sessionId: string;
   audioPath: string;
   language: string;
@@ -983,14 +995,10 @@ async function transcribeOrFallback(params: {
   log: JobContext["log"];
 }): Promise<Transcript> {
   if (!params.captionConfig.apiKey) {
-    await params.log("No transcription API key configured; using fallback transcript", {
+    await params.log("No transcription API key configured", {
       sessionId: params.sessionId
     });
-    return createFallbackTranscript({
-      durationSeconds: params.durationSeconds,
-      language: params.language,
-      label: "No API key"
-    });
+    throw new Error("Configure Caption Maker before clipping, or upload an SRT transcript.");
   }
 
   if (!providerSupportsCapability(params.captionConfig, "transcription")) {
@@ -998,18 +1006,14 @@ async function transcribeOrFallback(params: {
       provider: params.captionConfig.provider,
       model: params.captionConfig.model
     });
-    return createFallbackTranscript({
-      durationSeconds: params.durationSeconds,
-      language: params.language,
-      label: "Transcription fallback"
-    });
+    throw new Error("Caption Maker provider does not support transcription. Choose OpenAI, Groq, or upload SRT.");
   }
 
   try {
     await params.log("Transcribing audio with configured AI provider", {
       language: params.language
     });
-    return await withRetry(
+    const transcript = await withRetry(
       () =>
         transcribeAudioWithOpenAICompatible({
           audioPath: params.audioPath,
@@ -1028,14 +1032,40 @@ async function transcribeOrFallback(params: {
           })
       }
     );
+    return withTranscriptMetadata(transcript, "ai_transcription");
   } catch (error) {
-    await params.log("AI transcription failed; using fallback transcript", {
+    await params.log("AI transcription failed", {
       error: serializeError(error)
     });
-    return createFallbackTranscript({
-      durationSeconds: params.durationSeconds,
-      language: params.language,
-      label: "Transcription fallback"
-    });
+    throw new Error("Transcription failed. Check Caption Maker settings or upload an SRT transcript.");
+  }
+}
+
+function withTranscriptMetadata(
+  transcript: Transcript,
+  source: NonNullable<Transcript["source"]>,
+  failureReason?: string,
+  quality?: NonNullable<Transcript["quality"]>
+): Transcript {
+  return {
+    ...transcript,
+    source,
+    quality: quality ?? (source === "fallback" ? "fallback" : inferTranscriptQuality(transcript)),
+    failureReason
+  };
+}
+
+function inferTranscriptQuality(transcript: Transcript): NonNullable<Transcript["quality"]> {
+  return transcript.segments.some((segment) => segment.words.length > 0)
+    ? "word_timestamps"
+    : "segment_timestamps";
+}
+
+function assertUsableTranscript(transcript: Transcript) {
+  if (transcript.source === "fallback" || transcript.quality === "fallback") {
+    throw new Error("Transcript fallback cannot be analyzed. Configure Caption Maker or upload an SRT transcript.");
+  }
+  if (transcript.segments.length === 0) {
+    throw new Error("No transcript is available. Configure Caption Maker or upload an SRT transcript.");
   }
 }

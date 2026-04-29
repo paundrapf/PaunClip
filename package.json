@@ -9,7 +9,8 @@
     "build": "next build",
     "start": "next start",
     "desktop:dev": "concurrently -k \"npm run dev\" \"wait-on http://127.0.0.1:3000 && electron .\"",
-    "desktop:build": "npm run build && node scripts/prepare-standalone.cjs",
+    "desktop:tools": "node scripts/download-ytdlp.cjs",
+    "desktop:build": "npm run desktop:tools && npm run build && node scripts/prepare-standalone.cjs",
     "desktop:pack": "npm run desktop:build && electron-builder --win --x64",
     "desktop:smoke": "node scripts/smoke-desktop-package.cjs",
     "lint": "eslint .",
@@ -31,6 +32,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
     "lucide-react": "^0.503.0",
     "next": "^16.2.2",
     "openai": "^4.96.2",
@@ -86,6 +88,15 @@
       "!.next/standalone/.env",
       "!.next/standalone/.env.*",
       "!.next/standalone/**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/bin",
+        "to": "bin",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "win": {
       "signAndEditExecutable": false,

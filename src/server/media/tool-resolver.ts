@@ -1,5 +1,6 @@
 import "server-only";
 import ffmpegStatic from "ffmpeg-static";
+import ffprobeStatic from "ffprobe-static";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { env } from "@/server/config/env";
@@ -20,6 +21,8 @@ export function getFfmpegCommand() {
 }
 
 export function getFfprobeCommand() {
+  const packageFfprobe =
+    typeof ffprobeStatic === "string" ? ffprobeStatic : ffprobeStatic.path;
   const ffmpegCommand = getFfmpegCommand();
   const ffmpegSibling =
     path.isAbsolute(ffmpegCommand) || ffmpegCommand.includes(path.sep)
@@ -28,7 +31,7 @@ export function getFfprobeCommand() {
 
   return resolveTool({
     envValue: env.FFPROBE_PATH,
-    packageValue: ffmpegSibling,
+    packageValue: packageFfprobe || ffmpegSibling,
     fallback: "ffprobe",
     binaryNames: process.platform === "win32" ? ["ffprobe.exe", "ffprobe"] : ["ffprobe"]
   }).command;

@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { SelectField } from "@/components/ui/select-field";
 import { useToast } from "@/components/ui/toast";
+import { PreflightPanel } from "@/features/system/preflight-panel";
 import { DEFAULT_CAPTION_PRESETS } from "@/shared/constants/caption-presets";
 import { CONTENT_PRESET_OPTIONS, REFRAME_MODE_OPTIONS } from "@/shared/reframe";
 import { sessionConfigSchema, type SessionConfig } from "@/shared/schemas/session";
@@ -27,6 +28,15 @@ export function WorkflowScreen() {
   const [config, setConfig] = useState<SessionConfig>(sessionConfigSchema.parse({}));
   const [preferencesApplied, setPreferencesApplied] = useState(false);
   const settings = trpc.settings.get.useQuery();
+  const preflight = trpc.settings.preflight.useQuery({
+    sourceType: uploadId ? "upload" : "youtube",
+    operation: "create",
+    config: sessionConfigSchema.parse({
+      ...config,
+      manualTranscriptSrt: manualTranscriptSrt || undefined
+    }),
+    hasTranscript: Boolean(manualTranscriptSrt)
+  });
   const createSession = trpc.session.create.useMutation({
     onSuccess: ({ session }) => {
       notify({
@@ -47,6 +57,7 @@ export function WorkflowScreen() {
   });
 
   const isWorking = createSession.isPending;
+  const startBlocked = Boolean(preflight.data?.blockers.length);
 
   useEffect(() => {
     if (preferencesApplied || !settings.data?.preferences) {
@@ -108,6 +119,16 @@ export function WorkflowScreen() {
       ...config,
       manualTranscriptSrt: manualTranscriptSrt || undefined
     });
+    if (startBlocked) {
+      const message = preflight.data?.blockers[0]?.message ?? "Complete setup before clipping.";
+      setError(message);
+      notify({
+        type: "warning",
+        title: "Setup required",
+        description: message
+      });
+      return;
+    }
 
     if (uploadId) {
       await createSession
@@ -151,7 +172,7 @@ export function WorkflowScreen() {
             Pick a source, choose the rules, then decide whether PaunClip renders immediately or waits for review.
           </p>
         </div>
-        <Button variant="primary" onClick={() => void start()} disabled={isWorking}>
+        <Button variant="primary" onClick={() => void start()} disabled={isWorking || startBlocked}>
           {isWorking ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
           {config.renderMode === "review" ? "Analyze first" : "Start clipping"}
         </Button>
@@ -258,6 +279,7 @@ export function WorkflowScreen() {
             {uploadedName ? <Badge>{uploadedName}</Badge> : null}
             {manualTranscriptSrt ? <Badge>SRT loaded</Badge> : null}
             {error ? <p className="break-words text-sm font-medium text-[#ff9a9a]">{error}</p> : null}
+            <PreflightPanel report={preflight.data} />
           </div>
         </div>
 

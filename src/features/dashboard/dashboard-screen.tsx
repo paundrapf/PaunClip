@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
+import { PreflightPanel } from "@/features/system/preflight-panel";
 import { trpc } from "@/features/trpc/client";
 import { APP_NAME } from "@/shared/constants/app";
 import { BRAND_ASSETS } from "@/shared/constants/brand";
@@ -75,6 +76,11 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const sessions = trpc.session.list.useQuery(undefined, { refetchInterval: 3000 });
+  const preflight = trpc.settings.preflight.useQuery({
+    sourceType: "youtube",
+    operation: "create",
+    config: defaultConfig
+  });
   const createSession = trpc.session.create.useMutation({
     onSuccess: ({ session }) => {
       notify({
@@ -95,6 +101,7 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
   });
 
   const isWorking = createSession.isPending;
+  const startBlocked = Boolean(preflight.data?.blockers.length);
 
   async function submitUrl() {
     setError("");
@@ -104,6 +111,16 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
         type: "warning",
         title: "Source is empty",
         description: "Paste a YouTube URL or upload a video first."
+      });
+      return;
+    }
+    if (startBlocked) {
+      const message = preflight.data?.blockers[0]?.message ?? "Complete setup before clipping.";
+      setError(message);
+      notify({
+        type: "warning",
+        title: "Setup required",
+        description: message
       });
       return;
     }
@@ -254,7 +271,7 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
                 {isWorking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
                 Upload
               </Button>
-              <Button type="submit" variant="primary" className="min-w-52" disabled={isWorking}>
+              <Button type="submit" variant="primary" className="min-w-52" disabled={isWorking || startBlocked}>
                 {isWorking ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
                 Start clipping
               </Button>
@@ -263,6 +280,7 @@ export function DashboardScreen({ mode = "home" }: { mode?: "home" | "projects" 
                 Advanced config
               </Button>
             </div>
+            <PreflightPanel report={preflight.data} />
           </form>
         </div>
         <aside className="grid min-w-0 content-start gap-3 rounded-lg border border-[var(--border)] bg-[rgb(12_12_10_/_0.78)] p-5 shadow-[var(--shadow-tight)]">

@@ -10,6 +10,10 @@ const envSchema = z.object({
   FFMPEG_PATH: z.string().optional().default(""),
   FFPROBE_PATH: z.string().optional().default(""),
   YTDLP_PATH: z.string().optional().default("yt-dlp"),
+  PAUNCLIP_DESKTOP: z.string().optional().default(""),
+  PAUNCLIP_LOCAL_TOKEN: z.string().optional().default(""),
+  PAUNCLIP_LOG_DIR: z.string().optional().default(""),
+  MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024 * 1024),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   PRISMA_QUERY_LOGS: z
     .string()
@@ -29,3 +33,7 @@ export const absoluteOutputDir = path.resolve(
   /* turbopackIgnore: true */ process.cwd(),
   env.OUTPUT_DIR
 );
+export const absoluteLogDir = env.PAUNCLIP_LOG_DIR
+  ? path.resolve(/* turbopackIgnore: true */ process.cwd(), env.PAUNCLIP_LOG_DIR)
+  : path.resolve(absoluteStorageRoot, "logs");
+export const isDesktopRuntime = env.PAUNCLIP_DESKTOP === "1";

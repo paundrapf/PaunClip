@@ -3,8 +3,15 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { loadAIProviderModels, validateAIProviderConfig } from "@/server/ai/provider-router";
 import { getSettings, maskSettings, saveSettings } from "@/server/config/settings-store";
-import { cleanupStorage, getStorageStats, openOutputDirectory } from "@/server/storage/maintenance";
+import {
+  cleanupStorage,
+  getStorageStats,
+  openLogsDirectory,
+  openOutputDirectory
+} from "@/server/storage/maintenance";
+import { getRuntimeInfo } from "@/server/runtime/paths";
 import { getSystemHealth } from "@/server/system/health";
+import { getPreflightReport, preflightInputSchema } from "@/server/system/preflight";
 import {
   AI_PROVIDER_PRESETS,
   AI_PROVIDER_TASKS,
@@ -35,6 +42,14 @@ export const settingsRouter = createTRPCRouter({
 
   storageStats: publicProcedure.query(async () => {
     return getStorageStats();
+  }),
+
+  runtimeInfo: publicProcedure.query(() => {
+    return getRuntimeInfo();
+  }),
+
+  preflight: publicProcedure.input(preflightInputSchema).query(async ({ input }) => {
+    return getPreflightReport(input);
   }),
 
   update: publicProcedure.input(appSettingsSchema).mutation(async ({ input }) => {
@@ -101,6 +116,10 @@ export const settingsRouter = createTRPCRouter({
   openOutputDirectory: publicProcedure.mutation(async () => {
     const settings = await getSettings();
     return openOutputDirectory(settings.outputDirectory);
+  }),
+
+  openLogsDirectory: publicProcedure.mutation(async () => {
+    return openLogsDirectory();
   }),
 
   cleanupStorage: publicProcedure

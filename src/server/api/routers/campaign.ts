@@ -10,6 +10,7 @@ import { sessionConfigSchema } from "@/shared/schemas/session";
 import { shouldSkipCampaignVideoStart } from "@/shared/campaign/status";
 import { enqueueJob, resumeQueuedJobs } from "@/server/jobs/runner";
 import { registerPipelineJobs } from "@/server/pipeline/register";
+import { assertPreflightReady } from "@/server/system/preflight";
 import { createTRPCRouter, publicProcedure } from "../trpc";
 
 export const campaignRouter = createTRPCRouter({
@@ -217,6 +218,17 @@ export const campaignRouter = createTRPCRouter({
       }
 
       const batchConfig = campaignBatchConfigSchema.parse(input.batchConfig ?? {});
+      const preflightConfig = buildCampaignSessionConfig({
+        campaignConfigJson: campaign.configJson,
+        batchConfig,
+        targetClipCount: batchConfig.clipsPerVideo
+      });
+      await assertPreflightReady({
+        sourceType: "youtube",
+        operation: "campaign",
+        config: preflightConfig,
+        hasTranscript: Boolean(preflightConfig.manualTranscriptSrt)
+      });
       const selectedIds = new Set(
         input.videoIds ?? campaign.videos.filter((video) => video.selected).map((video) => video.id)
       );

@@ -3,8 +3,10 @@ import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { absoluteStorageRoot } from "@/server/config/env";
+import { getSettings } from "@/server/config/settings-store";
 import { db } from "@/server/db/client";
-import { ensureStorageLayout, outputPath, safeJoin, sessionPath, storagePath, tempPath } from "./paths";
+import { getRuntimeInfo, resolveOutputDirectory } from "@/server/runtime/paths";
+import { ensureStorageLayout, safeJoin, sessionPath, storagePath, tempPath } from "./paths";
 
 export type CleanupOptions = {
   temp?: boolean;
@@ -14,16 +16,20 @@ export type CleanupOptions = {
 
 export async function getStorageStats() {
   await ensureStorageLayout();
+  const settings = await getSettings();
+  const resolvedOutputPath = resolveOutputDirectory(settings.outputDirectory);
   const [storageBytes, tempBytes, outputBytes, sessionCount, clipCount] = await Promise.all([
     directorySize(absoluteStorageRoot),
     directorySize(tempPath()),
-    directorySize(outputPath()),
+    directorySize(resolvedOutputPath),
     db.session.count(),
     db.clip.count()
   ]);
 
   return {
     storageRoot: absoluteStorageRoot,
+    outputDirectory: resolvedOutputPath,
+    runtime: getRuntimeInfo(),
     storageBytes,
     tempBytes,
     outputBytes,
@@ -86,9 +92,20 @@ export async function cleanupStorage(options: CleanupOptions) {
 }
 
 export async function openOutputDirectory(outputDirectory: string) {
-  const target = path.resolve(/* turbopackIgnore: true */ process.cwd(), outputDirectory);
+  const target = resolveOutputDirectory(outputDirectory);
   await mkdir(target, { recursive: true });
+  await openDirectory(target);
+  return { path: target };
+}
 
+export async function openLogsDirectory() {
+  const target = getRuntimeInfo().logDirectory;
+  await mkdir(target, { recursive: true });
+  await openDirectory(target);
+  return { path: target };
+}
+
+async function openDirectory(target: string) {
   const command =
     process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
   const child = spawn(command, [target], {
@@ -97,16 +114,14 @@ export async function openOutputDirectory(outputDirectory: string) {
     windowsHide: true
   });
   child.unref();
-  return { path: target };
 }
 
 async function directorySize(root: string): Promise<number> {
-  const safeRoot = safeJoin(absoluteStorageRoot, path.relative(absoluteStorageRoot, root));
-  const entries = await readdir(safeRoot, { withFileTypes: true }).catch(() => []);
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
   let total = 0;
 
   for (const entry of entries) {
-    const fullPath = safeJoin(safeRoot, entry.name);
+    const fullPath = path.join(root, entry.name);
     if (entry.isDirectory()) {
       total += await directorySize(fullPath);
     } else {

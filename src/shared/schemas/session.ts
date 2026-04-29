@@ -61,6 +61,13 @@ export const transcriptSegmentSchema = z.object({
 export const transcriptSchema = z.object({
   language: z.string(),
   segments: z.array(transcriptSegmentSchema),
+  source: z
+    .enum(["youtube_subtitle", "manual_srt", "ai_transcription", "fallback"])
+    .optional(),
+  quality: z
+    .enum(["word_timestamps", "segment_timestamps", "fallback"])
+    .optional(),
+  failureReason: z.string().optional(),
   srtPath: z.string().optional()
 });
 

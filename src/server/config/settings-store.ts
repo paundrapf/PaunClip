@@ -1,10 +1,12 @@
 import "server-only";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { appSettingsSchema, type AppSettings } from "@/shared/schemas/settings";
 import { normalizeAISettings } from "@/shared/constants/ai-providers";
 import { DEFAULT_CAPTION_PRESETS } from "@/shared/constants/caption-presets";
 import { configPath, ensureStorageLayout } from "@/server/storage/paths";
+import { writePrivateJsonFile } from "@/server/storage/private-file";
+import { normalizeOutputDirectorySetting } from "@/server/runtime/paths";
 import { defaultAppSettings } from "./defaults";
 
 const SETTINGS_FILE = "settings.json";
@@ -26,7 +28,7 @@ export async function saveSettings(settings: AppSettings) {
   const parsed = normalizeSettings(appSettingsSchema.parse(settings));
   const filePath = configPath(SETTINGS_FILE);
   await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, JSON.stringify(parsed, null, 2), "utf8");
+  await writePrivateJsonFile(filePath, parsed);
   return parsed;
 }
 
@@ -34,7 +36,8 @@ function normalizeSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
     aiProviders: normalizeAISettings(settings.aiProviders),
-    captionPresets: mergeDefaultCaptionPresets(settings.captionPresets)
+    captionPresets: mergeDefaultCaptionPresets(settings.captionPresets),
+    outputDirectory: normalizeOutputDirectorySetting(settings.outputDirectory)
   };
 }
 

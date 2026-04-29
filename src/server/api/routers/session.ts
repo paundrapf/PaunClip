@@ -5,8 +5,9 @@ import { db } from "@/server/db/client";
 import { enqueueJob, resumeQueuedJobs } from "@/server/jobs/runner";
 import { registerPipelineJobs } from "@/server/pipeline/register";
 import { uploadPath } from "@/server/storage/paths";
+import { assertPreflightReady } from "@/server/system/preflight";
 import { createSessionInputSchema, sessionConfigSchema } from "@/shared/schemas/session";
-import { parseJsonWithSchema, stringifyJson } from "@/shared/schemas/primitives";
+import { parseJsonWithSchema, sourceTypeSchema, stringifyJson } from "@/shared/schemas/primitives";
 import { createTRPCRouter, publicProcedure } from "../trpc";
 
 const highlightSelectionSchema = z.object({
@@ -17,6 +18,12 @@ const highlightSelectionSchema = z.object({
 export const sessionRouter = createTRPCRouter({
   create: publicProcedure.input(createSessionInputSchema).mutation(async ({ input }) => {
     registerPipelineJobs();
+    await assertPreflightReady({
+      sourceType: input.sourceType,
+      operation: "create",
+      config: input.config,
+      hasTranscript: Boolean(input.config.manualTranscriptSrt)
+    });
 
     const downloadedPath =
       input.sourceType === "upload" && input.uploadId
@@ -53,6 +60,13 @@ export const sessionRouter = createTRPCRouter({
     if (!existing) {
       throw new Error(`Session not found: ${input}`);
     }
+    const config = parseJsonWithSchema(sessionConfigSchema, existing.configJson, sessionConfigSchema.parse({}));
+    await assertPreflightReady({
+      sourceType: sourceTypeSchema.parse(existing.sourceType),
+      operation: "create",
+      config,
+      hasTranscript: Boolean(existing.transcriptJson)
+    });
 
     const session = await db.session.update({
       where: { id: input },
@@ -94,6 +108,13 @@ export const sessionRouter = createTRPCRouter({
       if (!existing) {
         throw new Error(`Session not found: ${input.sessionId}`);
       }
+      const config = parseJsonWithSchema(sessionConfigSchema, existing.configJson, sessionConfigSchema.parse({}));
+      await assertPreflightReady({
+        sourceType: sourceTypeSchema.parse(existing.sourceType),
+        operation: "render",
+        config,
+        hasTranscript: Boolean(existing.transcriptJson)
+      });
 
       if (input.highlightIds) {
         await setSelectedHighlights(input.sessionId, input.highlightIds);

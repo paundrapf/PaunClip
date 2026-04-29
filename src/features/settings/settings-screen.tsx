@@ -69,6 +69,7 @@ export function SettingsScreen() {
   const settings = trpc.settings.get.useQuery();
   const health = trpc.settings.health.useQuery(undefined, { refetchInterval: 15_000 });
   const storageStats = trpc.settings.storageStats.useQuery(undefined, { refetchInterval: 15_000 });
+  const runtimeInfo = trpc.settings.runtimeInfo.useQuery(undefined, { refetchInterval: 30_000 });
   const utils = trpc.useUtils();
   const [active, setActive] = useState("AI providers");
   const [providerDrafts, setProviderDrafts] = useState<Partial<AppSettings["aiProviders"]>>({});
@@ -122,6 +123,10 @@ export function SettingsScreen() {
     onSuccess: (result) => showMessage("success", "Output folder opened", result.path),
     onError: (error) =>
       showMessage("error", "Output folder could not open", error.message)
+  });
+  const openLogs = trpc.settings.openLogsDirectory.useMutation({
+    onSuccess: (result) => showMessage("success", "Logs folder opened", result.path),
+    onError: (error) => showMessage("error", "Logs folder could not open", error.message)
   });
   const cleanupStorage = trpc.settings.cleanupStorage.useMutation({
     onSuccess: async (result) => {
@@ -273,6 +278,7 @@ export function SettingsScreen() {
 
   const tabs = ["AI providers", "Caption styles", "Reframe", "Output", "Cookies"];
   const currentOutputDirectory = outputDirectory ?? settings.data?.outputDirectory ?? "./storage/output";
+  const runtime = runtimeInfo.data ?? storageStats.data?.runtime;
   const currentPreferences = settings.data?.preferences
     ? { ...settings.data.preferences, ...preferenceDraft }
     : undefined;
@@ -335,6 +341,9 @@ export function SettingsScreen() {
             <section className="grid gap-4">
               <SystemHealthPanel health={health.data} loading={health.isLoading} />
               <h2 className="text-lg font-semibold text-[var(--text)]">AI providers</h2>
+              <div className="rounded-lg border border-[rgb(242_162_58_/_0.28)] bg-[var(--accent-muted)] px-4 py-3 text-sm text-[var(--muted)]">
+                API keys are stored locally on this device and are masked in the UI. Use a dedicated key for PaunClip and rotate it if this machine is shared.
+              </div>
               <div className="grid gap-4 md:grid-cols-2">
                 {providerCards.map((provider) => {
                   const value = getDraft(provider.key);
@@ -886,6 +895,13 @@ export function SettingsScreen() {
                 <StorageMetric label="Temp files" value={storageStats.data?.tempLabel ?? "..."} />
                 <StorageMetric label="Output folder" value={storageStats.data?.outputLabel ?? "..."} />
               </div>
+              <div className="grid gap-3 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.56)] p-4 text-sm md:grid-cols-2">
+                <RuntimePath label="Runtime mode" value={runtime?.mode ?? "checking"} />
+                <RuntimePath label="Storage root" value={runtime?.storageRoot ?? "..."} />
+                <RuntimePath label="Output folder" value={currentOutputDirectory} />
+                <RuntimePath label="Database" value={runtime?.databasePath ?? "..."} />
+                <RuntimePath label="Logs" value={runtime?.logDirectory ?? "..."} />
+              </div>
               <label className="mt-4 grid gap-2">
                 <span className="text-xs font-semibold text-[var(--muted-soft)]">Directory</span>
                 <div className="relative">
@@ -917,6 +933,14 @@ export function SettingsScreen() {
                     <FolderOpen className="h-4 w-4" />
                   )}
                   Open output folder
+                </Button>
+                <Button variant="secondary" onClick={() => openLogs.mutate()} disabled={openLogs.isPending}>
+                  {openLogs.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FolderOpen className="h-4 w-4" />
+                  )}
+                  Open logs folder
                 </Button>
               </div>
 
@@ -963,6 +987,9 @@ export function SettingsScreen() {
               <h2 className="text-lg font-semibold text-[var(--text)]">Cookies</h2>
               <p className="mt-2 text-sm text-[var(--muted)]">
                 Upload Netscape-format cookies.txt for private, age-restricted, or bot-protected YouTube videos.
+              </p>
+              <p className="mt-2 rounded-lg border border-[rgb(242_162_58_/_0.28)] bg-[var(--accent-muted)] px-4 py-3 text-sm text-[var(--muted)]">
+                Cookies are saved as a private local file so yt-dlp can read them. Treat this file like a password and remove it when you no longer need authenticated YouTube downloads.
               </p>
               <div className="mt-4 rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.56)] p-4">
                 <p className="text-sm font-semibold text-[var(--text)]">{health.data?.cookies.message ?? "Checking cookies..."}</p>
@@ -1088,6 +1115,15 @@ function StorageMetric({ label, value }: { label: string; value: string }) {
     <div className="rounded-lg border border-[var(--border)] bg-[rgb(7_7_6_/_0.56)] p-4">
       <p className="text-xs font-semibold text-[var(--muted-soft)]">{label}</p>
       <p className="mt-2 break-words text-xl font-semibold text-[var(--text)]">{value}</p>
+    </div>
+  );
+}
+
+function RuntimePath({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted-soft)]">{label}</p>
+      <p className="mt-1 break-words font-mono text-xs leading-5 text-[var(--muted)]">{value}</p>
     </div>
   );
 }
