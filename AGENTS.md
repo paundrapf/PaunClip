@@ -1,6 +1,6 @@
 # PaunClip Agent Operating Manual
 
-Last updated: 2026-04-29 09:49:34 +07:00.
+Last updated: 2026-04-30 20:23:36 +07:00.
 
 This file tells future AI agents how to work safely in PaunClip. Read `CONTEXT.md` first for the full memory ledger, then use this file as the day-to-day operating guide.
 
@@ -242,6 +242,10 @@ Desktop:
 - Do not copy-paste router logic into CLI commands. Extract/reuse service functions.
 - CLI must reuse shared preflight before creating sessions, rendering, or starting campaign batches.
 - `--json` must print clean machine-readable output only, with no spinner/progress noise on stdout.
+- Human CLI output may use ASCII art, ANSI colors, badges, and tables, but it must stay optional and portable.
+- Do not let ANSI colors leak into `--json` output. `--json` is for scripts and must remain valid JSON.
+- Keep `--no-color`, `NO_COLOR=1`, and `FORCE_COLOR=1` behavior working when changing CLI rendering.
+- Prefer ASCII-only CLI decorations so PowerShell, CMD, Linux shells, CI logs, and copy/paste all remain safe.
 - API keys and cookies must stay masked; prefer `--api-key-env` over direct `--api-key`.
 - Keep command names stable once published because users may script against them.
 - Run `npm run cli:smoke` after CLI/runtime/profile changes.

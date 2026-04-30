@@ -13,6 +13,22 @@ import { sourceTypeSchema } from "@/shared/schemas/primitives";
 import { sessionConfigSchema } from "@/shared/schemas/session";
 import { aiProviderConfigSchema, type AIProviderConfig } from "@/shared/schemas/settings";
 import type { CliRuntime } from "./runtime";
+import {
+  badge,
+  brand,
+  cliBanner,
+  command as commandText,
+  danger,
+  dim,
+  info,
+  keyValue,
+  nextSteps,
+  pathText,
+  section,
+  shouldUseColor,
+  shortId,
+  table,
+} from "./ui";
 
 type CliContext = {
   args: string[];
@@ -21,7 +37,18 @@ type CliContext = {
   quiet: boolean;
   verbose: boolean;
   yes: boolean;
+  color: boolean;
   caller: ReturnType<typeof appRouter.createCaller>;
+};
+
+type ParsedGlobalOptions = {
+  args: string[];
+  json: boolean;
+  quiet: boolean;
+  verbose: boolean;
+  yes: boolean;
+  noColor: boolean;
+  color: boolean;
 };
 
 type ParsedOptions = {
@@ -51,13 +78,14 @@ export async function runCli(argv: string[], runtime: CliRuntime) {
       quiet: globals.quiet,
       verbose: globals.verbose,
       yes: globals.yes,
+      color: globals.color,
       caller
     };
 
     await dispatch(context);
     return 0;
   } catch (error) {
-    return handleError(error, globals.json);
+    return handleError(error, globals);
   }
 }
 
@@ -70,7 +98,7 @@ async function dispatch(context: CliContext) {
   }
 
   if (command === "version" || command === "--version" || command === "-v") {
-    output(context, { version: await getPackageVersion() }, `PaunClip ${await getPackageVersion()}`);
+    output(context, { version: await getPackageVersion() }, `${brand(context.color, "PaunClip")} ${await getPackageVersion()}`);
     return;
   }
 
@@ -148,20 +176,7 @@ async function commandDoctor(context: CliContext, argv: string[]) {
   output(
     context,
     { runtime, health, preflight },
-    [
-      "PaunClip doctor",
-      `Profile: ${context.runtime.profilePath}`,
-      `Storage: ${runtime.storageRoot}`,
-      `Output: ${runtime.outputDirectory}`,
-      `Database: ${runtime.databasePath}`,
-      "",
-      `FFmpeg: ${health.tools.ffmpeg.ok ? "ready" : "missing"}`,
-      `FFprobe: ${health.tools.ffprobe.ok ? "ready" : "missing"}`,
-      `yt-dlp: ${health.tools.ytdlp.ok ? "ready" : "missing"}`,
-      `Cookies: ${health.cookies.message}`,
-      `Preflight: ${preflight.ok ? "ready" : "blocked"}`,
-      ...preflight.issues.map((issue) => `- [${issue.severity}] ${issue.message}`)
-    ].join("\n")
+    formatDoctorReport(context, runtime, health, preflight)
   );
 }
 
@@ -229,7 +244,7 @@ async function commandCreateClips(context: CliContext, argv: string[]) {
       stage: session?.stage,
       next: [`paunclip render ${result.session.id} --all`]
     },
-    formatSessionSummary(session, [`Next: paunclip render ${result.session.id} --all`])
+    formatSessionSummary(context, session, [`paunclip render ${result.session.id} --all`])
   );
 }
 
@@ -272,7 +287,7 @@ async function commandRender(context: CliContext, argv: string[]) {
       status: updated?.status,
       clips: updated?.clips ?? []
     },
-    formatSessionSummary(updated)
+    formatSessionSummary(context, updated)
   );
 }
 
@@ -345,16 +360,14 @@ async function commandCampaign(context: CliContext, subcommand: string | undefin
     output(
       context,
       { campaigns },
-      campaigns
-        .map((campaign) => `${campaign.id}  ${campaign.name}  videos=${campaign.videos.length}`)
-        .join("\n") || "No campaigns yet."
+      formatCampaignList(context, campaigns)
     );
     return;
   }
 
   if (subcommand === "show") {
     const campaign = await requireCampaign(context, parsed.positionals[0]);
-    output(context, { campaign }, formatCampaign(campaign));
+    output(context, { campaign }, formatCampaign(context, campaign));
     return;
   }
 
@@ -372,7 +385,7 @@ async function commandCampaign(context: CliContext, subcommand: string | undefin
 
   if (subcommand === "videos") {
     const campaign = await requireCampaign(context, parsed.positionals[0]);
-    output(context, { videos: campaign.videos }, formatCampaignVideos(campaign.videos));
+    output(context, { videos: campaign.videos }, formatCampaignVideos(context, campaign.videos));
     return;
   }
 
@@ -422,18 +435,14 @@ async function commandCampaign(context: CliContext, subcommand: string | undefin
     output(
       context,
       result,
-      [
-        `Queued: ${result.queuedCount}`,
-        `Skipped: ${result.skippedCount}`,
-        ...result.sessionIds.map((id) => `Review/render: paunclip render ${id} --all`)
-      ].join("\n")
+      formatCampaignStartResult(context, result)
     );
     return;
   }
 
   if (subcommand === "watch") {
     const campaign = await requireCampaign(context, parsed.positionals[0]);
-    output(context, { campaign }, formatCampaign(campaign));
+    output(context, { campaign }, formatCampaign(context, campaign));
     return;
   }
 
@@ -446,8 +455,7 @@ async function commandSessions(context: CliContext, subcommand: string | undefin
     output(
       context,
       { sessions },
-      sessions.map((session) => `${session.id}  ${session.status}/${session.stage}  ${session.sourceTitle ?? session.sourceUrl ?? ""}`).join("\n") ||
-        "No sessions yet."
+      formatSessionList(context, sessions)
     );
     return;
   }
@@ -469,7 +477,7 @@ async function commandSession(context: CliContext, subcommand: string | undefine
 
   if (subcommand === "show") {
     const session = await context.caller.session.getById(sessionId);
-    output(context, { session }, formatSessionSummary(session));
+    output(context, { session }, formatSessionSummary(context, session));
     return;
   }
 
@@ -513,8 +521,7 @@ async function commandJobs(context: CliContext, subcommand: string | undefined, 
     output(
       context,
       { jobs },
-      jobs.map((job) => `${job.id}  ${job.status}  ${job.progress}%  session=${job.sessionId}`).join("\n") ||
-        "No jobs yet."
+      formatJobList(context, jobs)
     );
     return;
   }
@@ -727,7 +734,7 @@ async function waitForJob(context: CliContext, jobId: string) {
       const last = events.at(-1);
       if (last) {
         lastEventId = last.id;
-        console.error(`[${job.progress}%] ${last.message}`);
+        console.error(`${badge(context.color, job.status)} ${info(context.color, `${job.progress}%`)} ${last.message}`);
       }
     }
     if (TERMINAL_JOB_STATUSES.has(job.status)) {
@@ -750,7 +757,7 @@ async function assertCliPreflight(
   }
   if (!context.json && !context.quiet && report.warnings.length > 0) {
     for (const warning of report.warnings) {
-      console.error(`[warning] ${warning.message}`);
+      console.error(`${badge(context.color, "warning")} ${warning.message}`);
     }
   }
   return report;
@@ -775,12 +782,13 @@ async function importLocalVideo(source: string) {
   return uploadId;
 }
 
-function parseGlobalOptions(argv: string[]) {
+function parseGlobalOptions(argv: string[]): ParsedGlobalOptions {
   const args: string[] = [];
   let json = false;
   let quiet = false;
   let verbose = false;
   let yes = false;
+  let noColor = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -792,6 +800,8 @@ function parseGlobalOptions(argv: string[]) {
       verbose = true;
     } else if (arg === "--yes") {
       yes = true;
+    } else if (arg === "--no-color") {
+      noColor = true;
     } else if (arg === "--profile") {
       index += 1;
     } else if (arg.startsWith("--profile=")) {
@@ -801,7 +811,7 @@ function parseGlobalOptions(argv: string[]) {
     }
   }
 
-  return { args, json, quiet, verbose, yes };
+  return { args, json, quiet, verbose, yes, noColor, color: shouldUseColor({ json, noColor }) };
 }
 
 function parseOptions(argv: string[]): ParsedOptions {
@@ -986,42 +996,220 @@ function maskSettingsForCli<T extends { aiProviders: Record<string, AIProviderCo
   };
 }
 
-function formatSessionSummary(session: Awaited<ReturnType<CliContext["caller"]["session"]["getById"]>> | null, extra: string[] = []) {
+function formatDoctorReport(
+  context: CliContext,
+  runtime: Awaited<ReturnType<CliContext["caller"]["settings"]["runtimeInfo"]>>,
+  health: Awaited<ReturnType<CliContext["caller"]["settings"]["health"]>>,
+  preflight: Awaited<ReturnType<CliContext["caller"]["settings"]["preflight"]>>
+) {
+  const color = context.color;
+  const toolRows = [
+    toolRow(color, "FFmpeg", health.tools.ffmpeg),
+    toolRow(color, "FFprobe", health.tools.ffprobe),
+    toolRow(color, "yt-dlp", health.tools.ytdlp)
+  ];
+  const issueRows = preflight.issues.map((issue) => [
+    badge(color, issue.severity),
+    issue.area,
+    issue.message
+  ]);
+
+  return [
+    cliBanner(color),
+    dim(color, "Local-first clipping runtime health check"),
+    "",
+    section(color, "Runtime"),
+    keyValue(color, "Mode", runtime.mode),
+    keyValue(color, "Profile", pathText(color, context.runtime.profilePath)),
+    keyValue(color, "Storage", pathText(color, runtime.storageRoot)),
+    keyValue(color, "Output", pathText(color, runtime.outputDirectory)),
+    keyValue(color, "Database", pathText(color, runtime.databasePath)),
+    "",
+    section(color, "Tools"),
+    table(toolRows, { headers: ["Status", "Tool", "Command"], color }),
+    "",
+    section(color, "Cookies"),
+    `${badge(color, health.cookies.ok ? "ok" : health.cookies.severity)} ${health.cookies.message}`,
+    "",
+    section(color, "Preflight"),
+    preflight.ok
+      ? `${badge(color, "ready")} PaunClip is ready to create clips.`
+      : table(issueRows, { headers: ["Level", "Area", "Message"], color }),
+    preflight.ok ? "" : "",
+    preflight.ok
+      ? ""
+      : nextSteps(color, [
+          "paunclip config provider list",
+          "paunclip config cookies status",
+          "paunclip config output path"
+        ])
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function toolRow(
+  color: boolean,
+  name: string,
+  tool: { ok: boolean; command?: string; message?: string }
+) {
+  return [badge(color, tool.ok ? "ready" : "missing"), name, tool.command ?? tool.message ?? "-"];
+}
+
+function formatSessionSummary(
+  context: CliContext,
+  session: Awaited<ReturnType<CliContext["caller"]["session"]["getById"]>> | null,
+  extra: string[] = []
+) {
   if (!session) return "Session not found.";
   const highlights = session.highlights ?? [];
   const clips = session.clips ?? [];
+  const color = context.color;
   return [
-    `Session: ${session.id}`,
-    `Status: ${session.status}/${session.stage}`,
-    `Source: ${session.sourceTitle ?? session.sourceUrl ?? session.sourceType}`,
-    `Highlights: ${highlights.length}`,
-    ...highlights.map((highlight, index) => `${index + 1}. ${highlight.title} (${highlight.startTime.toFixed(1)}s-${highlight.endTime.toFixed(1)}s)`),
-    `Clips: ${clips.length}`,
-    ...clips.map((clip) => `- ${clip.title}: ${clip.masterPath ?? clip.status}`),
-    ...extra
+    section(color, "Session"),
+    keyValue(color, "ID", session.id),
+    keyValue(color, "Status", `${badge(color, session.status)} ${dim(color, session.stage)}`),
+    keyValue(color, "Source", session.sourceTitle ?? session.sourceUrl ?? session.sourceType),
+    "",
+    section(color, `Highlights (${highlights.length})`),
+    highlights.length
+      ? table(
+          highlights.map((highlight, index) => [
+            String(index + 1),
+            highlight.title,
+            `${highlight.startTime.toFixed(1)}s-${highlight.endTime.toFixed(1)}s`,
+            badge(color, highlight.status)
+          ]),
+          { headers: ["#", "Title", "Range", "Status"], color }
+        )
+      : dim(color, "No highlights yet."),
+    "",
+    section(color, `Clips (${clips.length})`),
+    clips.length
+      ? table(
+          clips.map((clip) => [clip.title, badge(color, clip.status), clip.masterPath ?? "-"]),
+          { headers: ["Title", "Status", "Output"], color }
+        )
+      : dim(color, "No rendered clips yet."),
+    extra.length ? "" : "",
+    nextSteps(color, extra)
   ].join("\n");
 }
 
-function formatCampaign(campaign: Awaited<ReturnType<CliContext["caller"]["campaign"]["getById"]>>) {
+function formatCampaign(
+  context: CliContext,
+  campaign: Awaited<ReturnType<CliContext["caller"]["campaign"]["getById"]>>
+) {
   if (!campaign) return "Campaign not found.";
+  const color = context.color;
   return [
-    `Campaign: ${campaign.name}`,
-    `ID: ${campaign.id}`,
-    `Channel: ${campaign.channelUrl ?? "-"}`,
-    `Videos: ${campaign.videos.length}`,
-    formatCampaignVideos(campaign.videos)
+    section(color, "Campaign"),
+    keyValue(color, "Name", campaign.name),
+    keyValue(color, "ID", campaign.id),
+    keyValue(color, "Channel", campaign.channelUrl ?? "-"),
+    keyValue(color, "Videos", String(campaign.videos.length)),
+    "",
+    formatCampaignVideos(context, campaign.videos)
   ].join("\n");
 }
 
-function formatCampaignVideos(videos: Array<{ id: string; videoId: string; title: string; status: string; durationSeconds: number | null; session: { status: string; _count?: { highlights: number; clips: number } } | null }>) {
-  return videos
-    .map((video, index) => {
+function formatCampaignVideos(
+  context: CliContext,
+  videos: Array<{
+    id: string;
+    videoId: string;
+    title: string;
+    status: string;
+    durationSeconds: number | null;
+    session: { status: string; _count?: { highlights: number; clips: number } } | null;
+  }>
+) {
+  if (videos.length === 0) return dim(context.color, "No videos fetched yet.");
+  return table(
+    videos.map((video, index) => {
       const duration = video.durationSeconds ? `${Math.round(video.durationSeconds)}s` : "-";
       const found = video.session?._count?.highlights ?? 0;
       const clips = video.session?._count?.clips ?? 0;
-      return `${index + 1}. ${video.id} yt:${video.videoId} ${duration} ${video.status} highlights=${found} clips=${clips} ${video.title}`;
-    })
-    .join("\n");
+      return [
+        String(index + 1),
+        shortId(video.id, 12),
+        `yt:${video.videoId}`,
+        duration,
+        badge(context.color, video.session?.status ?? video.status),
+        `${found}/${clips}`,
+        video.title
+      ];
+    }),
+    { headers: ["#", "ID", "YouTube", "Time", "Status", "H/C", "Title"], color: context.color }
+  );
+}
+
+function formatCampaignList(
+  context: CliContext,
+  campaigns: Awaited<ReturnType<CliContext["caller"]["campaign"]["list"]>>
+) {
+  if (campaigns.length === 0) return "No campaigns yet.";
+  return table(
+    campaigns.map((campaign) => [
+      shortId(campaign.id, 12),
+      campaign.name,
+      campaign.channelUrl ?? "-",
+      String(campaign.videos.length)
+    ]),
+    { headers: ["ID", "Campaign", "Source", "Videos"], color: context.color }
+  );
+}
+
+function formatCampaignStartResult(
+  context: CliContext,
+  result: Awaited<ReturnType<CliContext["caller"]["campaign"]["startBatch"]>>
+) {
+  return [
+    section(context.color, "Batch queued"),
+    keyValue(context.color, "Queued", String(result.queuedCount)),
+    keyValue(context.color, "Skipped", String(result.skippedCount)),
+    "",
+    nextSteps(
+      context.color,
+      result.sessionIds.length
+        ? result.sessionIds.map((id) => `paunclip render ${id} --all`)
+        : ["paunclip campaign videos <campaignId>"]
+    )
+  ].join("\n");
+}
+
+function formatSessionList(
+  context: CliContext,
+  sessions: Awaited<ReturnType<CliContext["caller"]["session"]["list"]>>
+) {
+  if (sessions.length === 0) return "No sessions yet.";
+  return table(
+    sessions.map((session) => [
+      shortId(session.id, 12),
+      badge(context.color, session.status),
+      session.stage,
+      String(session.highlights.length),
+      String(session.clips.length),
+      session.sourceTitle ?? session.sourceUrl ?? ""
+    ]),
+    { headers: ["ID", "Status", "Stage", "Highlights", "Clips", "Source"], color: context.color }
+  );
+}
+
+function formatJobList(
+  context: CliContext,
+  jobs: Array<{ id: string; status: string; progress: number; sessionId: string }>
+) {
+  if (jobs.length === 0) return "No jobs yet.";
+  return table(
+    jobs.map((job) => [
+      shortId(job.id, 12),
+      badge(context.color, job.status),
+      `${job.progress}%`,
+      shortId(job.sessionId, 12)
+    ]),
+    { headers: ["ID", "Status", "Progress", "Session"], color: context.color }
+  );
 }
 
 function output(context: CliContext, jsonValue: unknown, text: string) {
@@ -1046,13 +1234,13 @@ async function getPackageVersion() {
   return JSON.parse(raw).version as string;
 }
 
-function handleError(error: unknown, json: boolean) {
+function handleError(error: unknown, globals: Pick<ParsedGlobalOptions, "json" | "color">) {
   const code = error instanceof CliInputError ? 2 : error instanceof CliPreflightError ? 3 : error instanceof CliJobError ? 4 : 1;
   const message = error instanceof Error ? error.message : String(error);
-  if (json) {
+  if (globals.json) {
     console.error(JSON.stringify({ ok: false, error: { message, code } }, null, 2));
   } else {
-    console.error(message);
+    console.error(`${danger(globals.color, "Error")} ${message}`);
   }
   return code;
 }
@@ -1069,68 +1257,103 @@ function printRootHelp(context: CliContext) {
   output(
     context,
     { help: "root" },
-    `PaunClip CLI
-
-Usage:
-  paunclip <command> [options]
-
-Commands:
-  doctor
-  create clips <source>
-  create campaign <name> <youtube-source>
-  render <sessionId>
-  campaign list|show|fetch|videos|start|watch
-  sessions list
-  session show|logs|retry|cancel
-  jobs list
-  job watch|cancel
-  config init|show|doctor|provider|cookies|output|presets
-
-Global options:
-  --profile <path>   Use a specific PaunClip profile
-  --json             Machine-readable output
-  --quiet            Reduce output
-  --verbose          More diagnostics
-  --yes              Accept safe defaults
-
-Examples:
-  paunclip doctor
-  paunclip create clips "https://youtube.com/watch?v=..." --clips 3 --review
-  paunclip render <sessionId> --all
-  paunclip create campaign "My Campaign" "https://youtube.com/@channel" --fetch 20
-  paunclip campaign videos <campaignId>
-  paunclip campaign start <campaignId> --videos 1,2,3 --clips 3`
+    [
+      cliBanner(context.color),
+      dim(context.color, "Local-first AI clipping for videos, campaigns, and batch workflows."),
+      "",
+      section(context.color, "Usage"),
+      `  ${commandText(context.color, "paunclip <command> [options]")}`,
+      "",
+      section(context.color, "Core commands"),
+      table(
+        [
+          ["doctor", "Check tools, storage, providers, cookies, and preflight."],
+          ["create clips <source>", "Create highlights from one YouTube URL or local video."],
+          ["render <sessionId>", "Render selected or all highlights into clips."],
+          ["create campaign <name> <source>", "Create a campaign workspace."],
+          ["campaign fetch|videos|start", "Fetch channel videos, pick candidates, queue batch clips."],
+          ["session show|logs|retry|cancel", "Inspect and manage one session."],
+          ["jobs list / job watch", "Watch active processing jobs."],
+          ["config provider|cookies|output", "Configure AI, cookies, output, and presets."]
+        ],
+        { headers: ["Command", "What it does"], color: context.color }
+      ),
+      "",
+      section(context.color, "Global options"),
+      table(
+        [
+          ["--profile <path>", "Use a specific PaunClip profile."],
+          ["--json", "Machine-readable output with no color or banner."],
+          ["--no-color", "Disable ANSI colors for human output."],
+          ["--quiet", "Reduce output."],
+          ["--verbose", "More diagnostics."],
+          ["--yes", "Accept safe defaults."]
+        ],
+        { headers: ["Option", "Description"], color: context.color }
+      ),
+      "",
+      section(context.color, "Examples"),
+      `  ${commandText(context.color, "paunclip doctor")}`,
+      `  ${commandText(context.color, 'paunclip create clips "https://youtube.com/watch?v=..." --clips 3')}`,
+      `  ${commandText(context.color, "paunclip render <sessionId> --all")}`,
+      `  ${commandText(context.color, 'paunclip create campaign "My Campaign" "https://youtube.com/@channel" --fetch 20')}`,
+      `  ${commandText(context.color, "paunclip campaign start <campaignId> --videos 1,2,3 --clips 3")}`
+    ].join("\n")
   );
 }
 
 function printDoctorHelp(context: CliContext) {
-  output(context, { help: "doctor" }, "Usage: paunclip doctor [--json]");
+  output(context, { help: "doctor" }, simpleHelp(context, "Doctor", "paunclip doctor [--json]", ["paunclip doctor", "paunclip --json doctor"]));
 }
 
 function printCreateClipsHelp(context: CliContext) {
-  output(context, { help: "create clips" }, "Usage: paunclip create clips <youtube-url|video-path> [--clips 3] [--review|--auto-render] [--prompt text]");
+  output(
+    context,
+    { help: "create clips" },
+    simpleHelp(context, "Create Clips", "paunclip create clips <youtube-url|video-path> [options]", [
+      'paunclip create clips "https://youtube.com/watch?v=..." --clips 3',
+      'paunclip create clips ".\\video.mp4" --clips 5 --srt ".\\captions.srt"',
+      'paunclip create clips "https://youtube.com/watch?v=..." --auto-render --no-hook'
+    ])
+  );
 }
 
 function printRenderHelp(context: CliContext) {
-  output(context, { help: "render" }, "Usage: paunclip render <sessionId> [--all] [--select 1,3] [--queue]");
+  output(context, { help: "render" }, simpleHelp(context, "Render", "paunclip render <sessionId> [--all] [--select 1,3] [--queue]", ["paunclip render <sessionId> --all"]));
 }
 
 function printCreateCampaignHelp(context: CliContext) {
-  output(context, { help: "create campaign" }, "Usage: paunclip create campaign <name> <youtube-source> [--fetch 20] [--type videos|shorts|all]");
+  output(
+    context,
+    { help: "create campaign" },
+    simpleHelp(context, "Create Campaign", "paunclip create campaign <name> <youtube-source> [--fetch 20] [--type videos|shorts|all]", [
+      'paunclip create campaign "Launch clips" "https://youtube.com/@channel" --fetch 20'
+    ])
+  );
 }
 
 function printCampaignHelp(context: CliContext) {
-  output(context, { help: "campaign" }, "Usage: paunclip campaign <list|show|fetch|videos|start|watch>");
+  output(context, { help: "campaign" }, simpleHelp(context, "Campaign", "paunclip campaign <list|show|fetch|videos|start|watch>", ["paunclip campaign videos <campaignId>", "paunclip campaign start <campaignId> --videos 1,2,3 --clips 3"]));
 }
 
 function printSessionHelp(context: CliContext) {
-  output(context, { help: "session" }, "Usage: paunclip session <show|logs|retry|cancel> <sessionId>");
+  output(context, { help: "session" }, simpleHelp(context, "Session", "paunclip session <show|logs|retry|cancel> <sessionId>", ["paunclip session show <sessionId>", "paunclip session logs <sessionId>"]));
 }
 
 function printJobHelp(context: CliContext) {
-  output(context, { help: "job" }, "Usage: paunclip job <watch|cancel> <jobId>");
+  output(context, { help: "job" }, simpleHelp(context, "Job", "paunclip job <watch|cancel> <jobId>", ["paunclip job watch <jobId>", "paunclip job cancel <jobId>"]));
 }
 
 function printConfigHelp(context: CliContext) {
-  output(context, { help: "config" }, "Usage: paunclip config <init|show|doctor|provider|cookies|output|presets>");
+  output(context, { help: "config" }, simpleHelp(context, "Config", "paunclip config <init|show|doctor|provider|cookies|output|presets>", ["paunclip config provider list", "paunclip config cookies status", "paunclip config output path"]));
+}
+
+function simpleHelp(context: CliContext, title: string, usage: string, examples: string[]) {
+  return [
+    cliBanner(context.color),
+    section(context.color, title),
+    `  ${commandText(context.color, usage)}`,
+    "",
+    nextSteps(context.color, examples)
+  ].join("\n");
 }

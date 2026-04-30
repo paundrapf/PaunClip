@@ -35,7 +35,7 @@ PaunClip is designed for creators and operators who want to:
 - **Smart reframe**: fast crop modes plus Smart Face mode for keeping speakers visible.
 - **Transcript-first YouTube flow**: use subtitles/transcripts when available before downloading full video.
 - **Section rendering**: render selected YouTube moments from timestamped sections when possible.
-- **CLI/headless mode**: run doctor checks, create clips, manage campaigns, and render from terminal.
+- **CLI/headless mode**: run doctor checks, create clips, manage campaigns, and render from a colorful terminal interface or clean JSON automation mode.
 - **Desktop packaging**: Electron runtime with bundled media tools support.
 
 ## Requirements
@@ -207,6 +207,7 @@ Global options:
 ```txt
 --profile <path>   Use a specific PaunClip profile directory
 --json             Machine-readable output
+--no-color         Disable ANSI colors in human output
 --quiet            Reduce human output
 --verbose          More diagnostics
 --yes              Accept safe defaults
@@ -221,6 +222,8 @@ paunclip --help
 paunclip --version
 paunclip doctor
 ```
+
+Human CLI output includes an ASCII PaunClip banner, colored status badges, and scan-friendly tables. Automation stays strict: `--json` disables colors, banners, and progress noise on stdout. You can also set `NO_COLOR=1` or pass `--no-color` for plain output, and `FORCE_COLOR=1` to force color in terminals that do not report TTY support.
 
 Single-video clips:
 

@@ -1,6 +1,6 @@
 # PaunClip Project Context
 
-Last updated: 2026-04-29 09:49:34 +07:00, Asia/Bangkok.
+Last updated: 2026-04-30 20:23:36 +07:00, Asia/Bangkok.
 
 This file is a memory ledger for PaunClip across multiple Codex context compactions. It is intentionally practical: future agents should be able to re-enter the project, understand the product direction, understand what has already been changed, and avoid repeating old mistakes.
 
@@ -11,7 +11,7 @@ Sensitive data policy: do not paste real API keys, cookies, tokens, or raw `.env
 This snapshot is meant to help the next AI agent start without guessing.
 
 - Repo root: `C:\000.Project\PaunClip-Codex\PaunClip`.
-- Current branch in recent work: `main`.
+- Current branch in recent work: `dev`.
 - Latest committed docs baseline before this expansion: `aa38fa3 docs: add project context ledger`.
 - Known dirty file before this docs expansion: `next-env.d.ts`. It was generated/dirty before the handoff docs work. Do not revert or include it in a docs-only commit unless the user explicitly asks.
 - Runtime folders such as `.next/`, `storage/`, and `node_modules/` are not source-of-truth handoff content.
@@ -1169,6 +1169,23 @@ Implemented the first production hardening sweep for the 10 review findings:
   - keep `updates-cli` as the feature branch,
   - validate on `dev`,
   - fast-forward `main` only after `dev` checks pass.
+
+## Changelog 2026-04-30 CLI Visual Polish
+
+- CLI human output now has an ASCII PaunClip banner, ANSI colors, status badges, and scan-friendly tables.
+- `paunclip --help` is the friendly entrypoint; it groups commands, global options, and examples instead of plain text only.
+- `paunclip doctor` now renders a readable runtime/tools/cookies/preflight report for humans.
+- List-style outputs for sessions, campaigns, campaign videos, and jobs are formatted as aligned tables.
+- Job watch/progress lines use status badges and colored progress in human mode.
+- Machine mode remains strict:
+  - `--json` disables the banner, colors, and human formatting.
+  - JSON output must stay parseable and clean for scripts.
+  - Progress noise remains on stderr, never stdout.
+- New human-output controls:
+  - `--no-color` disables ANSI colors.
+  - `NO_COLOR=1` disables ANSI colors.
+  - `FORCE_COLOR=1` forces ANSI colors when a terminal does not report TTY support.
+- Added unit coverage for CLI UI helpers and ANSI stripping.
 
 ## Current User-Facing Recommendations
 
