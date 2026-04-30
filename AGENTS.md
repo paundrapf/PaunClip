@@ -247,6 +247,18 @@ Desktop:
 - Run `npm run cli:smoke` after CLI/runtime/profile changes.
 - Before treating CLI branch work as cross-platform ready, run at least one Linux smoke from a fresh checkout. The current known VPS target is `ssh belajar-dev`.
 
+## Source Installers
+
+- Root installer scripts are source-based:
+  - `install.ps1` / `uninstall.ps1`
+  - `install.sh` / `uninstall.sh`
+- They expose the current repo checkout as `paunclip` on user PATH.
+- They intentionally do not auto-install Node.js; require Node.js 22+ and npm.
+- Windows PATH target: `%LOCALAPPDATA%\PaunClip\bin`.
+- Linux PATH target: `~/.local/bin`.
+- Installer tests should prefer `--dry-run`, temp `HOME`, or temp `PAUNCLIP_BIN_DIR` unless the user explicitly wants the local machine PATH changed.
+- If the repo path changes, the user must re-run the installer because the wrapper points at the repo checkout.
+
 ## Updates / Release Distribution
 
 - PaunClip should stay one shared core with three interfaces:

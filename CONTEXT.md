@@ -1097,6 +1097,49 @@ Implemented the first production hardening sweep for the 10 review findings:
   - Linux smoke passed on `belajar-dev`.
   - Linux smoke reported dependency deprecation messages and `2 moderate severity vulnerabilities` from `npm audit`; these are existing dependency-tree warnings, not CLI smoke failures.
 
+## Changelog 2026-04-30 Source Installer + README Batch
+
+- User wants `paunclip` available on PATH immediately after install.
+- Chosen policy:
+  - Source install first.
+  - Do not auto-install Node.js.
+  - Require Node.js 22+ and npm.
+  - PATH changes are user-level, not admin/root.
+- Added planned root installer scripts:
+  - `install.ps1`
+  - `uninstall.ps1`
+  - `install.sh`
+  - `uninstall.sh`
+- Windows installer behavior:
+  - validates Node.js 22+ and npm.
+  - optionally runs `npm ci`, `npm run desktop:tools`, and `npm run cli:smoke`.
+  - creates `%LOCALAPPDATA%\PaunClip\bin\paunclip.cmd`.
+  - adds `%LOCALAPPDATA%\PaunClip\bin` to user PATH.
+- Linux installer behavior:
+  - validates Node.js 22+ and npm.
+  - optionally runs `npm ci`, `npm run desktop:tools`, and `npm run cli:smoke`.
+  - creates `~/.local/bin/paunclip`.
+  - adds a managed PaunClip PATH block to `~/.profile`, and to `~/.zshrc` when relevant.
+- Both installers support safe test flags:
+  - `--skip-install`
+  - `--skip-smoke`
+  - `--force`
+  - `--dry-run`
+- README was added as the main public-facing open-source entry:
+  - banner
+  - purpose
+  - install Windows/Linux
+  - requirements
+  - features
+  - web/desktop/CLI modes
+  - complete CLI command map
+  - troubleshooting
+  - development commands
+- Important distinction:
+  - The installer creates a command that points to the current repository checkout.
+  - If the repo moves, the installer must be re-run.
+  - Native release/binary installer remains a future phase.
+
 ## Current User-Facing Recommendations
 
 For best current behavior:
