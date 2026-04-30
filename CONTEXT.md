@@ -1187,6 +1187,26 @@ Implemented the first production hardening sweep for the 10 review findings:
   - `FORCE_COLOR=1` forces ANSI colors when a terminal does not report TTY support.
 - Added unit coverage for CLI UI helpers and ANSI stripping.
 
+## Changelog 2026-04-30 CLI JSON AI Config + Cookie Format Flow
+
+- CLI AI provider setup is now planned/executed as JSON-first:
+  - `paunclip config ai init paunclip.ai.local.json`
+  - edit the JSON with nano, Notepad, VS Code, or another editor
+  - `paunclip config ai apply paunclip.ai.local.json --validate`
+- `paunclip config provider set ...` remains only as a legacy/script fallback. User-facing help should point normal users to JSON editing.
+- `paunclip.ai.local.json` is ignored because it may contain local API keys.
+- `paunclip.ai.example.json` is safe to commit and contains no real secrets.
+- Applying JSON with an empty `apiKey` preserves the existing saved key so users can edit model/base URL without accidentally wiping secrets.
+- Cookie CLI flow now supports:
+  - `paunclip config cookies detect <file>`
+  - `paunclip config cookies validate <file>`
+  - `paunclip config cookies set <file>`
+- Cookie format policy:
+  - Netscape `cookies.txt` is referenced directly by absolute path.
+  - JSON array/object exports and raw `Cookie:` headers are converted into private Netscape cookies before saving.
+  - This conversion is required because `yt-dlp` consumes Netscape cookies files.
+- Cookie values and API keys must never be printed in CLI, UI, logs, docs, or final answers.
+
 ## Current User-Facing Recommendations
 
 For best current behavior:

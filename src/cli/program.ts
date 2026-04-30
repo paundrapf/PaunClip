@@ -1,17 +1,26 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 import { appRouter } from "@/server/api/root";
 import { createTRPCContext } from "@/server/api/trpc";
 import { getSettings, saveSettings } from "@/server/config/settings-store";
 import { ensureDatabaseMigrations } from "@/server/db/migrations";
+import {
+  parseYoutubeCookiesText,
+  validateYoutubeCookiesFile,
+  validateYoutubeCookiesText,
+  type CookieInputFormat,
+  type YoutubeCookieValidation
+} from "@/server/media/youtube-cookies";
 import { registerPipelineJobs } from "@/server/pipeline/register";
-import { createUploadId, ensureStorageLayout, uploadPath } from "@/server/storage/paths";
+import { configPath, createUploadId, ensureStorageLayout, uploadPath } from "@/server/storage/paths";
+import { writePrivateTextFile } from "@/server/storage/private-file";
 import { AI_PROVIDER_TASKS } from "@/shared/constants/ai-providers";
 import { DEFAULT_CAPTION_PRESETS } from "@/shared/constants/caption-presets";
 import { campaignBatchConfigSchema, campaignContentTypeSchema } from "@/shared/schemas/campaign";
 import { sourceTypeSchema } from "@/shared/schemas/primitives";
 import { sessionConfigSchema } from "@/shared/schemas/session";
-import { aiProviderConfigSchema, type AIProviderConfig } from "@/shared/schemas/settings";
+import { aiProviderConfigSchema, type AIProviderConfig, type AppSettings } from "@/shared/schemas/settings";
 import type { CliRuntime } from "./runtime";
 import {
   badge,
@@ -57,12 +66,25 @@ type ParsedOptions = {
 };
 
 const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
+const DEFAULT_AI_CONFIG_FILE = "paunclip.ai.local.json";
 const taskMap = {
   "highlight-finder": "highlightFinder",
   "caption-maker": "captionMaker",
   "hook-maker": "hookMaker",
   "youtube-title-maker": "youtubeTitleMaker"
 } as const;
+
+const aiConfigFileSchema = z.object({
+  version: z.literal(1).default(1),
+  aiProviders: z.object({
+    highlightFinder: aiProviderConfigSchema.optional(),
+    captionMaker: aiProviderConfigSchema.optional(),
+    hookMaker: aiProviderConfigSchema.optional(),
+    youtubeTitleMaker: aiProviderConfigSchema.optional()
+  })
+});
+
+type AIConfigFile = z.infer<typeof aiConfigFileSchema>;
 
 export async function runCli(argv: string[], runtime: CliRuntime) {
   const globals = parseGlobalOptions(argv);
@@ -596,6 +618,11 @@ async function commandConfig(context: CliContext, subcommand: string | undefined
     return;
   }
 
+  if (subcommand === "ai") {
+    await commandConfigAi(context, parsed);
+    return;
+  }
+
   if (subcommand === "logs") {
     const action = parsed.positionals[0];
     if (action !== "open") {
@@ -638,25 +665,59 @@ async function commandConfigOutput(context: CliContext, parsed: ParsedOptions) {
 
 async function commandConfigCookies(context: CliContext, parsed: ParsedOptions) {
   const action = parsed.positionals[0];
-  if (action === "import") {
+  if (action === "detect") {
     const file = parsed.positionals[1];
-    if (!file) throw new CliInputError("Usage: paunclip config cookies import <cookies.txt>");
+    if (!file) throw new CliInputError("Usage: paunclip config cookies detect <file>");
     const absolute = path.resolve(file);
-    await fs.access(absolute);
-    const current = await getSettings();
-    const next = await saveSettings({
-      ...current,
-      cookies: {
-        youtubePath: absolute,
-        lastUpdated: new Date().toISOString()
-      }
-    });
-    output(context, { cookies: next.cookies }, `Cookies imported from ${absolute}`);
+    const text = await fs.readFile(absolute, "utf8");
+    const parsedCookies = parseYoutubeCookiesText(text);
+    output(
+      context,
+      {
+        path: absolute,
+        format: parsedCookies.format,
+        cookieCount: parsedCookies.cookies.length,
+        needsConversion: parsedCookies.needsConversion
+      },
+      formatCookieDetection(context, absolute, parsedCookies.format, parsedCookies.cookies.length, parsedCookies.needsConversion)
+    );
+    return;
+  }
+  if (action === "validate") {
+    const file = parsed.positionals[1];
+    if (!file) throw new CliInputError("Usage: paunclip config cookies validate <file>");
+    const absolute = path.resolve(file);
+    const text = await fs.readFile(absolute, "utf8");
+    const validation = validateYoutubeCookiesText(text);
+    output(context, { path: absolute, validation }, formatCookieValidation(context, absolute, validation));
+    return;
+  }
+  if (action === "set" || action === "import") {
+    const file = parsed.positionals[1];
+    if (!file) throw new CliInputError(`Usage: paunclip config cookies ${action} <file>`);
+    const result = await saveCookieFileReferenceOrConversion(file);
+    output(
+      context,
+      result,
+      [
+        result.converted
+          ? `Cookies converted to Netscape format: ${result.cookies.youtubePath}`
+          : `Cookies linked from: ${result.cookies.youtubePath}`,
+        formatCookieValidation(context, result.originalPath, result.validation)
+      ].join("\n")
+    );
     return;
   }
   if (action === "status") {
     const settings = await getSettings();
-    output(context, { cookies: settings.cookies }, settings.cookies.youtubePath ? `Cookies: ${settings.cookies.youtubePath}` : "Cookies not configured");
+    const validation = await validateYoutubeCookiesFile(settings.cookies.youtubePath);
+    output(
+      context,
+      { cookies: settings.cookies, validation },
+      settings.cookies.youtubePath
+        ? formatCookieValidation(context, settings.cookies.youtubePath, validation)
+        : "Cookies not configured. Run `paunclip config cookies set <file>`."
+    );
     return;
   }
   if (action === "clear") {
@@ -668,11 +729,122 @@ async function commandConfigCookies(context: CliContext, parsed: ParsedOptions) 
     output(context, { ok: true }, "Cookies cleared");
     return;
   }
-  throw new CliInputError("Usage: paunclip config cookies <import|status|clear>");
+  throw new CliInputError("Usage: paunclip config cookies <detect|validate|set|import|status|clear>");
+}
+
+async function commandConfigAi(context: CliContext, parsed: ParsedOptions) {
+  const action = parsed.positionals[0];
+  if (action === "init") {
+    const target = path.resolve(parsed.positionals[1] ?? DEFAULT_AI_CONFIG_FILE);
+    await ensureWritableTarget(target, hasOption(parsed, "force"));
+    const settings = await getSettings();
+    await writeJsonFile(target, buildAIConfigTemplate(settings, false));
+    output(
+      context,
+      {
+        path: target,
+        next: [
+          `nano ${target}`,
+          `paunclip config ai apply ${target} --validate`
+        ]
+      },
+      [
+        `AI config template created: ${target}`,
+        "Edit this JSON with nano, Notepad, or your editor, then apply it:",
+        `  ${commandText(context.color, `nano "${target}"`)}`,
+        `  ${commandText(context.color, `paunclip config ai apply "${target}" --validate`)}`
+      ].join("\n")
+    );
+    return;
+  }
+
+  if (action === "apply") {
+    const file = parsed.positionals[1];
+    if (!file) throw new CliInputError("Usage: paunclip config ai apply <file> [--validate] [--force]");
+    const loaded = await readAIConfigFile(file);
+    const current = await getSettings();
+    const merged = mergeAIConfigIntoSettings(current, loaded);
+    const validation = hasOption(parsed, "validate")
+      ? await validateAIProviderEntries(context, merged, Object.keys(loaded.aiProviders))
+      : [];
+    if (validation.some((item) => !item.ok) && !hasOption(parsed, "force")) {
+      throw new CliInputError(
+        `AI config validation failed. Fix the JSON, or re-run with --force. ${validation
+          .filter((item) => !item.ok)
+          .map((item) => `${item.task}: ${item.message}`)
+          .join(" ")}`
+      );
+    }
+    const saved = await saveSettings(merged);
+    output(
+      context,
+      { aiProviders: maskSettingsForCli(saved).aiProviders, validation },
+      [
+        "AI provider config applied.",
+        validation.length ? formatAIValidation(context, validation) : "Tip: run with --validate to test provider/model/key readiness.",
+        "Future provider edits: update the JSON file with nano/Notepad, then run `paunclip config ai apply <file>`."
+      ].join("\n")
+    );
+    return;
+  }
+
+  if (action === "validate") {
+    const file = parsed.positionals[1];
+    if (!file) throw new CliInputError("Usage: paunclip config ai validate <file>");
+    const loaded = await readAIConfigFile(file);
+    const current = await getSettings();
+    const merged = mergeAIConfigIntoSettings(current, loaded);
+    const validation = await validateAIProviderEntries(context, merged, Object.keys(loaded.aiProviders));
+    output(context, { validation }, formatAIValidation(context, validation));
+    return;
+  }
+
+  if (action === "show") {
+    const settings = await getSettings();
+    output(context, { aiProviders: maskSettingsForCli(settings).aiProviders }, JSON.stringify({ version: 1, aiProviders: maskSettingsForCli(settings).aiProviders }, null, 2));
+    return;
+  }
+
+  if (action === "export") {
+    const target = parsed.positionals[1];
+    if (!target) throw new CliInputError("Usage: paunclip config ai export <file> [--include-secrets] [--force]");
+    const absolute = path.resolve(target);
+    await ensureWritableTarget(absolute, hasOption(parsed, "force"));
+    const settings = await getSettings();
+    const includeSecrets = hasOption(parsed, "include-secrets");
+    await writeJsonFile(absolute, buildAIConfigTemplate(settings, includeSecrets));
+    output(
+      context,
+      { path: absolute, includeSecrets },
+      includeSecrets
+        ? `AI config exported with secrets: ${absolute}`
+        : `AI config exported without API keys: ${absolute}`
+    );
+    return;
+  }
+
+  throw new CliInputError("Usage: paunclip config ai <init|apply|validate|show|export>");
 }
 
 async function commandConfigProvider(context: CliContext, parsed: ParsedOptions) {
   const action = parsed.positionals[0];
+  if (!action || action === "help") {
+    output(
+      context,
+      { help: "config provider" },
+      [
+        cliBanner(context.color),
+        section(context.color, "AI Providers"),
+        "Recommended flow:",
+        `  ${commandText(context.color, `paunclip config ai init ${DEFAULT_AI_CONFIG_FILE}`)}`,
+        `  ${commandText(context.color, `nano ${DEFAULT_AI_CONFIG_FILE}`)}`,
+        `  ${commandText(context.color, `paunclip config ai apply ${DEFAULT_AI_CONFIG_FILE} --validate`)}`,
+        "",
+        dim(context.color, "`config provider set` is kept for old scripts, but JSON is the main setup path.")
+      ].join("\n")
+    );
+    return;
+  }
   if (action === "list") {
     const settings = await getSettings();
     output(
@@ -720,6 +892,177 @@ async function commandConfigProvider(context: CliContext, parsed: ParsedOptions)
   }
 
   throw new CliInputError("Usage: paunclip config provider <list|set|validate>");
+}
+
+async function saveCookieFileReferenceOrConversion(file: string) {
+  const absolute = path.resolve(file);
+  const text = await fs.readFile(absolute, "utf8");
+  const parsed = parseYoutubeCookiesText(text);
+  const validation = validateYoutubeCookiesText(text);
+  if (!validation.ok && validation.severity === "error") {
+    throw new CliInputError(validation.message);
+  }
+
+  const current = await getSettings();
+  const storedPath = parsed.needsConversion ? configPath("cookies.txt") : absolute;
+  if (parsed.needsConversion) {
+    await writePrivateTextFile(storedPath, parsed.netscapeText);
+  }
+
+  const next = await saveSettings({
+    ...current,
+    cookies: {
+      youtubePath: storedPath,
+      lastUpdated: new Date().toISOString()
+    }
+  });
+
+  return {
+    originalPath: absolute,
+    storedPath,
+    converted: parsed.needsConversion,
+    format: parsed.format,
+    cookies: next.cookies,
+    validation
+  };
+}
+
+function formatCookieDetection(
+  context: CliContext,
+  filePath: string,
+  format: CookieInputFormat,
+  count: number,
+  needsConversion: boolean
+) {
+  return [
+    section(context.color, "Cookie File"),
+    keyValue(context.color, "Path", pathText(context.color, filePath)),
+    keyValue(context.color, "Format", format),
+    keyValue(context.color, "Cookies", String(count)),
+    keyValue(context.color, "Action", needsConversion ? "Will convert to Netscape cookies.txt" : "Can be referenced directly")
+  ].join("\n");
+}
+
+function formatCookieValidation(context: CliContext, filePath: string, validation: YoutubeCookieValidation) {
+  return [
+    section(context.color, "Cookies"),
+    keyValue(context.color, "Path", pathText(context.color, filePath)),
+    keyValue(context.color, "Format", validation.format ?? "unknown"),
+    `${badge(context.color, validation.severity)} ${validation.message}`,
+    keyValue(context.color, "YouTube cookies", String(validation.stats.youtubeCookies)),
+    keyValue(context.color, "Auth cookies", String(validation.stats.authCookies)),
+    keyValue(context.color, "Secure cookies", String(validation.stats.secureCookies)),
+    validation.stats.expiredCookies ? keyValue(context.color, "Expired cookies", String(validation.stats.expiredCookies)) : "",
+    validation.advice.length ? nextSteps(context.color, validation.advice) : ""
+  ].filter(Boolean).join("\n");
+}
+
+async function readAIConfigFile(file: string) {
+  const absolute = path.resolve(file);
+  let json: unknown;
+  try {
+    json = JSON.parse(await fs.readFile(absolute, "utf8"));
+  } catch (error) {
+    throw new CliInputError(`Could not read AI config JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    return aiConfigFileSchema.parse(json);
+  } catch (error) {
+    throw new CliInputError(`Invalid AI config JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function buildAIConfigTemplate(settings: AppSettings, includeSecrets: boolean): AIConfigFile {
+  return {
+    version: 1,
+    aiProviders: Object.fromEntries(
+      AI_PROVIDER_TASKS.map((task) => [
+        task,
+        {
+          ...settings.aiProviders[task],
+          apiKey: includeSecrets ? settings.aiProviders[task].apiKey : ""
+        }
+      ])
+    ) as AIConfigFile["aiProviders"]
+  };
+}
+
+function mergeAIConfigIntoSettings(settings: AppSettings, configFile: AIConfigFile): AppSettings {
+  const aiProviders = { ...settings.aiProviders };
+  for (const task of AI_PROVIDER_TASKS) {
+    const incoming = configFile.aiProviders[task];
+    if (!incoming) {
+      continue;
+    }
+    const previous = settings.aiProviders[task];
+    aiProviders[task] = aiProviderConfigSchema.parse(
+      cleanProviderConfig({
+        ...incoming,
+        apiKey: incoming.apiKey || previous.apiKey
+      })
+    );
+  }
+  return { ...settings, aiProviders };
+}
+
+async function validateAIProviderEntries(
+  context: CliContext,
+  settings: AppSettings,
+  tasks: string[]
+) {
+  const knownTasks = tasks
+    .map((task) => normalizeTask(task))
+    .filter((task, index, array) => array.indexOf(task) === index);
+  const results: Array<{ task: string; ok: boolean; message: string }> = [];
+  for (const task of knownTasks) {
+    try {
+      const result = await context.caller.settings.validateProvider({
+        task,
+        config: settings.aiProviders[task]
+      });
+      results.push({ task, ok: result.ok, message: result.message });
+    } catch (error) {
+      results.push({
+        task,
+        ok: false,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  return results;
+}
+
+function formatAIValidation(context: CliContext, validation: Array<{ task: string; ok: boolean; message: string }>) {
+  if (validation.length === 0) {
+    return "No provider entries found in JSON.";
+  }
+  return table(
+    validation.map((item) => [
+      badge(context.color, item.ok ? "ready" : "failed"),
+      item.task,
+      item.message
+    ]),
+    { headers: ["Status", "Task", "Message"], color: context.color }
+  );
+}
+
+async function ensureWritableTarget(filePath: string, force: boolean) {
+  if (force) {
+    return;
+  }
+  try {
+    await fs.access(filePath);
+    throw new CliInputError(`File already exists: ${filePath}. Use --force to overwrite it.`);
+  } catch (error) {
+    if (error instanceof CliInputError) {
+      throw error;
+    }
+  }
+}
+
+async function writeJsonFile(filePath: string, value: unknown) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await writePrivateTextFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 async function waitForJob(context: CliContext, jobId: string) {
@@ -1039,7 +1382,9 @@ function formatDoctorReport(
     preflight.ok
       ? ""
       : nextSteps(color, [
-          "paunclip config provider list",
+          `paunclip config ai init ${DEFAULT_AI_CONFIG_FILE}`,
+          `nano ${DEFAULT_AI_CONFIG_FILE}`,
+          `paunclip config ai apply ${DEFAULT_AI_CONFIG_FILE} --validate`,
           "paunclip config cookies status",
           "paunclip config output path"
         ])
@@ -1274,7 +1619,7 @@ function printRootHelp(context: CliContext) {
           ["campaign fetch|videos|start", "Fetch channel videos, pick candidates, queue batch clips."],
           ["session show|logs|retry|cancel", "Inspect and manage one session."],
           ["jobs list / job watch", "Watch active processing jobs."],
-          ["config provider|cookies|output", "Configure AI, cookies, output, and presets."]
+          ["config ai|cookies|output", "Configure AI JSON, cookies, output, and presets."]
         ],
         { headers: ["Command", "What it does"], color: context.color }
       ),
@@ -1297,7 +1642,8 @@ function printRootHelp(context: CliContext) {
       `  ${commandText(context.color, 'paunclip create clips "https://youtube.com/watch?v=..." --clips 3')}`,
       `  ${commandText(context.color, "paunclip render <sessionId> --all")}`,
       `  ${commandText(context.color, 'paunclip create campaign "My Campaign" "https://youtube.com/@channel" --fetch 20')}`,
-      `  ${commandText(context.color, "paunclip campaign start <campaignId> --videos 1,2,3 --clips 3")}`
+      `  ${commandText(context.color, "paunclip campaign start <campaignId> --videos 1,2,3 --clips 3")}`,
+      `  ${commandText(context.color, `paunclip config ai init ${DEFAULT_AI_CONFIG_FILE}`)}`
     ].join("\n")
   );
 }
@@ -1345,7 +1691,17 @@ function printJobHelp(context: CliContext) {
 }
 
 function printConfigHelp(context: CliContext) {
-  output(context, { help: "config" }, simpleHelp(context, "Config", "paunclip config <init|show|doctor|provider|cookies|output|presets>", ["paunclip config provider list", "paunclip config cookies status", "paunclip config output path"]));
+  output(
+    context,
+    { help: "config" },
+    simpleHelp(context, "Config", "paunclip config <init|show|doctor|ai|provider|cookies|output|presets>", [
+      `paunclip config ai init ${DEFAULT_AI_CONFIG_FILE}`,
+      `nano ${DEFAULT_AI_CONFIG_FILE}`,
+      `paunclip config ai apply ${DEFAULT_AI_CONFIG_FILE} --validate`,
+      "paunclip config cookies set cookies.txt",
+      "paunclip config output path"
+    ])
+  );
 }
 
 function simpleHelp(context: CliContext, title: string, usage: string, examples: string[]) {

@@ -32,3 +32,5 @@ storage/logs/*
 
 *.log
 *.tsbuildinfo
+paunclip.ai.local.json
+paunclip.cookies.local.*

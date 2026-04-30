@@ -298,9 +298,16 @@ Configuration:
 paunclip config init
 paunclip config show
 paunclip config doctor
+paunclip config ai init [file]
+paunclip config ai apply <file> --validate
+paunclip config ai validate <file>
+paunclip config ai show
+paunclip config ai export <file>
 paunclip config provider list
-paunclip config provider set <task>
 paunclip config provider validate <task>
+paunclip config cookies detect <file>
+paunclip config cookies validate <file>
+paunclip config cookies set <file>
 paunclip config cookies import <file>
 paunclip config cookies status
 paunclip config cookies clear
@@ -320,15 +327,27 @@ hook-maker
 youtube-title-maker
 ```
 
-Example provider setup:
+Recommended provider setup is JSON-first:
 
 ```bash
-paunclip config provider set highlight-finder \
-  --provider custom \
-  --base-url "https://example.com/v1" \
-  --model "model-name" \
-  --api-key-env MY_API_KEY
+paunclip config ai init paunclip.ai.local.json
+nano paunclip.ai.local.json
+paunclip config ai apply paunclip.ai.local.json --validate
 ```
+
+On Windows, edit the same file with Notepad or VS Code instead of `nano`. `paunclip.ai.local.json` is gitignored because it may contain local API keys. A safe template without secrets lives in `paunclip.ai.example.json`.
+
+`paunclip config provider set ...` still exists for old scripts, but new users should edit the JSON file and apply it.
+
+Cookie setup supports common browser-extension exports:
+
+```bash
+paunclip config cookies detect cookies.txt
+paunclip config cookies validate cookies.txt
+paunclip config cookies set cookies.txt
+```
+
+If the file is already Netscape `cookies.txt`, PaunClip stores a reference to that path. If the file is JSON or a raw `Cookie:` header, PaunClip converts it to a private Netscape file because `yt-dlp` expects that format.
 
 ## Basic Workflow
 
@@ -338,12 +357,18 @@ paunclip config provider set highlight-finder \
    paunclip doctor
    ```
 
-2. Configure AI providers in Settings or CLI.
+2. Configure AI providers in Settings or with a JSON file:
+
+   ```bash
+   paunclip config ai init paunclip.ai.local.json
+   nano paunclip.ai.local.json
+   paunclip config ai apply paunclip.ai.local.json --validate
+   ```
 
 3. Import cookies if YouTube requires them:
 
    ```bash
-   paunclip config cookies import cookies.txt
+   paunclip config cookies set cookies.txt
    ```
 
 4. Create a single-video session:
@@ -417,7 +442,13 @@ Install Node.js 22+ and open a new terminal.
 
 ### AI provider fails
 
-- Validate provider settings.
+- Validate provider settings:
+
+  ```bash
+  paunclip config ai show
+  paunclip config ai validate paunclip.ai.local.json
+  ```
+
 - Make sure the provider supports the task:
   - chat for Highlight Finder,
   - transcription for Caption Maker,

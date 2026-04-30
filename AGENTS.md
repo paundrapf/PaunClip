@@ -1,6 +1,6 @@
 # PaunClip Agent Operating Manual
 
-Last updated: 2026-04-30 20:23:36 +07:00.
+Last updated: 2026-04-30 21:45:00 +07:00.
 
 This file tells future AI agents how to work safely in PaunClip. Read `CONTEXT.md` first for the full memory ledger, then use this file as the day-to-day operating guide.
 
@@ -106,6 +106,12 @@ Main UI flow:
 
 ## AI Provider Rules
 
+- CLI provider setup is JSON-first:
+  - `paunclip config ai init paunclip.ai.local.json`
+  - user edits the JSON with nano/Notepad/VS Code
+  - `paunclip config ai apply paunclip.ai.local.json --validate`
+- Keep `paunclip config provider set ...` only as a legacy/script fallback. Do not promote it in docs/help as the normal setup path.
+- Never print raw API keys from JSON config. `config ai show` and normal exports must mask or omit secrets unless the user explicitly uses `--include-secrets`.
 - Separate provider capability by task:
   - chat/highlight/title/hook text
   - audio transcription/caption timing
@@ -247,6 +253,14 @@ Desktop:
 - Keep `--no-color`, `NO_COLOR=1`, and `FORCE_COLOR=1` behavior working when changing CLI rendering.
 - Prefer ASCII-only CLI decorations so PowerShell, CMD, Linux shells, CI logs, and copy/paste all remain safe.
 - API keys and cookies must stay masked; prefer `--api-key-env` over direct `--api-key`.
+- Current CLI AI setup preference is local JSON because it is easier than long command flags:
+  - `paunclip.ai.local.json` is ignored.
+  - `paunclip.ai.example.json` is safe to commit and must not contain real keys.
+  - Empty `apiKey` in JSON preserves the existing saved key during apply.
+- Cookie setup should accept common browser exports:
+  - Netscape `cookies.txt` is referenced directly.
+  - JSON/header/raw pair inputs are converted to a private Netscape file before saving because `yt-dlp` expects Netscape format.
+  - CLI/UI/logs must never print raw cookie values.
 - Keep command names stable once published because users may script against them.
 - Run `npm run cli:smoke` after CLI/runtime/profile changes.
 - Before treating CLI branch work as cross-platform ready, run at least one Linux smoke from a fresh checkout. The current known VPS target is `ssh belajar-dev`.
