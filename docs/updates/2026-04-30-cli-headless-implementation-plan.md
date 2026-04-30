@@ -42,6 +42,18 @@ Notes:
 - `npm run desktop:smoke` passed after the regenerated package existed.
 - `npm run build` still reports the existing Turbopack/NFT warning related to dynamic filesystem tracing through settings/runtime paths. It is non-blocking for this CLI batch.
 
+Linux smoke after push:
+
+```bash
+ssh belajar-dev "rm -rf /tmp/paunclip-cli-test && git clone --branch updates-cli https://github.com/paundrapf/PaunClip.git /tmp/paunclip-cli-test && cd /tmp/paunclip-cli-test && npm ci && npm run cli:smoke"
+```
+
+Result:
+
+- CLI smoke passed on Linux using a temporary profile under `/tmp`.
+- `ffmpeg-static` resolved to the Linux binary inside `node_modules`.
+- `npm ci` reported dependency deprecation/audit warnings, but no install failure.
+
 Still future/polish:
 
 - Native single-binary CLI packaging.

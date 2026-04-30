@@ -245,6 +245,7 @@ Desktop:
 - API keys and cookies must stay masked; prefer `--api-key-env` over direct `--api-key`.
 - Keep command names stable once published because users may script against them.
 - Run `npm run cli:smoke` after CLI/runtime/profile changes.
+- Before treating CLI branch work as cross-platform ready, run at least one Linux smoke from a fresh checkout. The current known VPS target is `ssh belajar-dev`.
 
 ## Updates / Release Distribution
 

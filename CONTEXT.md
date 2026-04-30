@@ -1091,6 +1091,11 @@ Implemented the first production hardening sweep for the 10 review findings:
 - Desktop pack note:
   - If `npm run desktop:pack` appears to hang or the shell tool times out, check for remaining `node.exe` processes running `desktop:pack` or `electron-builder` before retrying.
   - Do not leave packaging processes running in the background.
+- Cross-platform smoke:
+  - Branch `updates-cli` was pushed to GitHub at commit `1bf6789`.
+  - VPS command cloned `updates-cli` into `/tmp/paunclip-cli-test`, ran `npm ci`, then `npm run cli:smoke`.
+  - Linux smoke passed on `belajar-dev`.
+  - Linux smoke reported dependency deprecation messages and `2 moderate severity vulnerabilities` from `npm audit`; these are existing dependency-tree warnings, not CLI smoke failures.
 
 ## Current User-Facing Recommendations
 
