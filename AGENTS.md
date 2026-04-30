@@ -222,6 +222,28 @@ Desktop:
 - Run `npm run desktop:smoke` after `desktop:pack` when changing Electron or package files.
 - Do not commit desktop build output under `dist/desktop`.
 
+## CLI / Headless
+
+- Before implementing the terminal CLI, read:
+  - `docs/updates/2026-04-30-cli-headless-command-memory.md`
+  - `docs/updates/2026-04-30-cli-headless-implementation-plan.md`
+- The planned command is `paunclip`.
+- CLI v1 is command-first and headless-friendly, not a full TUI.
+- CLI v1 may require Node.js; native single-binary packaging is deferred.
+- CLI must run without Electron or `npm run dev` already open.
+- CLI must use a PaunClip profile directory:
+  - `--profile <path>`
+  - `PAUNCLIP_HOME`
+  - OS default profile path
+- Set `STORAGE_ROOT`, `OUTPUT_DIR`, `DATABASE_URL`, and `PAUNCLIP_LOG_DIR` before importing server modules.
+- Watch out for `server-only`; use the same `react-server` condition strategy as local smoke scripts or a compiled equivalent.
+- Do not call localhost tRPC from CLI when a shared backend service can be used directly.
+- Do not copy-paste router logic into CLI commands. Extract/reuse service functions.
+- CLI must reuse shared preflight before creating sessions, rendering, or starting campaign batches.
+- `--json` must print clean machine-readable output only, with no spinner/progress noise on stdout.
+- API keys and cookies must stay masked; prefer `--api-key-env` over direct `--api-key`.
+- Keep command names stable once published because users may script against them.
+
 ## Production Gates
 
 - All clipping entrypoints must pass shared preflight before creating or queuing jobs:

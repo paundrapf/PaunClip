@@ -992,6 +992,30 @@ Implemented the first production hardening sweep for the 10 review findings:
   - Results shows requested clip count vs found usable moments.
   - Campaign workspace cards and progress rows show requested vs found moments per video.
 
+## Changelog 2026-04-30 CLI / Headless Planning Checkpoint
+
+- User requested PaunClip usable from terminal with a `paunclip` command for Windows and Linux.
+- The intent is command-line/headless usage, including Linux VPS style machines without Electron UI.
+- No code implementation has been done for CLI yet in this checkpoint; only documentation/planning was added.
+- Planning docs created:
+  - `docs/updates/2026-04-30-cli-headless-command-memory.md`
+  - `docs/updates/2026-04-30-cli-headless-implementation-plan.md`
+- Locked decisions from discussion:
+  - CLI v1 is command-first, not full TUI.
+  - Future `paunclip tui` is allowed but deferred.
+  - CLI v1 runs local pipeline directly and should not require Electron or Next dev server to be open.
+  - Phase 1 can require Node.js.
+  - Headless configuration must be possible through CLI commands.
+  - Default non-interactive behavior is review mode: analyze first, stop after highlights, then show render commands.
+  - `--json` mode must output clean machine-readable JSON only.
+  - CLI must reuse preflight and must not queue doomed jobs.
+- Technical warnings for implementation:
+  - CLI bootstrap must set profile env variables before importing server modules.
+  - Server modules can import `server-only`; current smoke scripts use `node --conditions react-server --import tsx`.
+  - Do not duplicate tRPC router logic. Prefer shared service functions for web, Electron, and CLI.
+  - Do not print raw API keys or cookies.
+  - `docs/` is gitignored, so docs under `docs/updates` need force-add if committed.
+
 ## Current User-Facing Recommendations
 
 For best current behavior:
