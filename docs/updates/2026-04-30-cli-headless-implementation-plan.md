@@ -1,13 +1,54 @@
 # PaunClip CLI / Headless Implementation Plan
 
 Date: 2026-04-30
-Status: implementation plan only, not executed yet
+Status: partially implemented on branch `updates-cli`
 
 ## Summary
 
 Add a `paunclip` command for Windows and Linux. The CLI must work without the Electron UI, support headless VPS usage, and reuse the same local-first pipeline, profile storage, preflight checks, provider settings, campaign/session database, and job runner.
 
 Phase 1 is a Node-based CLI. It does not need to be a single native binary yet. It should be scriptable, safe for user secrets, and useful for both interactive humans and automation.
+
+## Implementation Checkpoint
+
+Implemented in the first execution batch:
+
+- `bin/paunclip.cjs` bootstrap.
+- `src/cli/main.ts`, `src/cli/runtime.ts`, and `src/cli/program.ts`.
+- `package.json` bin entry and `cli:dev` / `cli:smoke` scripts.
+- CLI profile bootstrap for Windows/Linux/headless.
+- DB migration bootstrap reusable outside Electron.
+- Root help, doctor, config, sessions, jobs, single-video create, render, campaign commands.
+- Explicit CLI preflight before create/render/campaign start.
+- JSON output and exit code handling.
+- Windows private-file rename hardening discovered during CLI smoke.
+
+Final local verification on Windows before the first implementation commit:
+
+```powershell
+npm run cli:smoke
+npm run typecheck
+npm run lint
+git diff --check
+npm test
+npm run build
+npm run desktop:pack
+npm run desktop:smoke
+```
+
+Notes:
+
+- `npm run desktop:pack` outlived the shell tool timeout once; the underlying electron-builder process continued and finished successfully.
+- `npm run desktop:smoke` passed after the regenerated package existed.
+- `npm run build` still reports the existing Turbopack/NFT warning related to dynamic filesystem tracing through settings/runtime paths. It is non-blocking for this CLI batch.
+
+Still future/polish:
+
+- Native single-binary CLI packaging.
+- TUI mode.
+- Durable daemon/background queue.
+- Dedicated CLI auto-updater command.
+- More focused CLI JSON schemas after first real Linux/VPS smoke.
 
 ## Success Criteria
 

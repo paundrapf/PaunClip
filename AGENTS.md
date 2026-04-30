@@ -231,18 +231,37 @@ Desktop:
 - CLI v1 is command-first and headless-friendly, not a full TUI.
 - CLI v1 may require Node.js; native single-binary packaging is deferred.
 - CLI must run without Electron or `npm run dev` already open.
+- Current CLI bootstrap is `bin/paunclip.cjs`, which runs the TypeScript CLI with `--conditions react-server`.
 - CLI must use a PaunClip profile directory:
   - `--profile <path>`
   - `PAUNCLIP_HOME`
   - OS default profile path
 - Set `STORAGE_ROOT`, `OUTPUT_DIR`, `DATABASE_URL`, and `PAUNCLIP_LOG_DIR` before importing server modules.
 - Watch out for `server-only`; use the same `react-server` condition strategy as local smoke scripts or a compiled equivalent.
-- Do not call localhost tRPC from CLI when a shared backend service can be used directly.
+- Do not call localhost tRPC from CLI when a shared backend service can be used directly. The first implementation uses in-process `appRouter.createCaller()` as an adapter while service extraction remains future work.
 - Do not copy-paste router logic into CLI commands. Extract/reuse service functions.
 - CLI must reuse shared preflight before creating sessions, rendering, or starting campaign batches.
 - `--json` must print clean machine-readable output only, with no spinner/progress noise on stdout.
 - API keys and cookies must stay masked; prefer `--api-key-env` over direct `--api-key`.
 - Keep command names stable once published because users may script against them.
+- Run `npm run cli:smoke` after CLI/runtime/profile changes.
+
+## Updates / Release Distribution
+
+- PaunClip should stay one shared core with three interfaces:
+  - Next web/dev
+  - Electron desktop
+  - CLI/headless
+- Fix shared clipping bugs in core modules once, not separately per interface.
+- Desktop auto-update is desired, but should be implemented through release artifacts and update metadata, not ad hoc runtime file replacement.
+- CLI auto-update is desired, but phase 1 may rely on package/binary updates until a safe updater command exists.
+- Dev mode updates from source control; installed desktop/CLI builds need a release/update path.
+- Keep GitHub flow clean:
+  - feature branch
+  - integrate on `dev`
+  - release from `main`
+  - tag/version release artifacts.
+- Do not claim auto-update is production-ready until installer/CLI updater smoke tests exist for Windows and Linux.
 
 ## Production Gates
 

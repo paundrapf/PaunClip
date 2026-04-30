@@ -4,10 +4,15 @@
   "private": true,
   "main": "electron/main.cjs",
   "type": "module",
+  "bin": {
+    "paunclip": "./bin/paunclip.cjs"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "cli:dev": "node bin/paunclip.cjs",
+    "cli:smoke": "node scripts/smoke-cli.cjs",
     "desktop:dev": "concurrently -k \"npm run dev\" \"wait-on http://127.0.0.1:3000 && electron .\"",
     "desktop:tools": "node scripts/download-ytdlp.cjs",
     "desktop:build": "npm run desktop:tools && npm run build && node scripts/prepare-standalone.cjs",
@@ -42,6 +47,7 @@
     "server-only": "^0.0.1",
     "superjson": "^2.2.2",
     "tailwind-merge": "^3.2.0",
+    "tsx": "^4.19.4",
     "zod": "^3.24.3"
   },
   "devDependencies": {
@@ -57,7 +63,6 @@
     "postcss": "^8.5.3",
     "prisma": "^6.7.0",
     "tailwindcss": "^4.1.4",
-    "tsx": "^4.19.4",
     "typescript": "^5.8.3",
     "vitest": "^3.1.2",
     "wait-on": "^9.0.5"

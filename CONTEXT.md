@@ -1016,6 +1016,82 @@ Implemented the first production hardening sweep for the 10 review findings:
   - Do not print raw API keys or cookies.
   - `docs/` is gitignored, so docs under `docs/updates` need force-add if committed.
 
+## Changelog 2026-04-30 Update Distribution Policy
+
+- User wants auto-update support for all delivery modes.
+- Product architecture should remain one shared core with three interfaces:
+  - Web/dev via `npm run dev`
+  - Desktop app via Electron `.exe`
+  - CLI/headless via `paunclip`
+- Bug fixes in core clipping logic should be made once in shared modules and reused by all modes:
+  - pipeline
+  - render/hook/caption
+  - FFmpeg/yt-dlp
+  - transcription/highlight finder
+  - settings/preflight/jobs/storage
+- Distribution behavior:
+  - Dev mode updates immediately from source after branch checkout/pull.
+  - Desktop installed app needs a rebuilt release and eventually an Electron auto-updater.
+  - CLI installed package/binary needs a CLI update mechanism or package/binary upgrade.
+- Future professional release flow:
+  - feature branch such as `updates-cli`
+  - merge/test on `dev`
+  - release from stable `main`
+  - publish GitHub Release artifacts for desktop and CLI
+  - updater checks release metadata and applies safe updates.
+- Do not implement duplicated bug fixes per interface. If a CLI or UI needs special handling, keep it as an adapter around shared services.
+
+## Changelog 2026-04-30 CLI / Headless Implementation Batch
+
+- Branch: `updates-cli`.
+- Added Node-based CLI bootstrap:
+  - `bin/paunclip.cjs`
+  - `src/cli/main.ts`
+  - `src/cli/runtime.ts`
+  - `src/cli/program.ts`
+- Added `package.json` `bin.paunclip`, plus `cli:dev` and `cli:smoke` scripts.
+- CLI uses a profile directory and sets server env before importing server modules:
+  - `STORAGE_ROOT`
+  - `OUTPUT_DIR`
+  - `DATABASE_URL`
+  - `PAUNCLIP_LOG_DIR`
+- CLI bootstrap runs Node with `--conditions react-server` so server modules with `server-only` can be reused.
+- CLI currently reuses `appRouter.createCaller()` in-process. This avoids localhost HTTP and keeps behavior shared with the app while future service extraction remains possible.
+- Added reusable DB migration bootstrap in `src/server/db/migrations.ts` so CLI profiles can initialize SQLite without Electron.
+- Implemented initial command surface:
+  - `paunclip --help`
+  - `paunclip doctor`
+  - `paunclip create clips`
+  - `paunclip render`
+  - `paunclip create campaign`
+  - `paunclip campaign list/show/fetch/videos/start/watch`
+  - `paunclip sessions list`
+  - `paunclip session show/logs/retry/cancel`
+  - `paunclip jobs list`
+  - `paunclip job watch/cancel`
+  - `paunclip config init/show/doctor/provider/cookies/output/logs/presets`
+- CLI preflights before create/render/campaign start and exits with code `3` on blockers.
+- CLI `--json` produces machine-readable JSON and the bootstrap suppresses deprecation warning noise.
+- During CLI smoke, Windows private-file atomic rename hit `EPERM`; `src/server/storage/private-file.ts` was hardened with retry and replace fallback.
+- Verification so far:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run cli:smoke`
+  - `npm test`
+  - `npm run build`
+- Final local verification before committing this batch:
+  - `npm run cli:smoke` passed on a temporary Windows profile.
+  - `npm run typecheck` passed.
+  - `npm run lint` passed.
+  - `git diff --check` passed, with line-ending warnings only.
+  - `npm test` passed: 13 files, 42 tests.
+  - `npm run build` passed, with the existing Turbopack/NFT warning about dynamic filesystem tracing.
+  - `npm run desktop:pack` completed after the shell tool timed out; the underlying background electron-builder process finished successfully.
+  - `npm run desktop:smoke` passed against the regenerated `dist/desktop/win-unpacked` package.
+- Desktop pack note:
+  - If `npm run desktop:pack` appears to hang or the shell tool times out, check for remaining `node.exe` processes running `desktop:pack` or `electron-builder` before retrying.
+  - Do not leave packaging processes running in the background.
+
 ## Current User-Facing Recommendations
 
 For best current behavior:
