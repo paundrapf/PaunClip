@@ -1139,6 +1139,28 @@ Implemented the first production hardening sweep for the 10 review findings:
   - The installer creates a command that points to the current repository checkout.
   - If the repo moves, the installer must be re-run.
   - Native release/binary installer remains a future phase.
+- Verification:
+  - Windows:
+    - `install.ps1 --help` passed.
+    - `install.ps1 --dry-run --skip-install --skip-smoke` passed.
+    - `uninstall.ps1 --dry-run` passed.
+    - Actual `install.ps1 --skip-install --skip-smoke --force` created `%LOCALAPPDATA%\PaunClip\bin\paunclip.cmd` and added the user PATH entry.
+    - Direct shim execution passed.
+    - `paunclip --help` passed after adding the new bin directory to the current shell PATH.
+  - Local checks:
+    - `npm run cli:smoke` passed.
+    - `npm run typecheck` passed.
+    - `npm run lint` passed.
+    - `git diff --check` passed.
+    - `npm test` passed: 13 files, 42 tests.
+    - `npm run build` passed with the known Turbopack/NFT warning.
+    - `npm run desktop:smoke` passed.
+  - Linux VPS:
+    - Fresh clone of `updates-cli` into `/tmp/paunclip-install-test`.
+    - `HOME=/tmp/paunclip-install-home ./install.sh --force` passed.
+    - Installer ran `npm ci`, `npm run desktop:tools`, and `npm run cli:smoke`.
+    - `paunclip --help` and `paunclip doctor --json` passed with the temp PATH.
+    - `uninstall.sh` removed the wrapper and managed PATH block.
 
 ## Current User-Facing Recommendations
 
