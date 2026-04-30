@@ -1162,6 +1162,14 @@ Implemented the first production hardening sweep for the 10 review findings:
     - `paunclip --help` and `paunclip doctor --json` passed with the temp PATH.
     - `uninstall.sh` removed the wrapper and managed PATH block.
 
+## Changelog 2026-04-30 Branch Promotion Checkpoint
+
+- After CLI installer and README verification, branch `dev` was created from `updates-cli`.
+- Intended promotion flow:
+  - keep `updates-cli` as the feature branch,
+  - validate on `dev`,
+  - fast-forward `main` only after `dev` checks pass.
+
 ## Current User-Facing Recommendations
 
 For best current behavior:
