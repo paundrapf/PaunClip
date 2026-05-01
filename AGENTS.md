@@ -106,12 +106,17 @@ Main UI flow:
 
 ## AI Provider Rules
 
-- CLI provider setup is JSON-first:
-  - `paunclip config ai init paunclip.ai.local.json`
-  - user edits the JSON with nano/Notepad/VS Code
-  - `paunclip config ai apply paunclip.ai.local.json --validate`
+- CLI provider setup is wizard-first:
+  - `paunclip setup`
+  - `paunclip setup ai`
+  - `paunclip setup check`
+- JSON config is advanced mode:
+  - `paunclip config ai edit`
+  - `paunclip config ai apply --validate`
 - Keep `paunclip config provider set ...` only as a legacy/script fallback. Do not promote it in docs/help as the normal setup path.
+- If a JSON file is missing, error messages should suggest `paunclip setup`, not just raw `ENOENT`.
 - Never print raw API keys from JSON config. `config ai show` and normal exports must mask or omit secrets unless the user explicitly uses `--include-secrets`.
+- The setup wizard must never echo API keys. Use masked prompts for interactive keys and prefer `--api-key-env` for VPS/automation.
 - Separate provider capability by task:
   - chat/highlight/title/hook text
   - audio transcription/caption timing
@@ -253,10 +258,17 @@ Desktop:
 - Keep `--no-color`, `NO_COLOR=1`, and `FORCE_COLOR=1` behavior working when changing CLI rendering.
 - Prefer ASCII-only CLI decorations so PowerShell, CMD, Linux shells, CI logs, and copy/paste all remain safe.
 - API keys and cookies must stay masked; prefer `--api-key-env` over direct `--api-key`.
-- Current CLI AI setup preference is local JSON because it is easier than long command flags:
-  - `paunclip.ai.local.json` is ignored.
+- Current CLI AI setup preference is the guided wizard:
+  - Normal users should use `paunclip setup`; JSON is advanced/portable mode.
+  - Managed `paunclip.ai.local.json` is ignored.
   - `paunclip.ai.example.json` is safe to commit and must not contain real keys.
   - Empty `apiKey` in JSON preserves the existing saved key during apply.
+- `paunclip setup` should remain the top CLI onboarding command in README/help.
+- `paunclip setup check --json` must stay clean for automation.
+- Non-interactive setup should use explicit flags:
+  - `paunclip setup ai --provider groq --api-key-env GROQ_API_KEY --yes`
+  - `paunclip setup cookies --path ./cookies.txt --yes`
+  - `paunclip setup output --path ./output --yes`
 - Cookie setup should accept common browser exports:
   - Netscape `cookies.txt` is referenced directly.
   - JSON/header/raw pair inputs are converted to a private Netscape file before saving because `yt-dlp` expects Netscape format.

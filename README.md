@@ -220,6 +220,11 @@ General:
 ```txt
 paunclip --help
 paunclip --version
+paunclip setup
+paunclip setup ai
+paunclip setup cookies
+paunclip setup output
+paunclip setup check
 paunclip doctor
 ```
 
@@ -295,12 +300,20 @@ paunclip job cancel <jobId>
 Configuration:
 
 ```txt
+paunclip setup
+paunclip setup ai
+paunclip setup ai --provider groq --api-key-env GROQ_API_KEY --yes
+paunclip setup ai --provider openai --api-key-env OPENAI_API_KEY --yes
+paunclip setup cookies --path cookies.txt --yes
+paunclip setup output --path ./output --yes
+paunclip setup check --json
 paunclip config init
 paunclip config show
 paunclip config doctor
 paunclip config ai init [file]
-paunclip config ai apply <file> --validate
-paunclip config ai validate <file>
+paunclip config ai edit
+paunclip config ai apply [file] --validate
+paunclip config ai validate [file]
 paunclip config ai show
 paunclip config ai export <file>
 paunclip config provider list
@@ -327,24 +340,42 @@ hook-maker
 youtube-title-maker
 ```
 
-Recommended provider setup is JSON-first:
+Recommended provider setup is the guided wizard:
 
 ```bash
-paunclip config ai init paunclip.ai.local.json
-nano paunclip.ai.local.json
-paunclip config ai apply paunclip.ai.local.json --validate
+paunclip setup
 ```
 
-On Windows, edit the same file with Notepad or VS Code instead of `nano`. `paunclip.ai.local.json` is gitignored because it may contain local API keys. A safe template without secrets lives in `paunclip.ai.example.json`.
+For only AI setup:
 
-`paunclip config provider set ...` still exists for old scripts, but new users should edit the JSON file and apply it.
+```bash
+paunclip setup ai
+```
+
+For VPS/automation, keep the key in an environment variable:
+
+```bash
+export GROQ_API_KEY="gsk_..."
+paunclip setup ai --provider groq --api-key-env GROQ_API_KEY --yes
+```
+
+Advanced JSON config is still supported:
+
+```bash
+paunclip config ai init
+paunclip config ai edit
+paunclip config ai apply --validate
+```
+
+On Windows, `paunclip config ai edit` opens Notepad by default. On Linux, it uses `$VISUAL`, `$EDITOR`, or `nano`. `paunclip.ai.local.json` is gitignored because it may contain local API keys. A safe template without secrets lives in `paunclip.ai.example.json`.
+
+`paunclip config provider set ...` still exists for old scripts, but new users should start with `paunclip setup`.
 
 Cookie setup supports common browser-extension exports:
 
 ```bash
+paunclip setup cookies
 paunclip config cookies detect cookies.txt
-paunclip config cookies validate cookies.txt
-paunclip config cookies set cookies.txt
 ```
 
 If the file is already Netscape `cookies.txt`, PaunClip stores a reference to that path. If the file is JSON or a raw `Cookie:` header, PaunClip converts it to a private Netscape file because `yt-dlp` expects that format.
@@ -354,21 +385,19 @@ If the file is already Netscape `cookies.txt`, PaunClip stores a reference to th
 1. Install PaunClip and run:
 
    ```bash
-   paunclip doctor
+   paunclip setup
    ```
 
-2. Configure AI providers in Settings or with a JSON file:
+2. Confirm everything is ready:
 
    ```bash
-   paunclip config ai init paunclip.ai.local.json
-   nano paunclip.ai.local.json
-   paunclip config ai apply paunclip.ai.local.json --validate
+   paunclip setup check
    ```
 
-3. Import cookies if YouTube requires them:
+3. Add cookies later if YouTube requires them:
 
    ```bash
-   paunclip config cookies set cookies.txt
+   paunclip setup cookies
    ```
 
 4. Create a single-video session:
@@ -442,11 +471,11 @@ Install Node.js 22+ and open a new terminal.
 
 ### AI provider fails
 
-- Validate provider settings:
+- Run the guided AI setup again:
 
   ```bash
-  paunclip config ai show
-  paunclip config ai validate paunclip.ai.local.json
+  paunclip setup ai
+  paunclip setup check
   ```
 
 - Make sure the provider supports the task:
@@ -464,6 +493,7 @@ Use a transcription provider that returns timestamps. SRT fallback is a last res
 Check:
 
 ```bash
+paunclip setup output
 paunclip config output path
 ```
 
@@ -520,7 +550,7 @@ Recommended workflow:
 
 - PaunClip is local-first, but API keys and cookies are sensitive.
 - Do not commit `.env`, cookies, storage, logs, rendered clips, or profile directories.
-- Prefer environment variables or the Settings UI for secrets.
+- Prefer `paunclip setup`, environment variables, or the Settings UI for secrets.
 - Keep cookies private and rotate them if they are exposed.
 
 ## License

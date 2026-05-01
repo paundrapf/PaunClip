@@ -1207,6 +1207,39 @@ Implemented the first production hardening sweep for the 10 review findings:
   - This conversion is required because `yt-dlp` consumes Netscape cookies files.
 - Cookie values and API keys must never be printed in CLI, UI, logs, docs, or final answers.
 
+## Changelog 2026-05-01 OpenClaw-Style CLI Setup Wizard
+
+- `paunclip setup` is now the primary CLI setup path.
+- Guided setup covers:
+  - AI provider selection
+  - secure API key prompt
+  - YouTube cookie import/conversion
+  - output folder selection
+  - final `doctor`/preflight readiness check
+- New setup commands:
+  - `paunclip setup`
+  - `paunclip setup ai`
+  - `paunclip setup cookies`
+  - `paunclip setup output`
+  - `paunclip setup check`
+- Non-interactive/VPS setup is supported with explicit flags:
+  - `paunclip setup ai --provider groq --api-key-env GROQ_API_KEY --yes`
+  - `paunclip setup cookies --path ./cookies.txt --yes`
+  - `paunclip setup output --path ./output --yes`
+  - `paunclip setup check --json`
+- Groq/OpenAI wizard mode applies one API key across supported tasks:
+  - Highlight Finder
+  - Caption Maker
+  - Hook Maker
+  - YouTube Title Maker
+- Custom OpenAI-compatible wizard mode defaults to chat tasks only when the endpoint looks chat-only, especially OpenCode-style endpoints.
+- Advanced JSON config still exists, but is no longer the normal user-facing path:
+  - `paunclip config ai edit`
+  - `paunclip config ai apply --validate`
+- `paunclip config ai apply` and `validate` can now use the managed profile JSON when no file argument is supplied.
+- Missing JSON errors now point users to `paunclip setup` instead of raw `ENOENT`.
+- API keys remain masked in CLI output and must never be printed raw.
+
 ## Current User-Facing Recommendations
 
 For best current behavior:
