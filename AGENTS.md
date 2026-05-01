@@ -109,6 +109,12 @@ Main UI flow:
 - CLI provider setup is wizard-first:
   - `paunclip setup`
   - `paunclip setup ai`
+  - `paunclip setup ai task highlight-finder`
+  - `paunclip setup ai task caption-maker`
+  - `paunclip setup ai task hook-maker`
+  - `paunclip setup ai task youtube-title-maker`
+  - `paunclip setup ai quick --provider groq`
+  - `paunclip setup ai validate`
   - `paunclip setup check`
 - JSON config is advanced mode:
   - `paunclip config ai edit`
@@ -121,6 +127,8 @@ Main UI flow:
   - chat/highlight/title/hook text
   - audio transcription/caption timing
   - TTS/hook voice
+- `paunclip setup ai` should remain task-based. Do not regress it into one confusing provider-for-everything flow.
+- Provider choices in task setup must be capability-filtered. Anthropic/Gemini are chat only here; OpenCode-style custom endpoints are chat-only unless audio endpoints are proven.
 - OpenCode/custom chat endpoint can work for chat tasks, but treat it as chat-only unless audio endpoints are proven.
 - If OpenCode returns HTML 404, the app is probably calling the wrong endpoint or unsupported capability.
 - Groq `whisper-large-v3-turbo` is appropriate for Caption Maker/transcription.
@@ -228,6 +236,7 @@ Desktop:
 - Electron main must resolve packaged Prisma with `createRequire(serverEntry)` from `.next/standalone/server.js`; do not use a bare `require("@prisma/client")` in desktop bootstrap.
 - Electron DB bootstrap must apply migrations through `_paunclip_migrations`; do not reintroduce "skip if DB file exists".
 - Packaged media tools should resolve from env/bundled package resources before PATH. Do not require a fresh user to install Node, Python, FFmpeg, FFprobe, or yt-dlp separately for normal Windows desktop usage.
+- Source CLI installs should also prefer bundled `vendor/bin/<platform>/<arch>/yt-dlp` before system PATH. A VPS/user may have old PATH `yt-dlp` that does not support `--js-runtimes`; `paunclip doctor` should catch that as a blocker.
 - Electron logs belong under userData `logs`, and server stdout/stderr should be persisted there.
 - Next standalone packaging can miss app-route runtime files under `node_modules/next/dist/compiled/next-server`; keep `prepare-standalone.cjs` copying `*.runtime.prod.js`, and keep `desktop:smoke` checking `app-route-turbo.runtime.prod.js`.
 - Run `npm run desktop:smoke` after `desktop:pack` when changing Electron or package files.
@@ -260,16 +269,23 @@ Desktop:
 - API keys and cookies must stay masked; prefer `--api-key-env` over direct `--api-key`.
 - Current CLI AI setup preference is the guided wizard:
   - Normal users should use `paunclip setup`; JSON is advanced/portable mode.
+  - `paunclip setup ai` is a task dashboard.
+  - `paunclip setup ai task caption-maker` is the preferred way to configure transcription.
+  - `paunclip setup ai task hook-maker` is the preferred way to configure TTS model and voice.
+  - `paunclip setup ai quick --provider groq` is allowed for fast defaults, especially on VPS.
   - Managed `paunclip.ai.local.json` is ignored.
   - `paunclip.ai.example.json` is safe to commit and must not contain real keys.
   - Empty `apiKey` in JSON preserves the existing saved key during apply.
 - `paunclip setup` should remain the top CLI onboarding command in README/help.
 - `paunclip setup check --json` must stay clean for automation.
 - Non-interactive setup should use explicit flags:
-  - `paunclip setup ai --provider groq --api-key-env GROQ_API_KEY --yes`
+  - `paunclip setup ai quick --provider groq --api-key-env GROQ_API_KEY --yes`
+  - `paunclip setup ai task caption-maker --provider groq --api-key-env GROQ_API_KEY --model whisper-large-v3-turbo --yes`
+  - `paunclip setup ai task hook-maker --provider groq --api-key-env GROQ_API_KEY --model canopylabs/orpheus-v1-english --voice hannah --yes`
   - `paunclip setup cookies --path ./cookies.txt --yes`
   - `paunclip setup output --path ./output --yes`
 - Cookie setup should accept common browser exports:
+  - Accept absolute paths, relative paths from current working directory, and `~/...`.
   - Netscape `cookies.txt` is referenced directly.
   - JSON/header/raw pair inputs are converted to a private Netscape file before saving because `yt-dlp` expects Netscape format.
   - CLI/UI/logs must never print raw cookie values.

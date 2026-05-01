@@ -1244,12 +1244,51 @@ Implemented the first production hardening sweep for the 10 review findings:
 
 For best current behavior:
 
+- CLI setup: normal users should run `paunclip setup` or `paunclip setup ai`; JSON config is advanced mode.
+- CLI AI setup is now task-based: `highlight-finder`, `caption-maker`, `hook-maker`, and `youtube-title-maker` are configured separately when needed.
 - Highlight Finder: OpenCode/Kimi can be used, but it must return valid JSON highlights. If it fails, PaunClip will now stop instead of rendering fake clips.
 - Caption Maker: use Groq `whisper-large-v3-turbo` or OpenAI `whisper-1`.
 - Hook Maker: use Groq Orpheus with supported voice/format or OpenAI TTS.
 - For YouTube: use cookies if the video hits bot/auth/challenge restrictions.
 - For caption sync: prefer providers that return word timestamps.
 - For long videos: render now attempts section download first; full source download is a fallback when section download fails.
+
+## 2026-05-01 CLI Tooling Fix: Bundled yt-dlp + Task AI Setup
+
+Root cause from VPS testing:
+
+- User ran `paunclip create clips "https://www.youtube.com/watch?v=od5j0c_zP48"` on Linux VPS.
+- Pipeline failed at YouTube metadata with `yt-dlp: error: no such option: --js-runtimes`.
+- Logs showed command `"yt-dlp"`, meaning PaunClip used old system PATH `yt-dlp` instead of the repo-bundled binary.
+
+Decision and implementation rule:
+
+- Source installs must be self-contained for yt-dlp. Even if the user has system `yt-dlp`, PaunClip should prefer its bundled binary.
+- Resolver order for yt-dlp:
+  1. explicit `YTDLP_PATH`
+  2. source bundle `vendor/bin/<platform>/<arch>/yt-dlp`
+  3. desktop bundle `resources/bin/<platform>/<arch>/yt-dlp`
+  4. PATH `yt-dlp`
+  5. fallback error
+- `paunclip doctor` must show the exact yt-dlp command being used.
+- Health must reject old yt-dlp builds that do not support `--js-runtimes`, because PaunClip's YouTube challenge args require it.
+- Windows and Linux install wrappers should export/set `YTDLP_PATH` to the bundled binary.
+
+Cookie path UX:
+
+- `paunclip setup cookies` accepts absolute paths, relative paths from the current directory, and `~/...`.
+- Missing cookie file errors must show the raw input, resolved absolute path, and example correct paths.
+- Cookie values must never be printed.
+
+AI setup UX:
+
+- `paunclip setup ai` is a task dashboard.
+- `paunclip setup ai task highlight-finder` configures chat model for moment detection.
+- `paunclip setup ai task caption-maker` configures transcription.
+- `paunclip setup ai task hook-maker` configures TTS model and voice.
+- `paunclip setup ai task youtube-title-maker` configures chat title generation.
+- `paunclip setup ai quick --provider groq` remains for one-provider defaults.
+- Custom OpenAI-compatible providers must be capability-filtered. Chat-only endpoints such as OpenCode should not be offered for Caption Maker or Hook Maker.
 
 ## Things Still Worth Doing
 

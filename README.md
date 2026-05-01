@@ -55,7 +55,7 @@ PaunClip uses:
 - **yt-dlp** for YouTube metadata, subtitles, audio, video, and section downloads.
 - **SQLite + Prisma** for local project/session/job storage.
 
-For source installs, `npm run desktop:tools` downloads the pinned yt-dlp binary into `vendor/bin`. FFmpeg/FFprobe are resolved from package dependencies or configured paths.
+For source installs, `npm run desktop:tools` downloads the pinned yt-dlp binary into `vendor/bin`. The CLI installer wires `YTDLP_PATH` to that bundled binary, and PaunClip resolves bundled yt-dlp before any system `yt-dlp` on PATH. FFmpeg/FFprobe are resolved from package dependencies or configured paths.
 
 ## Install From Source
 
@@ -81,6 +81,7 @@ The installer will:
 - run `npm ci`,
 - download media tools,
 - create `%LOCALAPPDATA%\PaunClip\bin\paunclip.cmd`,
+- point the CLI shim at the bundled `vendor/bin/win32/<arch>/yt-dlp.exe`,
 - add that folder to the current user's PATH,
 - run `npm run cli:smoke`.
 
@@ -121,6 +122,7 @@ The installer will:
 - run `npm ci`,
 - download media tools,
 - create `~/.local/bin/paunclip`,
+- point the CLI wrapper at the bundled `vendor/bin/linux/<arch>/yt-dlp`,
 - add `~/.local/bin` to `~/.profile` when needed,
 - run `npm run cli:smoke`.
 
@@ -222,6 +224,12 @@ paunclip --help
 paunclip --version
 paunclip setup
 paunclip setup ai
+paunclip setup ai task highlight-finder
+paunclip setup ai task caption-maker
+paunclip setup ai task hook-maker
+paunclip setup ai task youtube-title-maker
+paunclip setup ai quick --provider groq
+paunclip setup ai validate
 paunclip setup cookies
 paunclip setup output
 paunclip setup check
@@ -302,8 +310,16 @@ Configuration:
 ```txt
 paunclip setup
 paunclip setup ai
-paunclip setup ai --provider groq --api-key-env GROQ_API_KEY --yes
-paunclip setup ai --provider openai --api-key-env OPENAI_API_KEY --yes
+paunclip setup ai task highlight-finder
+paunclip setup ai task caption-maker
+paunclip setup ai task hook-maker
+paunclip setup ai task youtube-title-maker
+paunclip setup ai quick --provider groq
+paunclip setup ai quick --provider groq --api-key-env GROQ_API_KEY --yes
+paunclip setup ai task caption-maker --provider groq --api-key-env GROQ_API_KEY --model whisper-large-v3-turbo --yes
+paunclip setup ai task hook-maker --provider groq --api-key-env GROQ_API_KEY --model canopylabs/orpheus-v1-english --voice hannah --yes
+paunclip setup ai validate
+paunclip setup ai validate hook-maker
 paunclip setup cookies --path cookies.txt --yes
 paunclip setup output --path ./output --yes
 paunclip setup check --json
@@ -352,11 +368,20 @@ For only AI setup:
 paunclip setup ai
 ```
 
+`paunclip setup ai` is task-based. Normal users can configure one thing at a time:
+
+- **Highlight Finder**: chat model for choosing moments.
+- **Caption Maker**: transcription model for accurate captions.
+- **Hook Maker**: TTS model plus voice.
+- **YouTube Title Maker**: chat model for titles.
+
+Custom OpenAI-compatible providers are filtered by capability. For example, chat-only endpoints such as OpenCode can be used for Highlight Finder and YouTube Title Maker, but should not be selected for Caption Maker or Hook Maker.
+
 For VPS/automation, keep the key in an environment variable:
 
 ```bash
 export GROQ_API_KEY="gsk_..."
-paunclip setup ai --provider groq --api-key-env GROQ_API_KEY --yes
+paunclip setup ai quick --provider groq --api-key-env GROQ_API_KEY --yes
 ```
 
 Advanced JSON config is still supported:

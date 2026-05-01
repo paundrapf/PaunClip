@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { buildProviderConfig } from "@/shared/constants/ai-providers";
 import type { AppSettings } from "@/shared/schemas/settings";
 import {
+  buildTaskProviderAISettings,
   buildCustomAISettings,
   buildSingleProviderAISettings,
+  getProviderChoicesForTask,
   isSetupProviderChoice
 } from "@/cli/setup-config";
 
@@ -73,5 +75,32 @@ describe("CLI setup config helpers", () => {
     expect(result.skippedTasks).toEqual(["captionMaker", "hookMaker"]);
     expect(result.settings.aiProviders.highlightFinder.baseUrl).toBe("https://opencode.ai/zen/go/v1");
     expect(result.settings.aiProviders.highlightFinder.model).toBe("MiMo-V2-Pro");
+  });
+
+  it("filters provider choices by task capability", () => {
+    expect(getProviderChoicesForTask("highlightFinder")).toContain("anthropic");
+    expect(getProviderChoicesForTask("youtubeTitleMaker")).toContain("gemini");
+    expect(getProviderChoicesForTask("captionMaker")).toEqual(["groq", "openai", "custom"]);
+    expect(getProviderChoicesForTask("hookMaker")).toEqual(["groq", "openai", "custom"]);
+    expect(
+      getProviderChoicesForTask("captionMaker", {
+        baseUrl: "https://opencode.ai/zen/go/v1/chat/completions"
+      })
+    ).toEqual(["groq", "openai"]);
+  });
+
+  it("configures one AI task without rewriting other task providers", () => {
+    const result = buildTaskProviderAISettings(baseSettings(), {
+      task: "captionMaker",
+      provider: "groq",
+      apiKey: "gsk-secret",
+      model: "whisper-large-v3-turbo"
+    });
+
+    expect(result.configuredTasks).toEqual(["captionMaker"]);
+    expect(result.settings.aiProviders.captionMaker.provider).toBe("groq");
+    expect(result.settings.aiProviders.captionMaker.apiKey).toBe("gsk-secret");
+    expect(result.settings.aiProviders.highlightFinder.provider).toBe("openai");
+    expect(result.settings.aiProviders.highlightFinder.systemMessage).toBe("keep this prompt");
   });
 });

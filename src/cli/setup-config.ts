@@ -12,6 +12,7 @@ import {
 } from "@/shared/schemas/settings";
 
 export type SetupProviderChoice = "groq" | "openai" | "custom" | "skip";
+export type TaskProviderChoice = AIProviderConfig["provider"];
 
 export type SetupAIResult = {
   settings: AppSettings;
@@ -21,6 +22,29 @@ export type SetupAIResult = {
 
 export function isSetupProviderChoice(value: string): value is SetupProviderChoice {
   return ["groq", "openai", "custom", "skip"].includes(value);
+}
+
+export function isTaskProviderChoice(value: string): value is TaskProviderChoice {
+  return ["openai", "groq", "anthropic", "gemini", "custom"].includes(value);
+}
+
+export function getTaskCapability(task: AIProviderTask) {
+  if (task === "captionMaker") return "transcription";
+  if (task === "hookMaker") return "tts";
+  return "chat";
+}
+
+export function getProviderChoicesForTask(task: AIProviderTask, input: { baseUrl?: string } = {}) {
+  const capability = getTaskCapability(task);
+  return (["groq", "openai", "custom", "anthropic", "gemini"] as const).filter((provider) =>
+    providerSupportsCapability(
+      {
+        provider,
+        baseUrl: provider === "custom" ? input.baseUrl ?? "" : ""
+      },
+      capability
+    )
+  );
 }
 
 export function buildSingleProviderAISettings(
@@ -114,5 +138,47 @@ export function buildCustomAISettings(
     settings: { ...settings, aiProviders },
     configuredTasks,
     skippedTasks
+  };
+}
+
+export function buildTaskProviderAISettings(
+  settings: AppSettings,
+  input: {
+    task: AIProviderTask;
+    provider: TaskProviderChoice;
+    apiKey: string;
+    model: string;
+    baseUrl?: string;
+    ttsVoice?: string;
+    ttsFormat?: AIProviderConfig["ttsFormat"];
+  }
+): SetupAIResult {
+  const capability = getTaskCapability(input.task);
+  const baseUrl = input.provider === "custom" ? normalizeOpenAICompatibleBaseUrl(input.baseUrl ?? "") : undefined;
+  if (!providerSupportsCapability({ provider: input.provider, baseUrl: baseUrl ?? "" }, capability)) {
+    throw new Error(`${input.provider} does not support ${capability} for ${input.task}.`);
+  }
+
+  const previous = settings.aiProviders[input.task];
+  const next = buildProviderConfig(input.provider, input.task, {
+    ...previous,
+    baseUrl: baseUrl || previous.baseUrl
+  });
+  const aiProviders = { ...settings.aiProviders };
+  aiProviders[input.task] = aiProviderConfigSchema.parse({
+    ...next,
+    provider: input.provider,
+    baseUrl: baseUrl || next.baseUrl,
+    apiKey: input.apiKey,
+    model: input.model || next.model,
+    ttsVoice: input.task === "hookMaker" ? input.ttsVoice || next.ttsVoice : next.ttsVoice,
+    ttsFormat: input.task === "hookMaker" ? input.ttsFormat || next.ttsFormat : next.ttsFormat,
+    systemMessage: previous.systemMessage
+  });
+
+  return {
+    settings: { ...settings, aiProviders },
+    configuredTasks: [input.task],
+    skippedTasks: AI_PROVIDER_TASKS.filter((task) => task !== input.task)
   };
 }
