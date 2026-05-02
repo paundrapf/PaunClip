@@ -14,6 +14,7 @@ import {
   type CookieInputFormat,
   type YoutubeCookieValidation
 } from "@/server/media/youtube-cookies";
+import type { YoutubeLiveReadiness, YoutubeLiveProbeStep } from "@/server/media/ytdlp";
 import { registerPipelineJobs } from "@/server/pipeline/register";
 import { configPath, createUploadId, ensureStorageLayout, uploadPath } from "@/server/storage/paths";
 import { writePrivateTextFile } from "@/server/storage/private-file";
@@ -144,7 +145,7 @@ async function dispatch(context: CliContext) {
   }
 
   if (command === "doctor") {
-    await commandDoctor(context, rest);
+    await commandDoctor(context, [subcommand, ...rest].filter(Boolean));
     return;
   }
 
@@ -208,6 +209,8 @@ async function commandDoctor(context: CliContext, argv: string[]) {
     printDoctorHelp(context);
     return;
   }
+  const parsed = parseOptions(argv);
+  const youtubeUrl = stringOption(parsed, "youtube-url", "") || stringOption(parsed, "url", "");
   const [runtime, health, preflight] = await Promise.all([
     context.caller.settings.runtimeInfo(),
     context.caller.settings.health(),
@@ -218,11 +221,14 @@ async function commandDoctor(context: CliContext, argv: string[]) {
       hasTranscript: false
     })
   ]);
+  const youtubeReadiness = youtubeUrl
+    ? await context.caller.settings.youtubeReadiness({ url: youtubeUrl })
+    : undefined;
 
   output(
     context,
-    { runtime, health, preflight },
-    formatDoctorReport(context, runtime, health, preflight)
+    { runtime, health, preflight, youtubeReadiness },
+    formatDoctorReport(context, runtime, health, preflight, youtubeReadiness)
   );
 }
 
@@ -247,6 +253,13 @@ async function commandSetup(context: CliContext, subcommand: string | undefined,
     return;
   }
   if (subcommand === "cookies") {
+    if (parsed.positionals[0] === "validate-live") {
+      await setupCookiesValidateLive(
+        context,
+        parsed.positionals[1] || stringOption(parsed, "youtube-url", "") || stringOption(parsed, "url", "")
+      );
+      return;
+    }
     await setupCookies(context, parsed, { askFirst: false });
     return;
   }
@@ -582,6 +595,27 @@ async function setupCookies(
         ? `Cookies converted to private Netscape file: ${pathText(context.color, result.cookies.youtubePath ?? result.storedPath)}`
         : `Cookies linked from: ${pathText(context.color, result.cookies.youtubePath ?? result.storedPath)}`,
       formatCookieValidation(context, result.originalPath, result.validation)
+    ].join("\n")
+  );
+}
+
+async function setupCookiesValidateLive(context: CliContext, youtubeUrl: string) {
+  if (!youtubeUrl.trim()) {
+    throw new CliInputError("Usage: paunclip setup cookies validate-live <youtube-url>");
+  }
+  const settings = await getSettings();
+  if (!settings.cookies.youtubePath) {
+    throw new CliInputError("YouTube cookies are not configured. Run `paunclip setup cookies` first.");
+  }
+  const staticValidation = await validateYoutubeCookiesFile(settings.cookies.youtubePath);
+  const readiness = await context.caller.settings.youtubeReadiness({ url: youtubeUrl.trim() });
+  output(
+    context,
+    { staticValidation, readiness },
+    [
+      formatCookieValidation(context, settings.cookies.youtubePath, staticValidation),
+      "",
+      formatYoutubeLiveReadiness(context, readiness)
     ].join("\n")
   );
 }
@@ -1556,12 +1590,43 @@ async function waitForJob(context: CliContext, jobId: string) {
     }
     if (TERMINAL_JOB_STATUSES.has(job.status)) {
       if (job.status === "failed") {
-        throw new CliJobError(`Job failed: ${job.errorJson ?? job.id}`);
+        throw new CliJobError(formatJobFailureMessage(context, job.errorJson, job.id));
       }
       return job;
     }
     await sleep(1000);
   }
+}
+
+function formatJobFailureMessage(context: CliContext, errorJson: string | null | undefined, jobId: string) {
+  const parsed = parseJsonObject(errorJson);
+  const rawMessage = typeof parsed?.message === "string" ? parsed.message : jobId;
+  const message = compactCliError(rawMessage);
+  const advice = Array.isArray(parsed?.advice)
+    ? parsed.advice.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+
+  return [
+    `Job failed: ${message}`,
+    advice.length > 0 ? nextSteps(context.color, advice) : ""
+  ].filter(Boolean).join("\n");
+}
+
+function parseJsonObject(value: string | null | undefined): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function compactCliError(value: string) {
+  const withoutDetails = value.split(" Detail terakhir:")[0] ?? value;
+  return withoutDetails.length > 700 ? `${withoutDetails.slice(0, 700)}...` : withoutDetails;
 }
 
 async function assertCliPreflight(
@@ -2152,9 +2217,11 @@ function formatDoctorReport(
   context: CliContext,
   runtime: Awaited<ReturnType<CliContext["caller"]["settings"]["runtimeInfo"]>>,
   health: Awaited<ReturnType<CliContext["caller"]["settings"]["health"]>>,
-  preflight: Awaited<ReturnType<CliContext["caller"]["settings"]["preflight"]>>
+  preflight: Awaited<ReturnType<CliContext["caller"]["settings"]["preflight"]>>,
+  youtubeReadiness?: YoutubeLiveReadiness
 ) {
   const color = context.color;
+  const liveMediaBlocked = youtubeReadiness ? !youtubeReadiness.media.ok : false;
   const toolRows = [
     toolRow(color, "FFmpeg", health.tools.ffmpeg),
     toolRow(color, "FFprobe", health.tools.ffprobe),
@@ -2182,23 +2249,65 @@ function formatDoctorReport(
     "",
     section(color, "Cookies"),
     `${badge(color, health.cookies.ok ? "ok" : health.cookies.severity)} ${health.cookies.message}`,
+    youtubeReadiness ? "" : "",
+    youtubeReadiness ? formatYoutubeLiveReadiness(context, youtubeReadiness) : "",
     "",
     section(color, "Preflight"),
-    preflight.ok
+    preflight.ok && !liveMediaBlocked
       ? `${badge(color, "ready")} PaunClip is ready to create clips.`
-      : table(issueRows, { headers: ["Level", "Area", "Message"], color }),
-    preflight.ok ? "" : "",
-    preflight.ok
+      : table(
+          [
+            ...issueRows,
+            ...(liveMediaBlocked
+              ? [[badge(color, "blocker"), "cookies", youtubeReadiness!.media.message ?? "YouTube media download failed."]]
+              : [])
+          ],
+          { headers: ["Level", "Area", "Message"], color }
+        ),
+    preflight.ok && !liveMediaBlocked ? "" : "",
+    preflight.ok && !liveMediaBlocked
       ? ""
       : nextSteps(color, [
           "paunclip setup",
           "paunclip setup ai",
           "paunclip setup cookies",
+          "paunclip setup cookies validate-live <youtube-url>",
           "paunclip setup output"
         ])
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function formatYoutubeLiveReadiness(context: CliContext, readiness: YoutubeLiveReadiness) {
+  const color = context.color;
+  return [
+    section(color, "YouTube Live Check"),
+    table(
+      [
+        youtubeProbeRow(color, readiness.metadata),
+        youtubeProbeRow(color, readiness.subtitles),
+        youtubeProbeRow(color, readiness.media)
+      ],
+      { headers: ["Status", "Check", "Detail"], color }
+    ),
+    readiness.media.ok
+      ? `${badge(color, "ready")} YouTube media download is available for this URL.`
+      : `${badge(color, "blocker")} ${readiness.media.message ?? "YouTube media download failed."}`,
+    readiness.advice.length ? nextSteps(color, readiness.advice) : ""
+  ].filter(Boolean).join("\n");
+}
+
+function youtubeProbeRow(color: boolean, step: YoutubeLiveProbeStep) {
+  return [
+    badge(color, step.ok ? "ready" : "failed"),
+    step.label,
+    step.ok
+      ? step.clientProfile
+        ? `client: ${step.clientProfile}`
+        : "ok"
+      : step.message ?? step.failureKind ?? "failed"
+  ];
 }
 
 function toolRow(
@@ -2452,6 +2561,7 @@ function printRootHelp(context: CliContext) {
       `  ${commandText(context.color, "paunclip setup ai task caption-maker")}`,
       `  ${commandText(context.color, "paunclip setup check")}`,
       `  ${commandText(context.color, "paunclip doctor")}`,
+      `  ${commandText(context.color, "paunclip doctor --youtube-url https://youtube.com/watch?v=...")}`,
       `  ${commandText(context.color, 'paunclip create clips "https://youtube.com/watch?v=..." --clips 3')}`,
       `  ${commandText(context.color, "paunclip render <sessionId> --all")}`,
       `  ${commandText(context.color, 'paunclip create campaign "My Campaign" "https://youtube.com/@channel" --fetch 20')}`,
@@ -2484,6 +2594,7 @@ function printSetupHelp(context: CliContext) {
           ["setup ai quick --provider groq", "Apply recommended defaults to every AI task."],
           ["setup ai validate [task]", "Validate all AI tasks or one task."],
           ["setup cookies", "Import or link YouTube cookies from Netscape/JSON/header formats."],
+          ["setup cookies validate-live <url>", "Live-test metadata, subtitles, and media download access."],
           ["setup output", "Choose and validate the output folder."],
           ["setup check", "Run the final doctor/readiness check."]
         ],
@@ -2495,6 +2606,7 @@ function printSetupHelp(context: CliContext) {
       `  ${commandText(context.color, "paunclip setup ai task caption-maker --provider groq --api-key-env GROQ_API_KEY --model whisper-large-v3-turbo --yes")}`,
       `  ${commandText(context.color, "paunclip setup ai task hook-maker --provider groq --api-key-env GROQ_API_KEY --model canopylabs/orpheus-v1-english --voice hannah --yes")}`,
       `  ${commandText(context.color, "paunclip setup cookies --path ./cookies.txt --yes")}`,
+      `  ${commandText(context.color, "paunclip setup cookies validate-live https://youtube.com/watch?v=...")}`,
       `  ${commandText(context.color, "paunclip setup output --path ./output --yes")}`,
       `  ${commandText(context.color, "paunclip setup check --json")}`,
       "",
@@ -2504,7 +2616,15 @@ function printSetupHelp(context: CliContext) {
 }
 
 function printDoctorHelp(context: CliContext) {
-  output(context, { help: "doctor" }, simpleHelp(context, "Doctor", "paunclip doctor [--json]", ["paunclip doctor", "paunclip --json doctor"]));
+  output(
+    context,
+    { help: "doctor" },
+    simpleHelp(context, "Doctor", "paunclip doctor [--youtube-url <url>] [--json]", [
+      "paunclip doctor",
+      "paunclip doctor --youtube-url https://youtube.com/watch?v=...",
+      "paunclip --json doctor --youtube-url https://youtube.com/watch?v=..."
+    ])
+  );
 }
 
 function printCreateClipsHelp(context: CliContext) {
@@ -2555,6 +2675,7 @@ function printConfigHelp(context: CliContext) {
       "paunclip setup ai task caption-maker",
       "paunclip setup ai validate",
       "paunclip setup cookies --path cookies.txt",
+      "paunclip setup cookies validate-live <youtube-url>",
       "paunclip setup output",
       "paunclip config ai edit"
     ])

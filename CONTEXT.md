@@ -1302,11 +1302,35 @@ Observed from VPS after pulling `be8803c` and rerunning `./install.sh --force`:
 - The current `paunclip doctor` cookie check can say cookies look ready because it only parses/validates the cookie file shape and counts YouTube/auth cookies. It does not perform a live YouTube auth/challenge probe.
 - Pipeline issue: after subtitle fetch and audio download both failed from invalid cookies/bot challenge, the job still moved to `transcribe` and tried to stat missing `audio.wav`, causing an `ENOENT`. This should be fixed so YouTube subtitle/audio extraction auth failures fail at ingest/extract with an actionable cookie error, not at transcription.
 
-Next fix candidates:
+Follow-up scope from this incident:
 
-- Add a live cookie probe command or stricter optional `paunclip setup cookies --validate-live <youtube-url>` / doctor live check.
-- Detect yt-dlp cookie-rotated and bot-check stderr patterns and surface a clean `cookies invalid/expired` issue.
+- Live doctor/setup probes should prove metadata, subtitles, and media stream access separately before calling a machine ready for render.
+- yt-dlp cookie-rotated and bot-check stderr patterns should surface as clean `cookies invalid/expired` or `bot challenge` issues.
 - If YouTube subtitles are unavailable and audio download fails, stop the pipeline before transcription with the original yt-dlp error.
+
+## 2026-05-02 YouTube Render Live Validation + Media Download Reliability
+
+Observed after the bundled yt-dlp fix:
+
+- `paunclip create clips` can succeed because metadata/subtitles are enough for analysis.
+- `paunclip render` can still fail because rendering needs actual video/audio stream access.
+- A static cookie check can say `OK Cookie YouTube terlihat siap dipakai` while live media download still fails with `Sign in to confirm you're not a bot`.
+- VPS/datacenter IPs can trigger stronger YouTube bot checks than a normal desktop browser.
+- yt-dlp client behavior differs: a client such as `android` can sometimes expose a media URL while combined `default,android,ios,web` can fail because one client hits a challenge.
+- Section rendering can also hit `ffmpeg exited with code -11`; treat this as a section-cut fallback case, not as a caption/highlight bug.
+
+Implementation rules:
+
+- `paunclip doctor --youtube-url <url>` and `paunclip setup cookies validate-live <url>` must distinguish:
+  - static cookie file readability
+  - metadata access
+  - subtitle access
+  - media stream/download access
+- Do not show "ready to create clips" in doctor when a live URL was provided and media download fails.
+- Render media download should try separate YouTube client profiles (`android`, `ios`, `web`, combined fallback), not only one combined client string.
+- Classify yt-dlp failures into actionable buckets: bot challenge, rotated cookies, PO token, missing format, ffmpeg crash, or unknown/network.
+- If section download fails because ffmpeg crashes, retry without `--force-keyframes-at-cuts` and use system ffmpeg as a dev/Linux fallback when available.
+- Keep cookie/API values out of CLI output, logs, docs, and tests.
 
 ## Things Still Worth Doing
 

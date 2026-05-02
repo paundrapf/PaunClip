@@ -41,7 +41,7 @@ import { parseSrt } from "@/server/transcription/srt";
 import type { JobContext } from "@/server/jobs/runner";
 
 const renderer = new FfmpegClipRenderer();
-const RENDER_SOURCE_VERSION = "section_source_v1";
+const RENDER_SOURCE_VERSION = "section_source_v2";
 
 type PipelineSession = Awaited<ReturnType<typeof getSessionOrThrow>>;
 
@@ -447,6 +447,7 @@ async function renderHighlights(sessionId: string, context: JobContext) {
     const renderSignature = buildClipRenderSignature({
       sourcePath: renderSource.sourcePath,
       sourceMode: renderSource.sourceMode,
+      sourceClientProfile: renderSource.sourceClientProfile,
       sourceTimeOffsetSeconds: renderSource.sourceTimeOffsetSeconds,
       sourceSection: renderSource.sourceSection,
       highlight,
@@ -633,6 +634,7 @@ type RenderSource = {
   sourcePath: string;
   sourceMode: "full" | "section";
   sourceTimeOffsetSeconds: number;
+  sourceClientProfile?: string;
   sourceSection?: {
     startTime: number;
     endTime: number;
@@ -688,11 +690,12 @@ async function resolveRenderSourceForHighlight(
             });
           }
         }),
-      retryOptions(context, "download_youtube_video_section", 2)
+      retryOptions(context, "download_youtube_video_section", 1)
     );
     await context.log("YouTube source section ready", {
       highlightId,
       sourcePath: section.sourcePath,
+      clientProfile: section.clientProfile,
       sectionStartTime: section.sectionStartTime,
       sectionEndTime: section.sectionEndTime
     });
@@ -700,6 +703,7 @@ async function resolveRenderSourceForHighlight(
       sourcePath: section.sourcePath,
       sourceMode: "section",
       sourceTimeOffsetSeconds: section.sectionStartTime,
+      sourceClientProfile: section.clientProfile,
       sourceSection: {
         startTime: section.sectionStartTime,
         endTime: section.sectionEndTime
@@ -742,7 +746,7 @@ async function ensureSourceVideoForRendering(session: PipelineSession, context: 
   await context.log("Downloading full YouTube source video for rendering", {
     url: session.sourceUrl
   });
-  const sourcePath = await withRetry(
+  const downloaded = await withRetry(
     () =>
       downloadYoutubeVideo({
         url: session.sourceUrl!,
@@ -758,9 +762,13 @@ async function ensureSourceVideoForRendering(session: PipelineSession, context: 
           });
         }
       }),
-    retryOptions(context, "download_youtube_video", 2)
+    retryOptions(context, "download_youtube_video", 1)
   );
-  await context.log("Probing downloaded source", { sourcePath });
+  const sourcePath = downloaded.sourcePath;
+  await context.log("Probing downloaded source", {
+    sourcePath,
+    clientProfile: downloaded.clientProfile
+  });
   const probe = await withRetry(() => probeMedia(sourcePath), retryOptions(context, "probe_media", 2));
   await db.session.update({
     where: { id: session.id },
@@ -814,6 +822,7 @@ async function rerenderClip(clipId: string, context: JobContext) {
   const signature = buildClipRenderSignature({
     sourcePath: renderSource.sourcePath,
     sourceMode: renderSource.sourceMode,
+    sourceClientProfile: renderSource.sourceClientProfile,
     sourceTimeOffsetSeconds: renderSource.sourceTimeOffsetSeconds,
     sourceSection: renderSource.sourceSection,
     highlight,

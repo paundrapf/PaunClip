@@ -321,8 +321,10 @@ paunclip setup ai task hook-maker --provider groq --api-key-env GROQ_API_KEY --m
 paunclip setup ai validate
 paunclip setup ai validate hook-maker
 paunclip setup cookies --path cookies.txt --yes
+paunclip setup cookies validate-live <youtube-url>
 paunclip setup output --path ./output --yes
 paunclip setup check --json
+paunclip doctor --youtube-url <youtube-url>
 paunclip config init
 paunclip config show
 paunclip config doctor
@@ -401,9 +403,12 @@ Cookie setup supports common browser-extension exports:
 ```bash
 paunclip setup cookies
 paunclip config cookies detect cookies.txt
+paunclip setup cookies validate-live "https://youtube.com/watch?v=..."
 ```
 
 If the file is already Netscape `cookies.txt`, PaunClip stores a reference to that path. If the file is JSON or a raw `Cookie:` header, PaunClip converts it to a private Netscape file because `yt-dlp` expects that format.
+
+The normal cookie check only verifies that the file is readable and contains YouTube login-shaped cookies. The live check verifies the thing that matters for rendering: metadata, subtitles, and video media stream access for a real URL. This is especially important on VPS/datacenter machines, where YouTube can allow subtitles but block video download with a bot challenge.
 
 ## Basic Workflow
 
@@ -417,6 +422,7 @@ If the file is already Netscape `cookies.txt`, PaunClip stores a reference to th
 
    ```bash
    paunclip setup check
+   paunclip doctor --youtube-url "https://youtube.com/watch?v=..."
    ```
 
 3. Add cookies later if YouTube requires them:
@@ -490,9 +496,12 @@ Install Node.js 22+ and open a new terminal.
 ### YouTube download or metadata fails
 
 - Run `paunclip doctor`.
+- Run `paunclip doctor --youtube-url "<url>"` to live-test metadata, subtitles, and media download.
 - Check `yt-dlp` status.
 - Import cookies if YouTube blocks access.
+- Run `paunclip setup cookies validate-live "<url>"` after refreshing cookies.
 - Try fetching fewer videos in Campaign mode.
+- If analysis succeeds but render fails, YouTube likely allowed subtitles but blocked video media download on that machine. Refresh cookies, render on the local desktop app/laptop, or upload a local MP4 fallback.
 
 ### AI provider fails
 

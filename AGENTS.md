@@ -289,6 +289,13 @@ Desktop:
   - Netscape `cookies.txt` is referenced directly.
   - JSON/header/raw pair inputs are converted to a private Netscape file before saving because `yt-dlp` expects Netscape format.
   - CLI/UI/logs must never print raw cookie values.
+- Static cookie validation is not enough for YouTube render readiness:
+  - Use `paunclip doctor --youtube-url <url>` or `paunclip setup cookies validate-live <url>` for live metadata/subtitle/media checks.
+  - Do not claim render is ready when live media download fails.
+  - YouTube subtitle access can succeed while video stream download is blocked.
+  - VPS/datacenter IPs are more likely to hit bot challenges; surface that as an actionable cookie/media issue.
+- Render media download should try separate yt-dlp client profiles and classify failures instead of repeating the same opaque attempt.
+- If yt-dlp section cutting hits an ffmpeg crash, prefer safer section fallback before full-download fallback.
 - Keep command names stable once published because users may script against them.
 - Run `npm run cli:smoke` after CLI/runtime/profile changes.
 - Before treating CLI branch work as cross-platform ready, run at least one Linux smoke from a fresh checkout. The current known VPS target is `ssh belajar-dev`.
