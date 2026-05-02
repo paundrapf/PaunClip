@@ -1290,6 +1290,24 @@ AI setup UX:
 - `paunclip setup ai quick --provider groq` remains for one-provider defaults.
 - Custom OpenAI-compatible providers must be capability-filtered. Chat-only endpoints such as OpenCode should not be offered for Caption Maker or Hook Maker.
 
+## 2026-05-02 VPS YouTube Cookie Failure After Bundled yt-dlp Fix
+
+Observed from VPS after pulling `be8803c` and rerunning `./install.sh --force`:
+
+- `paunclip doctor` correctly resolved yt-dlp to `/root/PaunClip/vendor/bin/linux/x64/yt-dlp`.
+- This confirms the old PATH yt-dlp problem was fixed.
+- `paunclip create clips "https://www.youtube.com/watch?v=od5j0c_zP48"` then failed for a different reason: YouTube rejected the saved cookies.
+- yt-dlp emitted: `The provided YouTube account cookies are no longer valid. They have likely been rotated in the browser as a security measure.`
+- yt-dlp also emitted: `Sign in to confirm you're not a bot. Use --cookies-from-browser or --cookies for the authentication.`
+- The current `paunclip doctor` cookie check can say cookies look ready because it only parses/validates the cookie file shape and counts YouTube/auth cookies. It does not perform a live YouTube auth/challenge probe.
+- Pipeline issue: after subtitle fetch and audio download both failed from invalid cookies/bot challenge, the job still moved to `transcribe` and tried to stat missing `audio.wav`, causing an `ENOENT`. This should be fixed so YouTube subtitle/audio extraction auth failures fail at ingest/extract with an actionable cookie error, not at transcription.
+
+Next fix candidates:
+
+- Add a live cookie probe command or stricter optional `paunclip setup cookies --validate-live <youtube-url>` / doctor live check.
+- Detect yt-dlp cookie-rotated and bot-check stderr patterns and surface a clean `cookies invalid/expired` issue.
+- If YouTube subtitles are unavailable and audio download fails, stop the pipeline before transcription with the original yt-dlp error.
+
 ## Things Still Worth Doing
 
 High-priority:
