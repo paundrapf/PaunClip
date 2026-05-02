@@ -217,6 +217,7 @@ export async function downloadYoutubeVideo(params: {
     }
   ];
   const attemptResults: DownloadAttemptResult[] = [];
+  const skipClientProfiles = new Set<YoutubeClientProfile>();
   const attempts = mediaClientProfiles.flatMap((clientProfile) =>
     formatAttempts.map((attempt) => ({
       ...attempt,
@@ -225,6 +226,10 @@ export async function downloadYoutubeVideo(params: {
   );
 
   for (const attempt of attempts) {
+    if (skipClientProfiles.has(attempt.clientProfile)) {
+      continue;
+    }
+
     await cleanPreviousSourceFiles(params.outputDir);
     await params.onLog?.("yt-dlp download attempt started", {
       label: attempt.label,
@@ -321,6 +326,17 @@ export async function downloadYoutubeVideo(params: {
         failureKind,
         output
       });
+
+      if (isFatalYoutubeAccessFailure(failureKind)) {
+        throw createYoutubeDownloadError(attemptResults);
+      }
+      if (shouldSkipRemainingFormatsForClient(failureKind)) {
+        skipClientProfiles.add(attempt.clientProfile);
+        await params.onLog?.("yt-dlp download client profile blocked; skipping remaining formats", {
+          clientProfile: attempt.clientProfile,
+          failureKind
+        });
+      }
     }
   }
 
@@ -361,6 +377,7 @@ export async function downloadYoutubeVideoSection(params: {
   const attemptResults: DownloadAttemptResult[] = [];
   const primaryFfmpegCommand = getFfmpegCommand();
   const fallbackFfmpegCommands = await resolveFallbackFfmpegCommands(primaryFfmpegCommand);
+  const skipClientProfiles = new Set<YoutubeClientProfile>();
   const attempts = mediaClientProfiles.flatMap((clientProfile) =>
     formatAttempts.map((attempt) => ({
       ...attempt,
@@ -369,6 +386,10 @@ export async function downloadYoutubeVideoSection(params: {
   );
 
   for (const baseAttempt of attempts) {
+    if (skipClientProfiles.has(baseAttempt.clientProfile)) {
+      continue;
+    }
+
     const variants: DownloadAttempt[] = [
       {
         ...baseAttempt,
@@ -493,6 +514,18 @@ export async function downloadYoutubeVideoSection(params: {
           failureKind,
           output
         });
+
+        if (isFatalYoutubeAccessFailure(failureKind)) {
+          throw createYoutubeDownloadError(attemptResults);
+        }
+        if (attempt.clientProfile && shouldSkipRemainingFormatsForClient(failureKind)) {
+          skipClientProfiles.add(attempt.clientProfile);
+          await params.onLog?.("yt-dlp section client profile blocked; skipping remaining formats", {
+            clientProfile: attempt.clientProfile,
+            failureKind
+          });
+          break;
+        }
 
         if (failureKind !== "ffmpeg_crash") {
           break;
@@ -1034,6 +1067,14 @@ function selectPrimaryFailureKind(attempts: DownloadAttemptResult[]): YtdlpFailu
   if (kinds.includes("po_token_required")) return "po_token_required";
   if (kinds.includes("format_unavailable")) return "format_unavailable";
   return "network_or_unknown";
+}
+
+function isFatalYoutubeAccessFailure(kind: YtdlpFailureKind) {
+  return kind === "cookies_invalid";
+}
+
+function shouldSkipRemainingFormatsForClient(kind: YtdlpFailureKind) {
+  return kind === "bot_challenge" || kind === "po_token_required";
 }
 
 function conciseYoutubeFailureMessage(kind: YtdlpFailureKind, output: string) {
