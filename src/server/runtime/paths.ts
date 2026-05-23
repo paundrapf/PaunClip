@@ -63,5 +63,5 @@ function resolveDatabasePath(databaseUrl: string) {
   const normalized = value.replace(/\//g, path.sep);
   return path.isAbsolute(normalized)
     ? path.normalize(normalized)
-    : path.resolve(process.cwd(), normalized);
+    : path.resolve(/* turbopackIgnore: true */ process.cwd(), normalized);
 }

@@ -1,9 +1,11 @@
 import "server-only";
-import { chmod, rename, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export async function writePrivateTextFile(filePath: string, content: string) {
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await writeFile(tempPath, content, { encoding: "utf8", mode: 0o600 });
   await chmod(tempPath, 0o600).catch(() => undefined);
   await replaceFile(tempPath, filePath);
