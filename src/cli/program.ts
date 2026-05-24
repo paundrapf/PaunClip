@@ -956,8 +956,10 @@ async function commandSession(context: CliContext, subcommand: string | undefine
     const session = await context.caller.session.getById(sessionId);
     type SessionLogEvent = { createdAt: Date; type: string; message: string };
     type SessionLogJob = { id: string; events: SessionLogEvent[] };
-    const events =
-      session?.jobs.flatMap((job: SessionLogJob) =>
+    type SessionLogOutputEvent = SessionLogEvent & { jobId: string };
+    const jobs = session?.jobs as SessionLogJob[] | undefined;
+    const events: SessionLogOutputEvent[] =
+      jobs?.flatMap((job: SessionLogJob) =>
         job.events.map((event: SessionLogEvent) => ({ ...event, jobId: job.id }))
       ) ?? [];
     output(
