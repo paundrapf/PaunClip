@@ -27,7 +27,7 @@
     "desktop:dev": "concurrently -k \"npm run dev\" \"wait-on http://127.0.0.1:3000 && electron .\"",
     "desktop:tools": "node scripts/download-ytdlp.cjs",
     "desktop:build": "npm run desktop:tools && npm run build && node scripts/prepare-standalone.cjs",
-    "desktop:pack": "npm run desktop:build && electron-builder --win --x64",
+    "desktop:pack": "npm run desktop:build && electron-builder --win --x64 --publish never",
     "desktop:smoke": "node scripts/smoke-desktop-package.cjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
