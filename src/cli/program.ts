@@ -954,7 +954,12 @@ async function commandSession(context: CliContext, subcommand: string | undefine
 
   if (subcommand === "logs") {
     const session = await context.caller.session.getById(sessionId);
-    const events = session?.jobs.flatMap((job) => job.events.map((event) => ({ ...event, jobId: job.id }))) ?? [];
+    type SessionLogEvent = { createdAt: Date; type: string; message: string };
+    type SessionLogJob = { id: string; events: SessionLogEvent[] };
+    const events =
+      session?.jobs.flatMap((job: SessionLogJob) =>
+        job.events.map((event: SessionLogEvent) => ({ ...event, jobId: job.id }))
+      ) ?? [];
     output(
       context,
       { events },
