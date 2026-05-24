@@ -85,6 +85,24 @@ type ParsedOptions = {
   options: Record<string, string | boolean | string[]>;
 };
 
+type CliIssueRow = { severity: string; area: string; message: string };
+type CliHighlightRow = { title: string; startTime: number; endTime: number; status: string };
+type CliClipRow = { title: string; status: string; masterPath: string | null };
+type CliJobRow = { id: string; status: string; progress: number; sessionId: string };
+type CliSessionJobRow = { id: string; status: string; progress: number };
+type CliSessionWithJobsRow = { id: string; jobs: CliSessionJobRow[] };
+type CliCampaignListRow = { id: string; name: string; channelUrl: string | null; videos: unknown[] };
+type CliSessionListRow = {
+  id: string;
+  status: string;
+  stage: string;
+  highlights: unknown[];
+  clips: unknown[];
+  sourceTitle: string | null;
+  sourceUrl: string | null;
+};
+type CliCampaignStartRow = { queuedCount: number; skippedCount: number; sessionIds: string[] };
+
 const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 const DEFAULT_AI_CONFIG_FILE = "paunclip.ai.local.json";
 const taskMap = {
@@ -994,8 +1012,10 @@ async function commandSession(context: CliContext, subcommand: string | undefine
 
 async function commandJobs(context: CliContext, subcommand: string | undefined, argv: string[]) {
   if (!subcommand || subcommand === "list") {
-    const sessions = await context.caller.session.list();
-    const jobs = sessions.flatMap((session) => session.jobs.map((job) => ({ ...job, sessionId: session.id })));
+    const sessions = (await context.caller.session.list()) as CliSessionWithJobsRow[];
+    const jobs: CliJobRow[] = sessions.flatMap((session) =>
+      session.jobs.map((job) => ({ ...job, sessionId: session.id }))
+    );
     output(
       context,
       { jobs },
@@ -2234,7 +2254,7 @@ function formatDoctorReport(
     toolRow(color, "FFprobe", health.tools.ffprobe),
     toolRow(color, "yt-dlp", health.tools.ytdlp)
   ];
-  const issueRows = preflight.issues.map((issue) => [
+  const issueRows = (preflight.issues as CliIssueRow[]).map((issue) => [
     badge(color, issue.severity),
     issue.area,
     issue.message
@@ -2331,8 +2351,8 @@ function formatSessionSummary(
   extra: string[] = []
 ) {
   if (!session) return "Session not found.";
-  const highlights = session.highlights ?? [];
-  const clips = session.clips ?? [];
+  const highlights = (session.highlights ?? []) as CliHighlightRow[];
+  const clips = (session.clips ?? []) as CliClipRow[];
   const color = context.color;
   return [
     section(color, "Session"),
@@ -2417,9 +2437,10 @@ function formatCampaignList(
   context: CliContext,
   campaigns: Awaited<ReturnType<CliContext["caller"]["campaign"]["list"]>>
 ) {
-  if (campaigns.length === 0) return "No campaigns yet.";
+  const rows = campaigns as CliCampaignListRow[];
+  if (rows.length === 0) return "No campaigns yet.";
   return table(
-    campaigns.map((campaign) => [
+    rows.map((campaign) => [
       shortId(campaign.id, 12),
       campaign.name,
       campaign.channelUrl ?? "-",
@@ -2433,15 +2454,16 @@ function formatCampaignStartResult(
   context: CliContext,
   result: Awaited<ReturnType<CliContext["caller"]["campaign"]["startBatch"]>>
 ) {
+  const row = result as CliCampaignStartRow;
   return [
     section(context.color, "Batch queued"),
-    keyValue(context.color, "Queued", String(result.queuedCount)),
-    keyValue(context.color, "Skipped", String(result.skippedCount)),
+    keyValue(context.color, "Queued", String(row.queuedCount)),
+    keyValue(context.color, "Skipped", String(row.skippedCount)),
     "",
     nextSteps(
       context.color,
-      result.sessionIds.length
-        ? result.sessionIds.map((id) => `paunclip render ${id} --all`)
+      row.sessionIds.length
+        ? row.sessionIds.map((id) => `paunclip render ${id} --all`)
         : ["paunclip campaign videos <campaignId>"]
     )
   ].join("\n");
@@ -2451,9 +2473,10 @@ function formatSessionList(
   context: CliContext,
   sessions: Awaited<ReturnType<CliContext["caller"]["session"]["list"]>>
 ) {
-  if (sessions.length === 0) return "No sessions yet.";
+  const rows = sessions as CliSessionListRow[];
+  if (rows.length === 0) return "No sessions yet.";
   return table(
-    sessions.map((session) => [
+    rows.map((session) => [
       shortId(session.id, 12),
       badge(context.color, session.status),
       session.stage,
@@ -2467,7 +2490,7 @@ function formatSessionList(
 
 function formatJobList(
   context: CliContext,
-  jobs: Array<{ id: string; status: string; progress: number; sessionId: string }>
+  jobs: CliJobRow[]
 ) {
   if (jobs.length === 0) return "No jobs yet.";
   return table(
