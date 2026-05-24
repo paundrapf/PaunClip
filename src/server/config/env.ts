@@ -9,7 +9,7 @@ const envSchema = z.object({
   OUTPUT_DIR: z.string().default(DEFAULT_OUTPUT_DIR),
   FFMPEG_PATH: z.string().optional().default(""),
   FFPROBE_PATH: z.string().optional().default(""),
-  YTDLP_PATH: z.string().optional().default("yt-dlp"),
+  YTDLP_PATH: z.string().optional().default(""),
   PAUNCLIP_DESKTOP: z.string().optional().default(""),
   PAUNCLIP_LOCAL_TOKEN: z.string().optional().default(""),
   PAUNCLIP_LOG_DIR: z.string().optional().default(""),

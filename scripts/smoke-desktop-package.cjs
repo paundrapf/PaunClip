@@ -48,6 +48,10 @@ const ytdlpVersion = execFileSync(ytdlpPath, ["--version"], { encoding: "utf8" }
 if (!ytdlpVersion) {
   throw new Error("Packaged yt-dlp did not return a version.");
 }
+const ytdlpHelp = execFileSync(ytdlpPath, ["--help"], { encoding: "utf8" });
+if (!ytdlpHelp.includes("--js-runtimes")) {
+  throw new Error("Packaged yt-dlp does not support --js-runtimes.");
+}
 
 console.log("Desktop package smoke check passed.");
 console.log(`@prisma/client: ${prismaClientPath}`);

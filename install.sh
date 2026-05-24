@@ -68,6 +68,13 @@ if [ "$node_major" -lt 22 ]; then
   echo "Node.js $node_version is installed, but PaunClip CLI requires Node.js 22+." >&2
   exit 1
 fi
+node_platform="$(node -p "process.platform")"
+node_arch="$(node -p "process.arch")"
+ytdlp_binary="yt-dlp"
+if [ "$node_platform" = "win32" ]; then
+  ytdlp_binary="yt-dlp.exe"
+fi
+ytdlp_bundle="$repo_root/vendor/bin/$node_platform/$node_arch/$ytdlp_binary"
 
 step "Repository: $repo_root"
 step "Node.js: $node_version"
@@ -100,6 +107,7 @@ else
   mkdir -p "$bin_dir"
   cat > "$wrapper_path" <<EOF
 #!/usr/bin/env sh
+export YTDLP_PATH="$ytdlp_bundle"
 exec node "$repo_root/bin/paunclip.cjs" "\$@"
 EOF
   chmod +x "$wrapper_path"

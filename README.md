@@ -10,7 +10,7 @@ PaunClip can run in three ways:
 - **Desktop app** through the Electron `.exe`
 - **CLI/headless mode** with the `paunclip` command
 
-> Current status: PaunClip is under active development. The CLI installer is source-based for now, which means you install from a checked-out copy of this repository. Native release installers and auto-update flows are planned.
+> Current status: PaunClip is under active development. Source installs are supported, and Windows desktop release artifacts are built from GitHub Releases.
 
 ## What PaunClip Is For
 
@@ -55,7 +55,7 @@ PaunClip uses:
 - **yt-dlp** for YouTube metadata, subtitles, audio, video, and section downloads.
 - **SQLite + Prisma** for local project/session/job storage.
 
-For source installs, `npm run desktop:tools` downloads the pinned yt-dlp binary into `vendor/bin`. FFmpeg/FFprobe are resolved from package dependencies or configured paths.
+For source installs, `npm run desktop:tools` downloads the pinned yt-dlp binary into `vendor/bin`. The CLI installer wires `YTDLP_PATH` to that bundled binary, and PaunClip resolves bundled yt-dlp before any system `yt-dlp` on PATH. FFmpeg/FFprobe are resolved from package dependencies or configured paths.
 
 ## Install From Source
 
@@ -64,7 +64,6 @@ Clone the repository first:
 ```bash
 git clone https://github.com/paundrapf/PaunClip.git
 cd PaunClip
-git switch updates-cli
 ```
 
 ### Windows
@@ -81,6 +80,7 @@ The installer will:
 - run `npm ci`,
 - download media tools,
 - create `%LOCALAPPDATA%\PaunClip\bin\paunclip.cmd`,
+- point the CLI shim at the bundled `vendor/bin/win32/<arch>/yt-dlp.exe`,
 - add that folder to the current user's PATH,
 - run `npm run cli:smoke`.
 
@@ -121,6 +121,7 @@ The installer will:
 - run `npm ci`,
 - download media tools,
 - create `~/.local/bin/paunclip`,
+- point the CLI wrapper at the bundled `vendor/bin/linux/<arch>/yt-dlp`,
 - add `~/.local/bin` to `~/.profile` when needed,
 - run `npm run cli:smoke`.
 
@@ -170,7 +171,7 @@ Use this mode while developing UI, backend, pipeline logic, and settings.
 
 ### 2. Desktop app
 
-Build/package the desktop app:
+Download the latest Windows desktop build from GitHub Releases when available, or build/package it locally:
 
 ```bash
 npm run desktop:pack
@@ -183,6 +184,8 @@ dist/desktop
 ```
 
 The desktop app stores user data under the OS user data directory, not inside the install folder.
+
+Release builds are created by the desktop release workflow for tags such as `v0.1.0`.
 
 ### 3. CLI/headless
 
@@ -220,6 +223,17 @@ General:
 ```txt
 paunclip --help
 paunclip --version
+paunclip setup
+paunclip setup ai
+paunclip setup ai task highlight-finder
+paunclip setup ai task caption-maker
+paunclip setup ai task hook-maker
+paunclip setup ai task youtube-title-maker
+paunclip setup ai quick --provider groq
+paunclip setup ai validate
+paunclip setup cookies
+paunclip setup output
+paunclip setup check
 paunclip doctor
 ```
 
@@ -295,12 +309,37 @@ paunclip job cancel <jobId>
 Configuration:
 
 ```txt
+paunclip setup
+paunclip setup ai
+paunclip setup ai task highlight-finder
+paunclip setup ai task caption-maker
+paunclip setup ai task hook-maker
+paunclip setup ai task youtube-title-maker
+paunclip setup ai quick --provider groq
+paunclip setup ai quick --provider groq --api-key-env GROQ_API_KEY --yes
+paunclip setup ai task caption-maker --provider groq --api-key-env GROQ_API_KEY --model whisper-large-v3-turbo --yes
+paunclip setup ai task hook-maker --provider groq --api-key-env GROQ_API_KEY --model canopylabs/orpheus-v1-english --voice hannah --yes
+paunclip setup ai validate
+paunclip setup ai validate hook-maker
+paunclip setup cookies --path cookies.txt --yes
+paunclip setup cookies validate-live <youtube-url>
+paunclip setup output --path ./output --yes
+paunclip setup check --json
+paunclip doctor --youtube-url <youtube-url>
 paunclip config init
 paunclip config show
 paunclip config doctor
+paunclip config ai init [file]
+paunclip config ai edit
+paunclip config ai apply [file] --validate
+paunclip config ai validate [file]
+paunclip config ai show
+paunclip config ai export <file>
 paunclip config provider list
-paunclip config provider set <task>
 paunclip config provider validate <task>
+paunclip config cookies detect <file>
+paunclip config cookies validate <file>
+paunclip config cookies set <file>
 paunclip config cookies import <file>
 paunclip config cookies status
 paunclip config cookies clear
@@ -320,30 +359,77 @@ hook-maker
 youtube-title-maker
 ```
 
-Example provider setup:
+Recommended provider setup is the guided wizard:
 
 ```bash
-paunclip config provider set highlight-finder \
-  --provider custom \
-  --base-url "https://example.com/v1" \
-  --model "model-name" \
-  --api-key-env MY_API_KEY
+paunclip setup
 ```
+
+For only AI setup:
+
+```bash
+paunclip setup ai
+```
+
+`paunclip setup ai` is task-based. Normal users can configure one thing at a time:
+
+- **Highlight Finder**: chat model for choosing moments.
+- **Caption Maker**: transcription model for accurate captions.
+- **Hook Maker**: TTS model plus voice.
+- **YouTube Title Maker**: chat model for titles.
+
+Custom OpenAI-compatible providers are filtered by capability. For example, chat-only endpoints such as OpenCode can be used for Highlight Finder and YouTube Title Maker, but should not be selected for Caption Maker or Hook Maker.
+
+For VPS/automation, keep the key in an environment variable:
+
+```bash
+export GROQ_API_KEY="your-groq-api-key"
+paunclip setup ai quick --provider groq --api-key-env GROQ_API_KEY --yes
+```
+
+Advanced JSON config is still supported:
+
+```bash
+paunclip config ai init
+paunclip config ai edit
+paunclip config ai apply --validate
+```
+
+On Windows, `paunclip config ai edit` opens Notepad by default. On Linux, it uses `$VISUAL`, `$EDITOR`, or `nano`. `paunclip.ai.local.json` is gitignored because it may contain local API keys. A safe template without secrets lives in `paunclip.ai.example.json`.
+
+`paunclip config provider set ...` still exists for old scripts, but new users should start with `paunclip setup`.
+
+Cookie setup supports common browser-extension exports:
+
+```bash
+paunclip setup cookies
+paunclip config cookies detect cookies.txt
+paunclip setup cookies validate-live "https://youtube.com/watch?v=..."
+```
+
+If the file is already Netscape `cookies.txt`, PaunClip stores a reference to that path. If the file is JSON or a raw `Cookie:` header, PaunClip converts it to a private Netscape file because `yt-dlp` expects that format.
+
+The normal cookie check only verifies that the file is readable and contains YouTube login-shaped cookies. The live check verifies the thing that matters for rendering: metadata, subtitles, and video media stream access for a real URL. This is especially important on VPS/datacenter machines, where YouTube can allow subtitles but block video download with a bot challenge.
 
 ## Basic Workflow
 
 1. Install PaunClip and run:
 
    ```bash
-   paunclip doctor
+   paunclip setup
    ```
 
-2. Configure AI providers in Settings or CLI.
-
-3. Import cookies if YouTube requires them:
+2. Confirm everything is ready:
 
    ```bash
-   paunclip config cookies import cookies.txt
+   paunclip setup check
+   paunclip doctor --youtube-url "https://youtube.com/watch?v=..."
+   ```
+
+3. Add cookies later if YouTube requires them:
+
+   ```bash
+   paunclip setup cookies
    ```
 
 4. Create a single-video session:
@@ -411,13 +497,22 @@ Install Node.js 22+ and open a new terminal.
 ### YouTube download or metadata fails
 
 - Run `paunclip doctor`.
+- Run `paunclip doctor --youtube-url "<url>"` to live-test metadata, subtitles, and media download.
 - Check `yt-dlp` status.
 - Import cookies if YouTube blocks access.
+- Run `paunclip setup cookies validate-live "<url>"` after refreshing cookies.
 - Try fetching fewer videos in Campaign mode.
+- If analysis succeeds but render fails, YouTube likely allowed subtitles but blocked video media download on that machine. Refresh cookies, render on the local desktop app/laptop, or upload a local MP4 fallback.
 
 ### AI provider fails
 
-- Validate provider settings.
+- Run the guided AI setup again:
+
+  ```bash
+  paunclip setup ai
+  paunclip setup check
+  ```
+
 - Make sure the provider supports the task:
   - chat for Highlight Finder,
   - transcription for Caption Maker,
@@ -433,6 +528,7 @@ Use a transcription provider that returns timestamps. SRT fallback is a last res
 Check:
 
 ```bash
+paunclip setup output
 paunclip config output path
 ```
 
@@ -454,7 +550,6 @@ npm run lint
 npm test
 npm run build
 npm run cli:smoke
-npm run desktop:smoke
 ```
 
 Run web app:
@@ -473,25 +568,30 @@ Package desktop:
 
 ```bash
 npm run desktop:pack
+npm run desktop:smoke
 ```
+
+`desktop:smoke` expects a freshly packaged Windows build under `dist/desktop`.
 
 ## Branch and Release Workflow
 
 Recommended workflow:
 
-1. Build features on a feature branch, for example `updates-cli`.
-2. Merge into `dev` after tests and manual smoke are stable.
-3. Release from `main`.
-4. Publish desktop and CLI artifacts through GitHub Releases.
-5. Add auto-update metadata once release artifacts are stable.
+1. Build changes on a feature branch.
+2. Open a pull request into `main`.
+3. Let CI run typecheck, lint, tests, build, and CLI smoke.
+4. Merge when CI and manual smoke checks are stable.
+5. Create a `v*.*.*` tag to publish Windows desktop artifacts through GitHub Releases.
+6. Add auto-update metadata once release artifacts are stable.
 
 ## Security Notes
 
 - PaunClip is local-first, but API keys and cookies are sensitive.
 - Do not commit `.env`, cookies, storage, logs, rendered clips, or profile directories.
-- Prefer environment variables or the Settings UI for secrets.
+- Prefer `paunclip setup`, environment variables, or the Settings UI for secrets.
 - Keep cookies private and rotate them if they are exposed.
+- Report security issues privately. See [SECURITY.md](SECURITY.md).
 
 ## License
 
-License is not finalized yet. Add a `LICENSE` file before public distribution.
+MIT. See [LICENSE](LICENSE).

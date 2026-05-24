@@ -78,6 +78,10 @@ $node = Get-NodeMajorVersion
 if ($node.Major -lt 22) {
   throw "Node.js $($node.Version) is installed, but PaunClip CLI requires Node.js 22+."
 }
+$NodePlatform = (& node -p "process.platform").Trim()
+$NodeArch = (& node -p "process.arch").Trim()
+$YtdlpBinary = if ($NodePlatform -eq "win32") { "yt-dlp.exe" } else { "yt-dlp" }
+$YtdlpBundle = Join-Path $RepoRoot "vendor\bin\$NodePlatform\$NodeArch\$YtdlpBinary"
 
 Write-Step "Repository: $RepoRoot"
 Write-Step "Node.js: $($node.Version)"
@@ -108,6 +112,7 @@ $ShimPath = Join-Path $BinDir "paunclip.cmd"
 $ShimContent = @"
 @echo off
 set "PAUNCLIP_REPO=$RepoRoot"
+set "YTDLP_PATH=$YtdlpBundle"
 node "%PAUNCLIP_REPO%\bin\paunclip.cjs" %*
 "@
 

@@ -7,6 +7,7 @@ import type { ContentPreset, ReframeMode } from "@/shared/reframe";
 export type ClipRenderSignatureInput = {
   sourcePath: string;
   sourceMode?: "full" | "section";
+  sourceClientProfile?: string;
   sourceTimeOffsetSeconds?: number;
   sourceSection?: {
     startTime: number;

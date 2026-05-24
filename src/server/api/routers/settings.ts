@@ -10,6 +10,7 @@ import {
   openOutputDirectory
 } from "@/server/storage/maintenance";
 import { getRuntimeInfo } from "@/server/runtime/paths";
+import { probeYoutubeAccess } from "@/server/media/ytdlp";
 import { getSystemHealth } from "@/server/system/health";
 import { getPreflightReport, preflightInputSchema } from "@/server/system/preflight";
 import {
@@ -39,6 +40,20 @@ export const settingsRouter = createTRPCRouter({
   health: publicProcedure.query(async () => {
     return getSystemHealth();
   }),
+
+  youtubeReadiness: publicProcedure
+    .input(
+      z.object({
+        url: z.string().min(1)
+      })
+    )
+    .query(async ({ input }) => {
+      const settings = await getSettings();
+      return probeYoutubeAccess({
+        url: input.url,
+        cookiesPath: settings.cookies.youtubePath ?? undefined
+      });
+    }),
 
   storageStats: publicProcedure.query(async () => {
     return getStorageStats();

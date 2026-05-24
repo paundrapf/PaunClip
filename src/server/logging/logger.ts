@@ -129,7 +129,7 @@ function shouldMirrorToConsole(level: LogLevel) {
 
 function mirrorToConsole(entry: LogEntry) {
   const prefix = `[${entry.timestamp}] ${entry.level.toUpperCase()} ${entry.jobId ?? "app"}`;
-  const data = entry.data === undefined ? "" : ` ${JSON.stringify(entry.data)}`;
+  const data = entry.data === undefined ? "" : ` ${JSON.stringify(compactConsoleLogData(entry.data))}`;
   const line = `${prefix} ${entry.message}${data}`;
 
   if (entry.level === "error") {
@@ -141,4 +141,39 @@ function mirrorToConsole(entry: LogEntry) {
     return;
   }
   console.log(line);
+}
+
+function compactConsoleLogData(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (!record.error || typeof record.error !== "object" || Array.isArray(record.error)) {
+    return value;
+  }
+
+  return {
+    ...record,
+    error: summarizeConsoleError(record.error as Record<string, unknown>)
+  };
+}
+
+function summarizeConsoleError(error: Record<string, unknown>) {
+  const summary: Record<string, unknown> = {
+    name: error.name,
+    message: error.message
+  };
+
+  if (typeof error.primaryFailureKind === "string") {
+    summary.primaryFailureKind = error.primaryFailureKind;
+  }
+  if (Array.isArray(error.advice)) {
+    summary.advice = error.advice;
+  }
+  if (Array.isArray(error.attempts)) {
+    summary.attemptCount = error.attempts.length;
+  }
+
+  return summary;
 }

@@ -1,18 +1,47 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import readline from "node:readline/promises";
+import { spawnSync } from "node:child_process";
+import { z } from "zod";
 import { appRouter } from "@/server/api/root";
 import { createTRPCContext } from "@/server/api/trpc";
 import { getSettings, saveSettings } from "@/server/config/settings-store";
 import { ensureDatabaseMigrations } from "@/server/db/migrations";
+import {
+  parseYoutubeCookiesText,
+  validateYoutubeCookiesFile,
+  validateYoutubeCookiesText,
+  type CookieInputFormat,
+  type YoutubeCookieValidation
+} from "@/server/media/youtube-cookies";
+import type { YoutubeLiveReadiness, YoutubeLiveProbeStep } from "@/server/media/ytdlp";
 import { registerPipelineJobs } from "@/server/pipeline/register";
-import { createUploadId, ensureStorageLayout, uploadPath } from "@/server/storage/paths";
-import { AI_PROVIDER_TASKS } from "@/shared/constants/ai-providers";
+import { configPath, createUploadId, ensureStorageLayout, uploadPath } from "@/server/storage/paths";
+import { writePrivateTextFile } from "@/server/storage/private-file";
+import {
+  AI_PROVIDER_PRESETS,
+  AI_PROVIDER_TASKS,
+  buildProviderConfig,
+  normalizeOpenAICompatibleBaseUrl,
+  providerSupportsCapability,
+  type AIProviderTask
+} from "@/shared/constants/ai-providers";
 import { DEFAULT_CAPTION_PRESETS } from "@/shared/constants/caption-presets";
 import { campaignBatchConfigSchema, campaignContentTypeSchema } from "@/shared/schemas/campaign";
 import { sourceTypeSchema } from "@/shared/schemas/primitives";
 import { sessionConfigSchema } from "@/shared/schemas/session";
-import { aiProviderConfigSchema, type AIProviderConfig } from "@/shared/schemas/settings";
+import { aiProviderConfigSchema, type AIProviderConfig, type AppSettings } from "@/shared/schemas/settings";
 import type { CliRuntime } from "./runtime";
+import {
+  buildCustomAISettings,
+  buildTaskProviderAISettings,
+  getProviderChoicesForTask,
+  buildSingleProviderAISettings,
+  isSetupProviderChoice,
+  isTaskProviderChoice,
+  type SetupProviderChoice
+} from "./setup-config";
+import { formatMissingPathMessage, resolveUserPath } from "./path-utils";
 import {
   badge,
   brand,
@@ -57,12 +86,25 @@ type ParsedOptions = {
 };
 
 const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
+const DEFAULT_AI_CONFIG_FILE = "paunclip.ai.local.json";
 const taskMap = {
   "highlight-finder": "highlightFinder",
   "caption-maker": "captionMaker",
   "hook-maker": "hookMaker",
   "youtube-title-maker": "youtubeTitleMaker"
 } as const;
+
+const aiConfigFileSchema = z.object({
+  version: z.literal(1).default(1),
+  aiProviders: z.object({
+    highlightFinder: aiProviderConfigSchema.optional(),
+    captionMaker: aiProviderConfigSchema.optional(),
+    hookMaker: aiProviderConfigSchema.optional(),
+    youtubeTitleMaker: aiProviderConfigSchema.optional()
+  })
+});
+
+type AIConfigFile = z.infer<typeof aiConfigFileSchema>;
 
 export async function runCli(argv: string[], runtime: CliRuntime) {
   const globals = parseGlobalOptions(argv);
@@ -103,7 +145,12 @@ async function dispatch(context: CliContext) {
   }
 
   if (command === "doctor") {
-    await commandDoctor(context, rest);
+    await commandDoctor(context, [subcommand, ...rest].filter(Boolean));
+    return;
+  }
+
+  if (command === "setup") {
+    await commandSetup(context, subcommand, rest);
     return;
   }
 
@@ -162,6 +209,8 @@ async function commandDoctor(context: CliContext, argv: string[]) {
     printDoctorHelp(context);
     return;
   }
+  const parsed = parseOptions(argv);
+  const youtubeUrl = stringOption(parsed, "youtube-url", "") || stringOption(parsed, "url", "");
   const [runtime, health, preflight] = await Promise.all([
     context.caller.settings.runtimeInfo(),
     context.caller.settings.health(),
@@ -172,11 +221,433 @@ async function commandDoctor(context: CliContext, argv: string[]) {
       hasTranscript: false
     })
   ]);
+  const youtubeReadiness = youtubeUrl
+    ? await context.caller.settings.youtubeReadiness({ url: youtubeUrl })
+    : undefined;
 
   output(
     context,
-    { runtime, health, preflight },
-    formatDoctorReport(context, runtime, health, preflight)
+    { runtime, health, preflight, youtubeReadiness },
+    formatDoctorReport(context, runtime, health, preflight, youtubeReadiness)
+  );
+}
+
+async function commandSetup(context: CliContext, subcommand: string | undefined, argv: string[]) {
+  if (!subcommand || subcommand === "all") {
+    if (hasHelp(argv)) {
+      printSetupHelp(context);
+      return;
+    }
+    await runSetupWizard(context);
+    return;
+  }
+
+  if (hasHelp([subcommand, ...argv])) {
+    printSetupHelp(context);
+    return;
+  }
+
+  const parsed = parseOptions(argv);
+  if (subcommand === "ai") {
+    await setupAI(context, parsed, { interactiveLabel: true });
+    return;
+  }
+  if (subcommand === "cookies") {
+    if (parsed.positionals[0] === "validate-live") {
+      await setupCookiesValidateLive(
+        context,
+        parsed.positionals[1] || stringOption(parsed, "youtube-url", "") || stringOption(parsed, "url", "")
+      );
+      return;
+    }
+    await setupCookies(context, parsed, { askFirst: false });
+    return;
+  }
+  if (subcommand === "output") {
+    await setupOutput(context, parsed);
+    return;
+  }
+  if (subcommand === "check") {
+    await commandDoctor(context, argv);
+    return;
+  }
+
+  throw new CliInputError(`Unknown setup command: ${subcommand}. Try \`paunclip setup --help\`.`);
+}
+
+async function runSetupWizard(context: CliContext) {
+  ensureInteractive(context, "Run `paunclip setup ai --provider groq --api-key-env GROQ_API_KEY --yes` for non-interactive setup.");
+  if (context.json) {
+    throw new CliInputError("Interactive setup cannot use --json. Try `paunclip setup check --json`.");
+  }
+
+  const [runtime, health] = await Promise.all([
+    context.caller.settings.runtimeInfo(),
+    context.caller.settings.health()
+  ]);
+
+  console.error(
+    [
+      cliBanner(context.color),
+      dim(context.color, "Guided setup for AI providers, YouTube cookies, output folders, and readiness."),
+      "",
+      section(context.color, "Profile"),
+      keyValue(context.color, "Profile", pathText(context.color, context.runtime.profilePath)),
+      keyValue(context.color, "Storage", pathText(context.color, runtime.storageRoot)),
+      keyValue(context.color, "Output", pathText(context.color, runtime.outputDirectory)),
+      keyValue(context.color, "Database", pathText(context.color, runtime.databasePath)),
+      "",
+      section(context.color, "Current Status"),
+      keyValue(context.color, "FFmpeg", health.tools.ffmpeg.ok ? badge(context.color, "ready") : badge(context.color, "missing")),
+      keyValue(context.color, "FFprobe", health.tools.ffprobe.ok ? badge(context.color, "ready") : badge(context.color, "missing")),
+      keyValue(context.color, "yt-dlp", health.tools.ytdlp.ok ? badge(context.color, "ready") : badge(context.color, "missing")),
+      keyValue(context.color, "Cookies", health.cookies.ok ? badge(context.color, "ready") : badge(context.color, health.cookies.severity)),
+      ""
+    ].join("\n")
+  );
+
+  if (await promptConfirm(context, "Set up AI provider now?", true)) {
+    await setupAI(context, { positionals: [], options: {} }, { interactiveLabel: false });
+  }
+  await setupCookies(context, { positionals: [], options: {} }, { askFirst: true });
+  await setupOutput(context, { positionals: [], options: {} });
+
+  console.error("");
+  await commandDoctor(context, []);
+  console.error("");
+  console.error(nextSteps(context.color, [
+    'paunclip create clips "https://youtube.com/watch?v=..." --clips 3',
+    'paunclip create campaign "My Campaign" "https://youtube.com/@channel"'
+  ]));
+}
+
+async function setupAI(
+  context: CliContext,
+  parsed: ParsedOptions,
+  options: { interactiveLabel: boolean }
+) {
+  const action = parsed.positionals[0];
+  if (!action) {
+    if (
+      hasOption(parsed, "provider") ||
+      hasOption(parsed, "api-key") ||
+      hasOption(parsed, "api-key-env") ||
+      hasOption(parsed, "base-url") ||
+      hasOption(parsed, "model") ||
+      context.yes
+    ) {
+      await setupAIQuick(context, parsed, options);
+      return;
+    }
+    await setupAIDashboard(context, options);
+    return;
+  }
+
+  if (action === "quick") {
+    await setupAIQuick(
+      context,
+      { positionals: parsed.positionals.slice(1), options: parsed.options },
+      options
+    );
+    return;
+  }
+
+  if (action === "task") {
+    await setupAITask(context, parsed, parsed.positionals[1], options);
+    return;
+  }
+
+  if (action === "validate") {
+    await setupAIValidate(context, parsed.positionals[1]);
+    return;
+  }
+
+  throw new CliInputError("Usage: paunclip setup ai [task|quick|validate]");
+}
+
+async function setupAIDashboard(
+  context: CliContext,
+  options: { interactiveLabel: boolean }
+) {
+  ensureInteractive(context, "Run `paunclip setup ai quick --provider groq --api-key-env GROQ_API_KEY --yes` for non-interactive setup.");
+  const settings = await getSettings();
+  console.error(
+    [
+      options.interactiveLabel ? cliBanner(context.color) : "",
+      section(context.color, "AI Setup"),
+      "Choose one task to configure. JSON config is still available as advanced mode.",
+      "",
+      formatCurrentAITaskSummary(context, settings),
+      ""
+    ].filter(Boolean).join("\n")
+  );
+
+  const action = await promptSelect(
+    context,
+    "What do you want to configure?",
+    [
+      { value: "task:highlightFinder", label: "Highlight Finder", description: "Chat model that finds moments." },
+      { value: "task:captionMaker", label: "Caption Maker", description: "Audio transcription model." },
+      { value: "task:hookMaker", label: "Hook Maker", description: "TTS model and voice." },
+      { value: "task:youtubeTitleMaker", label: "YouTube Title Maker", description: "Chat model for titles." },
+      { value: "quick", label: "Recommended quick setup", description: "Use Groq/OpenAI defaults for all tasks." },
+      { value: "validate", label: "Validate all", description: "Check current provider/model/key readiness." },
+      { value: "exit", label: "Exit", description: "Leave AI settings unchanged." }
+    ],
+    "task:highlightFinder"
+  );
+
+  if (action.startsWith("task:")) {
+    await setupAITask(context, { positionals: [], options: {} }, action.slice("task:".length), options);
+    return;
+  }
+  if (action === "quick") {
+    await setupAIQuick(context, { positionals: [], options: {} }, options);
+    return;
+  }
+  if (action === "validate") {
+    await setupAIValidate(context);
+    return;
+  }
+  output(context, { skipped: true }, "AI setup unchanged.");
+}
+
+async function setupAIQuick(
+  context: CliContext,
+  parsed: ParsedOptions,
+  options: { interactiveLabel: boolean }
+) {
+  const provider = await resolveSetupProvider(context, parsed);
+  if (provider === "skip") {
+    output(context, { skipped: true }, "AI setup skipped. Run `paunclip setup ai` when you are ready.");
+    return;
+  }
+
+  const current = await getSettings();
+  const apiKey = await resolveSetupApiKey(context, parsed, provider);
+  let result: ReturnType<typeof buildSingleProviderAISettings> | ReturnType<typeof buildCustomAISettings>;
+
+  if (provider === "groq" || provider === "openai") {
+    result = buildSingleProviderAISettings(current, { provider, apiKey });
+  } else {
+    const customInput = await resolveCustomProviderInput(context, parsed, apiKey);
+    result = buildCustomAISettings(current, customInput);
+  }
+
+  const shouldValidate = !hasOption(parsed, "skip-validate");
+  const validation = shouldValidate
+    ? await validateAIProviderEntries(context, result.settings, result.configuredTasks)
+    : [];
+  const failed = validation.filter((item) => !item.ok);
+
+  if (failed.length > 0) {
+    const rendered = formatAIValidation(context, validation);
+    if (!context.json && !context.quiet) {
+      console.error(rendered);
+    }
+    const canSaveAnyway = process.stdin.isTTY && !context.yes
+      ? await promptConfirm(context, "Validation failed. Save these settings anyway and fix later?", false)
+      : false;
+    if (!canSaveAnyway) {
+      throw new CliInputError(
+        `AI setup validation failed. ${failed.map((item) => `${item.task}: ${item.message}`).join(" ")}`
+      );
+    }
+  }
+
+  const saved = await saveSettings(result.settings);
+  const text = [
+    options.interactiveLabel ? cliBanner(context.color) : "",
+    section(context.color, "AI Provider Setup"),
+    `Provider configured: ${providerLabel(provider)}`,
+    formatAITaskSummary(context, saved, result.configuredTasks, result.skippedTasks),
+    validation.length ? "" : dim(context.color, "Validation skipped. Run `paunclip setup check` when you are ready."),
+    validation.length ? formatAIValidation(context, validation) : ""
+  ].filter(Boolean).join("\n");
+
+  output(
+    context,
+    {
+      aiProviders: maskSettingsForCli(saved).aiProviders,
+      configuredTasks: result.configuredTasks,
+      skippedTasks: result.skippedTasks,
+      validation
+    },
+    text
+  );
+}
+
+async function setupAITask(
+  context: CliContext,
+  parsed: ParsedOptions,
+  taskInput: string | undefined,
+  options: { interactiveLabel: boolean }
+) {
+  const task = normalizeTask(taskInput);
+  const current = await getSettings();
+  const previous = current.aiProviders[task];
+  const provider = await resolveTaskSetupProvider(context, parsed, task);
+  const baseUrl = provider === "custom" ? await resolveTaskBaseUrl(context, parsed, task) : undefined;
+  const defaults = buildProviderConfig(provider, task, {
+    ...previous,
+    baseUrl: baseUrl || previous.baseUrl
+  });
+  const apiKey = await resolveSetupApiKey(context, parsed, provider);
+  const model =
+    stringOption(parsed, "model", "") ||
+    defaults.model ||
+    (context.yes ? "" : await promptText(context, `${taskLabel(task)} model`, defaults.model));
+  if (!model) {
+    throw new CliInputError(`${taskLabel(task)} model is empty.`);
+  }
+
+  const voice =
+    task === "hookMaker"
+      ? stringOption(parsed, "voice", "") ||
+        defaults.ttsVoice ||
+        (context.yes ? "" : await promptText(context, "Hook Maker voice", defaults.ttsVoice ?? ""))
+      : undefined;
+
+  if (task === "hookMaker" && !voice) {
+    throw new CliInputError("Hook Maker voice is empty. Use --voice or run the interactive wizard.");
+  }
+
+  const result = buildTaskProviderAISettings(current, {
+    task,
+    provider,
+    apiKey,
+    model,
+    baseUrl,
+    ttsVoice: voice,
+    ttsFormat: stringOption(parsed, "format", defaults.ttsFormat ?? "mp3") as AIProviderConfig["ttsFormat"]
+  });
+
+  const shouldValidate = !hasOption(parsed, "skip-validate");
+  const validation = shouldValidate ? await validateAIProviderEntries(context, result.settings, [task]) : [];
+  const failed = validation.filter((item) => !item.ok);
+  if (failed.length > 0) {
+    if (!context.json && !context.quiet) {
+      console.error(formatAIValidation(context, validation));
+    }
+    throw new CliInputError(
+      `AI task validation failed. ${failed.map((item) => `${item.task}: ${item.message}`).join(" ")}`
+    );
+  }
+
+  const saved = await saveSettings(result.settings);
+  output(
+    context,
+    {
+      task,
+      aiProviders: maskSettingsForCli(saved).aiProviders,
+      validation
+    },
+    [
+      options.interactiveLabel ? cliBanner(context.color) : "",
+      section(context.color, `${taskLabel(task)} Setup`),
+      `${taskLabel(task)} configured with ${providerLabel(provider)}.`,
+      formatAITaskSummary(context, saved, [task], []),
+      validation.length ? formatAIValidation(context, validation) : dim(context.color, "Validation skipped.")
+    ].filter(Boolean).join("\n")
+  );
+}
+
+async function setupAIValidate(context: CliContext, taskInput?: string) {
+  const settings = await getSettings();
+  const tasks = taskInput ? [normalizeTask(taskInput)] : [...AI_PROVIDER_TASKS];
+  const validation = await validateAIProviderEntries(context, settings, tasks);
+  output(context, { validation }, formatAIValidation(context, validation));
+}
+
+async function setupCookies(
+  context: CliContext,
+  parsed: ParsedOptions,
+  options: { askFirst: boolean }
+) {
+  let file = stringOption(parsed, "path", "");
+  if (!file && parsed.positionals[0]) {
+    file = parsed.positionals[0];
+  }
+
+  if (!file) {
+    ensureInteractive(context, "Run `paunclip setup cookies --path ./cookies.txt --yes` for non-interactive setup.");
+    if (options.askFirst) {
+      const wantsCookies = await promptConfirm(context, "Add YouTube cookies now?", false);
+      if (!wantsCookies) {
+        output(context, { skipped: true }, "Cookies setup skipped. You can add them later with `paunclip setup cookies`.");
+        return;
+      }
+    }
+    file = await promptText(context, "Cookie file path", "");
+  }
+
+  if (!file.trim()) {
+    output(context, { skipped: true }, "Cookies setup skipped.");
+    return;
+  }
+
+  const result = await saveCookieFileReferenceOrConversion(file.trim());
+  output(
+    context,
+    result,
+    [
+      result.converted
+        ? `Cookies converted to private Netscape file: ${pathText(context.color, result.cookies.youtubePath ?? result.storedPath)}`
+        : `Cookies linked from: ${pathText(context.color, result.cookies.youtubePath ?? result.storedPath)}`,
+      formatCookieValidation(context, result.originalPath, result.validation)
+    ].join("\n")
+  );
+}
+
+async function setupCookiesValidateLive(context: CliContext, youtubeUrl: string) {
+  if (!youtubeUrl.trim()) {
+    throw new CliInputError("Usage: paunclip setup cookies validate-live <youtube-url>");
+  }
+  const settings = await getSettings();
+  if (!settings.cookies.youtubePath) {
+    throw new CliInputError("YouTube cookies are not configured. Run `paunclip setup cookies` first.");
+  }
+  const staticValidation = await validateYoutubeCookiesFile(settings.cookies.youtubePath);
+  const readiness = await context.caller.settings.youtubeReadiness({ url: youtubeUrl.trim() });
+  output(
+    context,
+    { staticValidation, readiness },
+    [
+      formatCookieValidation(context, settings.cookies.youtubePath, staticValidation),
+      "",
+      formatYoutubeLiveReadiness(context, readiness)
+    ].join("\n")
+  );
+}
+
+async function setupOutput(context: CliContext, parsed: ParsedOptions) {
+  let target = stringOption(parsed, "path", "");
+  if (!target && parsed.positionals[0]) {
+    target = parsed.positionals[0];
+  }
+
+  const runtime = await context.caller.settings.runtimeInfo();
+  if (!target) {
+    ensureInteractive(context, "Run `paunclip setup output --path ./output --yes` for non-interactive setup.");
+    console.error(keyValue(context.color, "Current output", pathText(context.color, runtime.outputDirectory)));
+    const keep = await promptConfirm(context, "Keep this output folder?", true);
+    if (keep) {
+      output(context, { outputDirectory: runtime.outputDirectory }, `Output folder kept: ${runtime.outputDirectory}`);
+      return;
+    }
+    target = await promptText(context, "New output folder", runtime.outputDirectory);
+  }
+
+  const settings = await context.caller.settings.updateOutputDirectory(target);
+  const nextRuntime = await context.caller.settings.runtimeInfo();
+  output(
+    context,
+    { outputDirectory: settings.outputDirectory, resolvedOutputDirectory: nextRuntime.outputDirectory },
+    [
+      section(context.color, "Output Folder"),
+      keyValue(context.color, "Saved", pathText(context.color, settings.outputDirectory)),
+      keyValue(context.color, "Resolved", pathText(context.color, nextRuntime.outputDirectory))
+    ].join("\n")
   );
 }
 
@@ -596,6 +1067,11 @@ async function commandConfig(context: CliContext, subcommand: string | undefined
     return;
   }
 
+  if (subcommand === "ai") {
+    await commandConfigAi(context, parsed);
+    return;
+  }
+
   if (subcommand === "logs") {
     const action = parsed.positionals[0];
     if (action !== "open") {
@@ -638,25 +1114,59 @@ async function commandConfigOutput(context: CliContext, parsed: ParsedOptions) {
 
 async function commandConfigCookies(context: CliContext, parsed: ParsedOptions) {
   const action = parsed.positionals[0];
-  if (action === "import") {
+  if (action === "detect") {
     const file = parsed.positionals[1];
-    if (!file) throw new CliInputError("Usage: paunclip config cookies import <cookies.txt>");
-    const absolute = path.resolve(file);
-    await fs.access(absolute);
-    const current = await getSettings();
-    const next = await saveSettings({
-      ...current,
-      cookies: {
-        youtubePath: absolute,
-        lastUpdated: new Date().toISOString()
-      }
-    });
-    output(context, { cookies: next.cookies }, `Cookies imported from ${absolute}`);
+    if (!file) throw new CliInputError("Usage: paunclip config cookies detect <file>");
+    const absolute = resolveUserPath(file);
+    const text = await fs.readFile(absolute, "utf8");
+    const parsedCookies = parseYoutubeCookiesText(text);
+    output(
+      context,
+      {
+        path: absolute,
+        format: parsedCookies.format,
+        cookieCount: parsedCookies.cookies.length,
+        needsConversion: parsedCookies.needsConversion
+      },
+      formatCookieDetection(context, absolute, parsedCookies.format, parsedCookies.cookies.length, parsedCookies.needsConversion)
+    );
+    return;
+  }
+  if (action === "validate") {
+    const file = parsed.positionals[1];
+    if (!file) throw new CliInputError("Usage: paunclip config cookies validate <file>");
+    const absolute = resolveUserPath(file);
+    const text = await fs.readFile(absolute, "utf8");
+    const validation = validateYoutubeCookiesText(text);
+    output(context, { path: absolute, validation }, formatCookieValidation(context, absolute, validation));
+    return;
+  }
+  if (action === "set" || action === "import") {
+    const file = parsed.positionals[1];
+    if (!file) throw new CliInputError(`Usage: paunclip config cookies ${action} <file>`);
+    const result = await saveCookieFileReferenceOrConversion(file);
+    output(
+      context,
+      result,
+      [
+        result.converted
+          ? `Cookies converted to Netscape format: ${result.cookies.youtubePath}`
+          : `Cookies linked from: ${result.cookies.youtubePath}`,
+        formatCookieValidation(context, result.originalPath, result.validation)
+      ].join("\n")
+    );
     return;
   }
   if (action === "status") {
     const settings = await getSettings();
-    output(context, { cookies: settings.cookies }, settings.cookies.youtubePath ? `Cookies: ${settings.cookies.youtubePath}` : "Cookies not configured");
+    const validation = await validateYoutubeCookiesFile(settings.cookies.youtubePath);
+    output(
+      context,
+      { cookies: settings.cookies, validation },
+      settings.cookies.youtubePath
+        ? formatCookieValidation(context, settings.cookies.youtubePath, validation)
+        : "Cookies not configured. Run `paunclip config cookies set <file>`."
+    );
     return;
   }
   if (action === "clear") {
@@ -668,11 +1178,160 @@ async function commandConfigCookies(context: CliContext, parsed: ParsedOptions) 
     output(context, { ok: true }, "Cookies cleared");
     return;
   }
-  throw new CliInputError("Usage: paunclip config cookies <import|status|clear>");
+  throw new CliInputError("Usage: paunclip config cookies <detect|validate|set|import|status|clear>");
+}
+
+async function commandConfigAi(context: CliContext, parsed: ParsedOptions) {
+  const action = parsed.positionals[0];
+  if (action === "init") {
+    const target = resolveAIConfigPath(parsed.positionals[1]);
+    await ensureWritableTarget(target, hasOption(parsed, "force"));
+    const settings = await getSettings();
+    await writeJsonFile(target, buildAIConfigTemplate(settings, false));
+    output(
+      context,
+      {
+        path: target,
+        next: [
+          `nano ${target}`,
+          parsed.positionals[1]
+            ? `paunclip config ai apply ${target} --validate`
+            : "paunclip config ai apply --validate"
+        ]
+      },
+      [
+        `AI config template created: ${target}`,
+        "Edit this JSON with nano, Notepad, or your editor, then apply it:",
+        `  ${commandText(context.color, `nano "${target}"`)}`,
+        `  ${commandText(context.color, parsed.positionals[1] ? `paunclip config ai apply "${target}" --validate` : "paunclip config ai apply --validate")}`
+      ].join("\n")
+    );
+    return;
+  }
+
+  if (action === "apply") {
+    const file = resolveAIConfigPath(parsed.positionals[1]);
+    const loaded = await readAIConfigFile(file);
+    const current = await getSettings();
+    const merged = mergeAIConfigIntoSettings(current, loaded);
+    const validation = hasOption(parsed, "validate")
+      ? await validateAIProviderEntries(context, merged, Object.keys(loaded.aiProviders))
+      : [];
+    if (validation.some((item) => !item.ok) && !hasOption(parsed, "force")) {
+      throw new CliInputError(
+        `AI config validation failed. Fix the JSON, or re-run with --force. ${validation
+          .filter((item) => !item.ok)
+          .map((item) => `${item.task}: ${item.message}`)
+          .join(" ")}`
+      );
+    }
+    const saved = await saveSettings(merged);
+    output(
+      context,
+      { aiProviders: maskSettingsForCli(saved).aiProviders, validation },
+      [
+        "AI provider config applied.",
+        validation.length ? formatAIValidation(context, validation) : "Tip: run with --validate to test provider/model/key readiness.",
+        "Future provider edits: run `paunclip config ai edit`, then `paunclip config ai apply --validate`."
+      ].join("\n")
+    );
+    return;
+  }
+
+  if (action === "validate") {
+    const file = resolveAIConfigPath(parsed.positionals[1]);
+    const loaded = await readAIConfigFile(file);
+    const current = await getSettings();
+    const merged = mergeAIConfigIntoSettings(current, loaded);
+    const validation = await validateAIProviderEntries(context, merged, Object.keys(loaded.aiProviders));
+    output(context, { validation }, formatAIValidation(context, validation));
+    return;
+  }
+
+  if (action === "edit") {
+    const target = resolveAIConfigPath(parsed.positionals[1]);
+    try {
+      await fs.access(target);
+    } catch {
+      await writeJsonFile(target, buildAIConfigTemplate(await getSettings(), false));
+    }
+    const editor = chooseEditorCommand();
+    if (hasOption(parsed, "dry-run")) {
+      output(
+        context,
+        { path: target, editor },
+        [
+          `AI config file: ${pathText(context.color, target)}`,
+          `Editor command: ${commandText(context.color, [editor.command, ...editor.args, target].join(" "))}`
+        ].join("\n")
+      );
+      return;
+    }
+    const result = spawnSync(editor.command, [...editor.args, target], {
+      stdio: "inherit",
+      windowsHide: false
+    });
+    if (result.error) {
+      throw new CliInputError(`Could not open editor: ${result.error.message}. File path: ${target}`);
+    }
+    if (typeof result.status === "number" && result.status !== 0) {
+      throw new CliInputError(`Editor exited with code ${result.status}. File path: ${target}`);
+    }
+    output(
+      context,
+      { path: target },
+      [
+        `AI config edited: ${target}`,
+        nextSteps(context.color, ["paunclip config ai apply --validate"])
+      ].join("\n")
+    );
+    return;
+  }
+
+  if (action === "show") {
+    const settings = await getSettings();
+    output(context, { aiProviders: maskSettingsForCli(settings).aiProviders }, JSON.stringify({ version: 1, aiProviders: maskSettingsForCli(settings).aiProviders }, null, 2));
+    return;
+  }
+
+  if (action === "export") {
+    const target = parsed.positionals[1];
+    if (!target) throw new CliInputError("Usage: paunclip config ai export <file> [--include-secrets] [--force]");
+    const absolute = path.resolve(target);
+    await ensureWritableTarget(absolute, hasOption(parsed, "force"));
+    const settings = await getSettings();
+    const includeSecrets = hasOption(parsed, "include-secrets");
+    await writeJsonFile(absolute, buildAIConfigTemplate(settings, includeSecrets));
+    output(
+      context,
+      { path: absolute, includeSecrets },
+      includeSecrets
+        ? `AI config exported with secrets: ${absolute}`
+        : `AI config exported without API keys: ${absolute}`
+    );
+    return;
+  }
+
+  throw new CliInputError("Usage: paunclip config ai <init|edit|apply|validate|show|export>");
 }
 
 async function commandConfigProvider(context: CliContext, parsed: ParsedOptions) {
   const action = parsed.positionals[0];
+  if (!action || action === "help") {
+    output(
+      context,
+      { help: "config provider" },
+      [
+        cliBanner(context.color),
+        section(context.color, "AI Providers"),
+        "Recommended flow:",
+        `  ${commandText(context.color, "paunclip setup ai")}`,
+        "",
+        dim(context.color, "`config provider set` is kept for old scripts. Advanced JSON is available with `paunclip config ai edit`.")
+      ].join("\n")
+    );
+    return;
+  }
   if (action === "list") {
     const settings = await getSettings();
     output(
@@ -722,6 +1381,198 @@ async function commandConfigProvider(context: CliContext, parsed: ParsedOptions)
   throw new CliInputError("Usage: paunclip config provider <list|set|validate>");
 }
 
+async function saveCookieFileReferenceOrConversion(file: string) {
+  const absolute = resolveUserPath(file);
+  let text: string;
+  try {
+    text = await fs.readFile(absolute, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      throw new CliInputError(
+        formatMissingPathMessage(file, absolute, [
+          "~/Cookies/youtube-cookies.txt",
+          "./Cookies/youtube-cookies.txt",
+          process.platform === "win32"
+            ? "C:\\Users\\you\\Downloads\\youtube-cookies.txt"
+            : "/home/you/Downloads/youtube-cookies.txt"
+        ])
+      );
+    }
+    throw error;
+  }
+  const parsed = parseYoutubeCookiesText(text);
+  const validation = validateYoutubeCookiesText(text);
+  if (!validation.ok && validation.severity === "error") {
+    throw new CliInputError(validation.message);
+  }
+
+  const current = await getSettings();
+  const storedPath = parsed.needsConversion ? configPath("cookies.txt") : absolute;
+  if (parsed.needsConversion) {
+    await writePrivateTextFile(storedPath, parsed.netscapeText);
+  }
+
+  const next = await saveSettings({
+    ...current,
+    cookies: {
+      youtubePath: storedPath,
+      lastUpdated: new Date().toISOString()
+    }
+  });
+
+  return {
+    originalPath: absolute,
+    storedPath,
+    converted: parsed.needsConversion,
+    format: parsed.format,
+    cookies: next.cookies,
+    validation
+  };
+}
+
+function formatCookieDetection(
+  context: CliContext,
+  filePath: string,
+  format: CookieInputFormat,
+  count: number,
+  needsConversion: boolean
+) {
+  return [
+    section(context.color, "Cookie File"),
+    keyValue(context.color, "Path", pathText(context.color, filePath)),
+    keyValue(context.color, "Format", format),
+    keyValue(context.color, "Cookies", String(count)),
+    keyValue(context.color, "Action", needsConversion ? "Will convert to Netscape cookies.txt" : "Can be referenced directly")
+  ].join("\n");
+}
+
+function formatCookieValidation(context: CliContext, filePath: string, validation: YoutubeCookieValidation) {
+  return [
+    section(context.color, "Cookies"),
+    keyValue(context.color, "Path", pathText(context.color, filePath)),
+    keyValue(context.color, "Format", validation.format ?? "unknown"),
+    `${badge(context.color, validation.severity)} ${validation.message}`,
+    keyValue(context.color, "YouTube cookies", String(validation.stats.youtubeCookies)),
+    keyValue(context.color, "Auth cookies", String(validation.stats.authCookies)),
+    keyValue(context.color, "Secure cookies", String(validation.stats.secureCookies)),
+    validation.stats.expiredCookies ? keyValue(context.color, "Expired cookies", String(validation.stats.expiredCookies)) : "",
+    validation.advice.length ? nextSteps(context.color, validation.advice) : ""
+  ].filter(Boolean).join("\n");
+}
+
+async function readAIConfigFile(file: string) {
+  const absolute = path.resolve(file);
+  let json: unknown;
+  try {
+    json = JSON.parse(await fs.readFile(absolute, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      throw new CliInputError(
+        `Config file not found: ${absolute}. Run \`paunclip setup\` for guided setup, or \`paunclip config ai init <file>\` for advanced JSON.`
+      );
+    }
+    throw new CliInputError(`Could not read AI config JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    return aiConfigFileSchema.parse(json);
+  } catch (error) {
+    throw new CliInputError(`Invalid AI config JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function buildAIConfigTemplate(settings: AppSettings, includeSecrets: boolean): AIConfigFile {
+  return {
+    version: 1,
+    aiProviders: Object.fromEntries(
+      AI_PROVIDER_TASKS.map((task) => [
+        task,
+        {
+          ...settings.aiProviders[task],
+          apiKey: includeSecrets ? settings.aiProviders[task].apiKey : ""
+        }
+      ])
+    ) as AIConfigFile["aiProviders"]
+  };
+}
+
+function mergeAIConfigIntoSettings(settings: AppSettings, configFile: AIConfigFile): AppSettings {
+  const aiProviders = { ...settings.aiProviders };
+  for (const task of AI_PROVIDER_TASKS) {
+    const incoming = configFile.aiProviders[task];
+    if (!incoming) {
+      continue;
+    }
+    const previous = settings.aiProviders[task];
+    aiProviders[task] = aiProviderConfigSchema.parse(
+      cleanProviderConfig({
+        ...incoming,
+        apiKey: incoming.apiKey || previous.apiKey
+      })
+    );
+  }
+  return { ...settings, aiProviders };
+}
+
+async function validateAIProviderEntries(
+  context: CliContext,
+  settings: AppSettings,
+  tasks: string[]
+) {
+  const knownTasks = tasks
+    .map((task) => normalizeTask(task))
+    .filter((task, index, array) => array.indexOf(task) === index);
+  const results: Array<{ task: string; ok: boolean; message: string }> = [];
+  for (const task of knownTasks) {
+    try {
+      const result = await context.caller.settings.validateProvider({
+        task,
+        config: settings.aiProviders[task]
+      });
+      results.push({ task, ok: result.ok, message: result.message });
+    } catch (error) {
+      results.push({
+        task,
+        ok: false,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  return results;
+}
+
+function formatAIValidation(context: CliContext, validation: Array<{ task: string; ok: boolean; message: string }>) {
+  if (validation.length === 0) {
+    return "No provider entries found in JSON.";
+  }
+  return table(
+    validation.map((item) => [
+      badge(context.color, item.ok ? "ready" : "failed"),
+      item.task,
+      item.message
+    ]),
+    { headers: ["Status", "Task", "Message"], color: context.color }
+  );
+}
+
+async function ensureWritableTarget(filePath: string, force: boolean) {
+  if (force) {
+    return;
+  }
+  try {
+    await fs.access(filePath);
+    throw new CliInputError(`File already exists: ${filePath}. Use --force to overwrite it.`);
+  } catch (error) {
+    if (error instanceof CliInputError) {
+      throw error;
+    }
+  }
+}
+
+async function writeJsonFile(filePath: string, value: unknown) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await writePrivateTextFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
 async function waitForJob(context: CliContext, jobId: string) {
   let lastEventId = "";
   while (true) {
@@ -739,12 +1590,43 @@ async function waitForJob(context: CliContext, jobId: string) {
     }
     if (TERMINAL_JOB_STATUSES.has(job.status)) {
       if (job.status === "failed") {
-        throw new CliJobError(`Job failed: ${job.errorJson ?? job.id}`);
+        throw new CliJobError(formatJobFailureMessage(context, job.errorJson, job.id));
       }
       return job;
     }
     await sleep(1000);
   }
+}
+
+function formatJobFailureMessage(context: CliContext, errorJson: string | null | undefined, jobId: string) {
+  const parsed = parseJsonObject(errorJson);
+  const rawMessage = typeof parsed?.message === "string" ? parsed.message : jobId;
+  const message = compactCliError(rawMessage);
+  const advice = Array.isArray(parsed?.advice)
+    ? parsed.advice.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+
+  return [
+    `Job failed: ${message}`,
+    advice.length > 0 ? nextSteps(context.color, advice) : ""
+  ].filter(Boolean).join("\n");
+}
+
+function parseJsonObject(value: string | null | undefined): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function compactCliError(value: string) {
+  const withoutDetails = value.split(" Detail terakhir:")[0] ?? value;
+  return withoutDetails.length > 700 ? `${withoutDetails.slice(0, 700)}...` : withoutDetails;
 }
 
 async function assertCliPreflight(
@@ -780,6 +1662,341 @@ async function importLocalVideo(source: string) {
   await fs.mkdir(path.dirname(target), { recursive: true });
   await fs.copyFile(absolute, target);
   return uploadId;
+}
+
+async function resolveSetupProvider(context: CliContext, parsed: ParsedOptions): Promise<SetupProviderChoice> {
+  const raw = stringOption(parsed, "provider", "").toLowerCase();
+  if (raw) {
+    if (!isSetupProviderChoice(raw)) {
+      throw new CliInputError("Unknown setup provider. Use groq, openai, custom, or skip.");
+    }
+    return raw;
+  }
+
+  ensureInteractive(context, "Run `paunclip setup ai --provider groq --api-key-env GROQ_API_KEY --yes` for non-interactive setup.");
+  return promptSelect<SetupProviderChoice>(
+    context,
+    "Choose AI provider",
+    [
+      { value: "groq", label: "Groq", description: "Fast chat + Whisper transcription + TTS voice." },
+      { value: "openai", label: "OpenAI", description: "Official OpenAI chat + Whisper + TTS." },
+      { value: "custom", label: "Custom OpenAI-compatible", description: "Good for OpenCode/local gateways; often chat-only." },
+      { value: "skip", label: "Skip for now", description: "Configure later." }
+    ],
+    "groq"
+  );
+}
+
+async function resolveTaskSetupProvider(
+  context: CliContext,
+  parsed: ParsedOptions,
+  task: AIProviderTask
+): Promise<AIProviderConfig["provider"]> {
+  const raw = stringOption(parsed, "provider", "").toLowerCase();
+  if (raw) {
+    if (!isTaskProviderChoice(raw)) {
+      throw new CliInputError("Unknown provider. Use groq, openai, custom, anthropic, or gemini.");
+    }
+    if (!getProviderChoicesForTask(task).includes(raw)) {
+      throw new CliInputError(`${providerLabel(raw)} does not support ${taskLabel(task)}.`);
+    }
+    return raw;
+  }
+
+  ensureInteractive(
+    context,
+    `Run \`paunclip setup ai task ${taskSlug(task)} --provider groq --api-key-env GROQ_API_KEY --yes\` for non-interactive setup.`
+  );
+  const choices = getProviderChoicesForTask(task).map((provider) => ({
+    value: provider,
+    label: providerLabel(provider),
+    description: providerDescription(provider, task)
+  }));
+  return promptSelect(context, `Choose provider for ${taskLabel(task)}`, choices, choices[0]?.value ?? "groq");
+}
+
+async function resolveTaskBaseUrl(context: CliContext, parsed: ParsedOptions, task: AIProviderTask) {
+  const baseUrl = normalizeOpenAICompatibleBaseUrl(
+    stringOption(parsed, "base-url", "") ||
+      (context.yes ? AI_PROVIDER_PRESETS.custom.defaultBaseUrl : await promptText(context, "Custom base URL", AI_PROVIDER_PRESETS.custom.defaultBaseUrl))
+  );
+  if (!providerSupportsCapability({ provider: "custom", baseUrl }, task === "captionMaker" ? "transcription" : task === "hookMaker" ? "tts" : "chat")) {
+    throw new CliInputError(
+      `This custom endpoint looks chat-only and cannot be used for ${taskLabel(task)}. Use Groq/OpenAI for audio tasks, or set a different --base-url.`
+    );
+  }
+  return baseUrl;
+}
+
+async function resolveSetupApiKey(
+  context: CliContext,
+  parsed: ParsedOptions,
+  provider: AIProviderConfig["provider"] | SetupProviderChoice
+) {
+  const envName = stringOption(parsed, "api-key-env", "");
+  if (envName) {
+    const value = process.env[envName];
+    if (!value) {
+      throw new CliInputError(`Environment variable ${envName} is empty. Run \`paunclip setup ai\` to paste one securely.`);
+    }
+    return value;
+  }
+
+  const inline = stringOption(parsed, "api-key", "");
+  if (inline) {
+    return inline;
+  }
+
+  if (provider === "custom" && hasOption(parsed, "no-api-key")) {
+    return "";
+  }
+
+  ensureInteractive(context, "Run `paunclip setup ai --provider groq --api-key-env GROQ_API_KEY --yes` for non-interactive setup.");
+  const preset = provider === "skip" ? AI_PROVIDER_PRESETS.custom : AI_PROVIDER_PRESETS[provider];
+  const apiKey = await promptSecret(context, `${preset.label} API key${preset.keyPlaceholder ? ` (${preset.keyPlaceholder})` : ""}`);
+  if (!apiKey && provider !== "custom") {
+    throw new CliInputError("API key is empty. Run `paunclip setup ai` to paste one securely.");
+  }
+  return apiKey;
+}
+
+async function resolveCustomProviderInput(context: CliContext, parsed: ParsedOptions, apiKey: string) {
+  const baseUrl = normalizeOpenAICompatibleBaseUrl(
+    stringOption(parsed, "base-url", "") ||
+      (await promptIfMissing(context, "Custom base URL", AI_PROVIDER_PRESETS.custom.defaultBaseUrl))
+  );
+  const chatModel =
+    stringOption(parsed, "model", "") ||
+    (await promptIfMissing(context, "Chat model", AI_PROVIDER_PRESETS.custom.defaultsByTask.highlightFinder?.model ?? ""));
+
+  const chatOnly = !providerSupportsCapability({ provider: "custom", baseUrl }, "transcription") ||
+    !providerSupportsCapability({ provider: "custom", baseUrl }, "tts");
+
+  let transcriptionModel = stringOption(parsed, "transcription-model", "");
+  if (!transcriptionModel && !chatOnly && !context.yes && await promptConfirm(context, "Use this custom endpoint for transcription too?", false)) {
+    transcriptionModel = await promptText(context, "Transcription model", AI_PROVIDER_PRESETS.custom.defaultsByTask.captionMaker?.model ?? "whisper-1");
+  }
+
+  let ttsModel = stringOption(parsed, "tts-model", "");
+  let ttsVoice = stringOption(parsed, "voice", "");
+  if (!ttsModel && !chatOnly && !context.yes && await promptConfirm(context, "Use this custom endpoint for hook voice/TTS too?", false)) {
+    ttsModel = await promptText(context, "TTS model", AI_PROVIDER_PRESETS.custom.defaultsByTask.hookMaker?.model ?? "tts-1");
+    ttsVoice = await promptText(context, "TTS voice", AI_PROVIDER_PRESETS.custom.defaultsByTask.hookMaker?.voice ?? "alloy");
+  }
+
+  if (chatOnly && !context.json && !context.quiet) {
+    console.error(
+      `${badge(context.color, "warning")} This custom endpoint looks chat-only. PaunClip will use it for Highlight Finder and YouTube Title Maker only.`
+    );
+  }
+
+  return {
+    baseUrl,
+    apiKey,
+    chatModel,
+    transcriptionModel: transcriptionModel || undefined,
+    ttsModel: ttsModel || undefined,
+    ttsVoice: ttsVoice || undefined,
+    ttsFormat: stringOption(parsed, "format", "mp3") as AIProviderConfig["ttsFormat"]
+  };
+}
+
+async function promptIfMissing(context: CliContext, label: string, fallback: string) {
+  ensureInteractive(context, `Missing ${label}. Re-run with non-interactive flags.`);
+  return promptText(context, label, fallback);
+}
+
+function providerLabel(provider: AIProviderConfig["provider"] | SetupProviderChoice) {
+  if (provider === "groq") return AI_PROVIDER_PRESETS.groq.label;
+  if (provider === "openai") return AI_PROVIDER_PRESETS.openai.label;
+  if (provider === "custom") return AI_PROVIDER_PRESETS.custom.label;
+  if (provider === "anthropic") return AI_PROVIDER_PRESETS.anthropic.label;
+  if (provider === "gemini") return AI_PROVIDER_PRESETS.gemini.label;
+  return "Skip";
+}
+
+function providerDescription(provider: AIProviderConfig["provider"], task: AIProviderTask) {
+  const capability = task === "captionMaker" ? "transcription" : task === "hookMaker" ? "TTS" : "chat";
+  const preset = AI_PROVIDER_PRESETS[provider];
+  return `${capability} via ${preset.defaultBaseUrl}`;
+}
+
+function taskLabel(task: AIProviderTask) {
+  if (task === "highlightFinder") return "Highlight Finder";
+  if (task === "captionMaker") return "Caption Maker";
+  if (task === "hookMaker") return "Hook Maker";
+  return "YouTube Title Maker";
+}
+
+function taskSlug(task: AIProviderTask) {
+  return Object.entries(taskMap).find(([, value]) => value === task)?.[0] ?? task;
+}
+
+function formatCurrentAITaskSummary(context: CliContext, settings: AppSettings) {
+  return table(
+    AI_PROVIDER_TASKS.map((task) => {
+      const config = settings.aiProviders[task];
+      return [
+        taskLabel(task),
+        providerLabel(config.provider),
+        config.model || "(no model)",
+        task === "hookMaker" ? config.ttsVoice || "(no voice)" : "-",
+        config.apiKey ? "key saved" : "no key"
+      ];
+    }),
+    { headers: ["Task", "Provider", "Model", "Voice", "Key"], color: context.color }
+  );
+}
+
+function formatAITaskSummary(
+  context: CliContext,
+  settings: AppSettings,
+  configuredTasks: AIProviderTask[],
+  skippedTasks: AIProviderTask[]
+) {
+  const rows = AI_PROVIDER_TASKS.map((task) => {
+    const config = settings.aiProviders[task];
+    const status = configuredTasks.includes(task)
+      ? "ready"
+      : skippedTasks.includes(task)
+        ? "skipped"
+        : "unchanged";
+    return [
+      badge(context.color, status),
+      task,
+      config.provider,
+      config.model || "(no model)",
+      task === "hookMaker" && config.ttsVoice ? config.ttsVoice : "-"
+    ];
+  });
+  return table(rows, { headers: ["Status", "Task", "Provider", "Model", "Voice"], color: context.color });
+}
+
+function ensureInteractive(context: CliContext, hint: string) {
+  if (process.stdin.isTTY && process.stderr.isTTY && !context.json) {
+    return;
+  }
+  throw new CliInputError(`This command needs an interactive terminal. ${hint}`);
+}
+
+async function promptText(context: CliContext, label: string, fallback = "") {
+  ensureInteractive(context, `Use --${label.toLowerCase().replace(/\s+/g, "-")} for non-interactive setup.`);
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const suffix = fallback ? ` (${fallback})` : "";
+    const answer = await rl.question(`${info(context.color, "?")} ${label}${suffix}: `);
+    return answer.trim() || fallback;
+  } finally {
+    rl.close();
+  }
+}
+
+async function promptConfirm(context: CliContext, label: string, fallback: boolean) {
+  if (context.yes) {
+    return true;
+  }
+  ensureInteractive(context, "Use --yes with explicit flags for non-interactive setup.");
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const hint = fallback ? "Y/n" : "y/N";
+    const answer = (await rl.question(`${info(context.color, "?")} ${label} ${dim(context.color, `[${hint}]`)} `)).trim().toLowerCase();
+    if (!answer) return fallback;
+    return ["y", "yes"].includes(answer);
+  } finally {
+    rl.close();
+  }
+}
+
+async function promptSelect<T extends string>(
+  context: CliContext,
+  label: string,
+  choices: Array<{ value: T; label: string; description: string }>,
+  fallback: T
+): Promise<T> {
+  ensureInteractive(context, "Use --provider for non-interactive setup.");
+  const defaultIndex = Math.max(0, choices.findIndex((choice) => choice.value === fallback));
+  console.error(section(context.color, label));
+  choices.forEach((choice, index) => {
+    const number = String(index + 1).padStart(2);
+    console.error(`  ${commandText(context.color, number)} ${choice.label} ${dim(context.color, choice.description)}`);
+  });
+  const answer = await promptText(context, "Pick one", String(defaultIndex + 1));
+  const index = Number(answer) - 1;
+  if (Number.isInteger(index) && choices[index]) {
+    return choices[index].value;
+  }
+  const byValue = choices.find((choice) => choice.value.toLowerCase() === answer.toLowerCase());
+  if (byValue) {
+    return byValue.value;
+  }
+  throw new CliInputError(`Invalid choice: ${answer}`);
+}
+
+async function promptSecret(context: CliContext, label: string) {
+  ensureInteractive(context, "Use --api-key-env for non-interactive setup.");
+  const stdin = process.stdin;
+  const stderr = process.stderr;
+  if (!stdin.setRawMode) {
+    return promptText(context, label, "");
+  }
+
+  return new Promise<string>((resolve, reject) => {
+    let value = "";
+    const wasRaw = stdin.isRaw;
+
+    const cleanup = () => {
+      stdin.off("data", onData);
+      stdin.setRawMode(Boolean(wasRaw));
+      stdin.pause();
+      stderr.write("\n");
+    };
+
+    const onData = (buffer: Buffer) => {
+      const text = buffer.toString("utf8");
+      for (const char of text) {
+        if (char === "\u0003") {
+          cleanup();
+          reject(new CliInputError("Setup cancelled."));
+          return;
+        }
+        if (char === "\r" || char === "\n") {
+          cleanup();
+          resolve(value.trim());
+          return;
+        }
+        if (char === "\u007f" || char === "\b") {
+          if (value.length > 0) {
+            value = value.slice(0, -1);
+            stderr.write("\b \b");
+          }
+          continue;
+        }
+        value += char;
+        stderr.write("*");
+      }
+    };
+
+    stderr.write(`${info(context.color, "?")} ${label}: `);
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.on("data", onData);
+  });
+}
+
+function managedAIConfigPath() {
+  return configPath(DEFAULT_AI_CONFIG_FILE);
+}
+
+function resolveAIConfigPath(file?: string) {
+  return file ? path.resolve(file) : managedAIConfigPath();
+}
+
+function chooseEditorCommand() {
+  const raw = process.env.VISUAL || process.env.EDITOR || (process.platform === "win32" ? "notepad" : "nano");
+  const parts = raw.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((part) => part.replace(/^"|"$/g, "")) ?? [raw];
+  const command = parts[0];
+  const args = parts.slice(1);
+  return { command, args };
 }
 
 function parseGlobalOptions(argv: string[]): ParsedGlobalOptions {
@@ -1000,9 +2217,11 @@ function formatDoctorReport(
   context: CliContext,
   runtime: Awaited<ReturnType<CliContext["caller"]["settings"]["runtimeInfo"]>>,
   health: Awaited<ReturnType<CliContext["caller"]["settings"]["health"]>>,
-  preflight: Awaited<ReturnType<CliContext["caller"]["settings"]["preflight"]>>
+  preflight: Awaited<ReturnType<CliContext["caller"]["settings"]["preflight"]>>,
+  youtubeReadiness?: YoutubeLiveReadiness
 ) {
   const color = context.color;
+  const liveMediaBlocked = youtubeReadiness ? !youtubeReadiness.media.ok : false;
   const toolRows = [
     toolRow(color, "FFmpeg", health.tools.ffmpeg),
     toolRow(color, "FFprobe", health.tools.ffprobe),
@@ -1030,22 +2249,65 @@ function formatDoctorReport(
     "",
     section(color, "Cookies"),
     `${badge(color, health.cookies.ok ? "ok" : health.cookies.severity)} ${health.cookies.message}`,
+    youtubeReadiness ? "" : "",
+    youtubeReadiness ? formatYoutubeLiveReadiness(context, youtubeReadiness) : "",
     "",
     section(color, "Preflight"),
-    preflight.ok
+    preflight.ok && !liveMediaBlocked
       ? `${badge(color, "ready")} PaunClip is ready to create clips.`
-      : table(issueRows, { headers: ["Level", "Area", "Message"], color }),
-    preflight.ok ? "" : "",
-    preflight.ok
+      : table(
+          [
+            ...issueRows,
+            ...(liveMediaBlocked
+              ? [[badge(color, "blocker"), "cookies", youtubeReadiness!.media.message ?? "YouTube media download failed."]]
+              : [])
+          ],
+          { headers: ["Level", "Area", "Message"], color }
+        ),
+    preflight.ok && !liveMediaBlocked ? "" : "",
+    preflight.ok && !liveMediaBlocked
       ? ""
       : nextSteps(color, [
-          "paunclip config provider list",
-          "paunclip config cookies status",
-          "paunclip config output path"
+          "paunclip setup",
+          "paunclip setup ai",
+          "paunclip setup cookies",
+          "paunclip setup cookies validate-live <youtube-url>",
+          "paunclip setup output"
         ])
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function formatYoutubeLiveReadiness(context: CliContext, readiness: YoutubeLiveReadiness) {
+  const color = context.color;
+  return [
+    section(color, "YouTube Live Check"),
+    table(
+      [
+        youtubeProbeRow(color, readiness.metadata),
+        youtubeProbeRow(color, readiness.subtitles),
+        youtubeProbeRow(color, readiness.media)
+      ],
+      { headers: ["Status", "Check", "Detail"], color }
+    ),
+    readiness.media.ok
+      ? `${badge(color, "ready")} YouTube media download is available for this URL.`
+      : `${badge(color, "blocker")} ${readiness.media.message ?? "YouTube media download failed."}`,
+    readiness.advice.length ? nextSteps(color, readiness.advice) : ""
+  ].filter(Boolean).join("\n");
+}
+
+function youtubeProbeRow(color: boolean, step: YoutubeLiveProbeStep) {
+  return [
+    badge(color, step.ok ? "ready" : "failed"),
+    step.label,
+    step.ok
+      ? step.clientProfile
+        ? `client: ${step.clientProfile}`
+        : "ok"
+      : step.message ?? step.failureKind ?? "failed"
+  ];
 }
 
 function toolRow(
@@ -1267,6 +2529,8 @@ function printRootHelp(context: CliContext) {
       section(context.color, "Core commands"),
       table(
         [
+          ["setup", "Guided setup for AI, cookies, output folder, and readiness."],
+          ["setup ai task <task>", "Configure one AI task with provider-aware prompts."],
           ["doctor", "Check tools, storage, providers, cookies, and preflight."],
           ["create clips <source>", "Create highlights from one YouTube URL or local video."],
           ["render <sessionId>", "Render selected or all highlights into clips."],
@@ -1274,7 +2538,7 @@ function printRootHelp(context: CliContext) {
           ["campaign fetch|videos|start", "Fetch channel videos, pick candidates, queue batch clips."],
           ["session show|logs|retry|cancel", "Inspect and manage one session."],
           ["jobs list / job watch", "Watch active processing jobs."],
-          ["config provider|cookies|output", "Configure AI, cookies, output, and presets."]
+          ["config ai|cookies|output", "Configure AI JSON, cookies, output, and presets."]
         ],
         { headers: ["Command", "What it does"], color: context.color }
       ),
@@ -1293,17 +2557,74 @@ function printRootHelp(context: CliContext) {
       ),
       "",
       section(context.color, "Examples"),
+      `  ${commandText(context.color, "paunclip setup")}`,
+      `  ${commandText(context.color, "paunclip setup ai task caption-maker")}`,
+      `  ${commandText(context.color, "paunclip setup check")}`,
       `  ${commandText(context.color, "paunclip doctor")}`,
+      `  ${commandText(context.color, "paunclip doctor --youtube-url https://youtube.com/watch?v=...")}`,
       `  ${commandText(context.color, 'paunclip create clips "https://youtube.com/watch?v=..." --clips 3')}`,
       `  ${commandText(context.color, "paunclip render <sessionId> --all")}`,
       `  ${commandText(context.color, 'paunclip create campaign "My Campaign" "https://youtube.com/@channel" --fetch 20')}`,
-      `  ${commandText(context.color, "paunclip campaign start <campaignId> --videos 1,2,3 --clips 3")}`
+      `  ${commandText(context.color, "paunclip campaign start <campaignId> --videos 1,2,3 --clips 3")}`,
+      `  ${commandText(context.color, "paunclip config ai edit")}`
+    ].join("\n")
+  );
+}
+
+function printSetupHelp(context: CliContext) {
+  output(
+    context,
+    { help: "setup" },
+    [
+      cliBanner(context.color),
+      section(context.color, "Setup"),
+      `  ${commandText(context.color, "paunclip setup")}`,
+      "",
+      "Guided setup for AI provider, YouTube cookies, output folder, and readiness.",
+      "",
+      section(context.color, "Commands"),
+      table(
+        [
+          ["setup", "Run the complete interactive wizard."],
+          ["setup ai", "Open the task-based AI setup dashboard."],
+          ["setup ai task highlight-finder", "Configure chat model for moment detection."],
+          ["setup ai task caption-maker", "Configure transcription model for captions."],
+          ["setup ai task hook-maker", "Configure TTS model and voice for hooks."],
+          ["setup ai task youtube-title-maker", "Configure chat model for YouTube titles."],
+          ["setup ai quick --provider groq", "Apply recommended defaults to every AI task."],
+          ["setup ai validate [task]", "Validate all AI tasks or one task."],
+          ["setup cookies", "Import or link YouTube cookies from Netscape/JSON/header formats."],
+          ["setup cookies validate-live <url>", "Live-test metadata, subtitles, and media download access."],
+          ["setup output", "Choose and validate the output folder."],
+          ["setup check", "Run the final doctor/readiness check."]
+        ],
+        { headers: ["Command", "What it does"], color: context.color }
+      ),
+      "",
+      section(context.color, "Non-interactive"),
+      `  ${commandText(context.color, "paunclip setup ai quick --provider groq --api-key-env GROQ_API_KEY --yes")}`,
+      `  ${commandText(context.color, "paunclip setup ai task caption-maker --provider groq --api-key-env GROQ_API_KEY --model whisper-large-v3-turbo --yes")}`,
+      `  ${commandText(context.color, "paunclip setup ai task hook-maker --provider groq --api-key-env GROQ_API_KEY --model canopylabs/orpheus-v1-english --voice hannah --yes")}`,
+      `  ${commandText(context.color, "paunclip setup cookies --path ./cookies.txt --yes")}`,
+      `  ${commandText(context.color, "paunclip setup cookies validate-live https://youtube.com/watch?v=...")}`,
+      `  ${commandText(context.color, "paunclip setup output --path ./output --yes")}`,
+      `  ${commandText(context.color, "paunclip setup check --json")}`,
+      "",
+      dim(context.color, "Advanced JSON is still available with `paunclip config ai edit`.")
     ].join("\n")
   );
 }
 
 function printDoctorHelp(context: CliContext) {
-  output(context, { help: "doctor" }, simpleHelp(context, "Doctor", "paunclip doctor [--json]", ["paunclip doctor", "paunclip --json doctor"]));
+  output(
+    context,
+    { help: "doctor" },
+    simpleHelp(context, "Doctor", "paunclip doctor [--youtube-url <url>] [--json]", [
+      "paunclip doctor",
+      "paunclip doctor --youtube-url https://youtube.com/watch?v=...",
+      "paunclip --json doctor --youtube-url https://youtube.com/watch?v=..."
+    ])
+  );
 }
 
 function printCreateClipsHelp(context: CliContext) {
@@ -1345,7 +2666,20 @@ function printJobHelp(context: CliContext) {
 }
 
 function printConfigHelp(context: CliContext) {
-  output(context, { help: "config" }, simpleHelp(context, "Config", "paunclip config <init|show|doctor|provider|cookies|output|presets>", ["paunclip config provider list", "paunclip config cookies status", "paunclip config output path"]));
+  output(
+    context,
+    { help: "config" },
+    simpleHelp(context, "Config", "paunclip config <init|show|doctor|ai|provider|cookies|output|presets>", [
+      "paunclip setup",
+      "paunclip setup ai",
+      "paunclip setup ai task caption-maker",
+      "paunclip setup ai validate",
+      "paunclip setup cookies --path cookies.txt",
+      "paunclip setup cookies validate-live <youtube-url>",
+      "paunclip setup output",
+      "paunclip config ai edit"
+    ])
+  );
 }
 
 function simpleHelp(context: CliContext, title: string, usage: string, examples: string[]) {

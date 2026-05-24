@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { getSettings, saveSettings } from "@/server/config/settings-store";
-import { validateYoutubeCookiesText } from "@/server/media/youtube-cookies";
+import { parseYoutubeCookiesText, validateYoutubeCookiesText } from "@/server/media/youtube-cookies";
 import { configPath } from "@/server/storage/paths";
 import { writePrivateTextFile } from "@/server/storage/private-file";
 
 export async function POST(request: Request) {
   const text = await request.text();
 
+  const parsed = parseYoutubeCookiesText(text);
   const validation = validateYoutubeCookiesText(text);
   if (!validation.ok && validation.severity === "error") {
     return NextResponse.json(
@@ -16,7 +17,7 @@ export async function POST(request: Request) {
   }
 
   const cookiesPath = configPath("cookies.txt");
-  await writePrivateTextFile(cookiesPath, text);
+  await writePrivateTextFile(cookiesPath, parsed.netscapeText);
 
   const settings = await getSettings();
   await saveSettings({
@@ -27,5 +28,5 @@ export async function POST(request: Request) {
     }
   });
 
-  return NextResponse.json({ ok: true, cookiesPath, validation });
+  return NextResponse.json({ ok: true, cookiesPath, validation, format: parsed.format });
 }

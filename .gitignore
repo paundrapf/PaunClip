@@ -3,11 +3,35 @@ node_modules/
 out/
 dist/
 coverage/
-.env
-.env*.local
-docs/
+
+# Local environment and private agent notes
+.env*
+!.env.example
+AGENTS.md
+CONTEXT.md
+
+# Local docs/assets scratch space
+docs/internal/
+docs/ENGINEERING_PLAN.md
+docs/PRD_FINAL.md
+docs/evaluasi-output-video/
+docs/images-inspirate/
+docs/updates/AI_SETTINGS_AND_HOOK_MAKER_PLAN.md
+docs/updates/QUALITY_ENGINE_OPUSCLIP_CHECKPOINT.md
+docs/updates/YT_SHORT_CLIPPER_RESEARCH_FOR_PAUNCLIP.md
 assets/
+
+# Downloaded runtime tools and local credentials
 vendor/bin/
+/Cookies/
+cookies*.txt
+paunclip.ai.local.json
+paunclip.cookies.local.*
+
+# Local databases and generated state
+*.db
+*.sqlite
+*.sqlite3
 
 storage/*
 !storage/.gitkeep

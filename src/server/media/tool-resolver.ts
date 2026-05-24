@@ -8,7 +8,7 @@ import { runProcess } from "./process";
 
 type ResolvedTool = {
   command: string;
-  source: "env" | "package" | "path" | "fallback";
+  source: "env" | "package" | "bundled" | "path" | "fallback";
 };
 
 export function getFfmpegCommand() {
@@ -40,6 +40,7 @@ export function getFfprobeCommand() {
 export function getYtdlpCommand() {
   return resolveTool({
     envValue: env.YTDLP_PATH,
+    bundledValues: getYtdlpBundleCandidates(),
     fallback: "yt-dlp",
     binaryNames: process.platform === "win32" ? ["yt-dlp.exe", "yt-dlp"] : ["yt-dlp"]
   }).command;
@@ -62,9 +63,55 @@ export async function checkTool(command: string, args: string[] = ["--version"])
   }
 }
 
-function resolveTool(params: {
+export async function checkYtdlpCommand(command = getYtdlpCommand()) {
+  const version = await checkTool(command, ["--version"]);
+  if (!version.ok) {
+    return {
+      ...version,
+      supportsJsRuntimes: false,
+      message: version.error ?? "yt-dlp could not run."
+    };
+  }
+
+  try {
+    const result = await runProcess(command, ["--help"], { timeoutMs: 20_000 });
+    const helpText = `${result.stdout}\n${result.stderr}`;
+    const support = parseYtdlpFeatureSupport(helpText);
+    if (!support.jsRuntimes) {
+      return {
+        ...version,
+        ok: false,
+        supportsJsRuntimes: false,
+        message:
+          "yt-dlp is too old for PaunClip's YouTube challenge solver. Re-run the installer so bundled yt-dlp is used."
+      };
+    }
+
+    return {
+      ...version,
+      supportsJsRuntimes: true,
+      message: version.version
+    };
+  } catch (error) {
+    return {
+      ...version,
+      ok: false,
+      supportsJsRuntimes: false,
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+export function parseYtdlpFeatureSupport(helpText: string) {
+  return {
+    jsRuntimes: helpText.includes("--js-runtimes")
+  };
+}
+
+export function resolveTool(params: {
   envValue?: string;
   packageValue?: string;
+  bundledValues?: Array<string | undefined>;
   fallback: string;
   binaryNames: string[];
 }): ResolvedTool {
@@ -82,12 +129,45 @@ function resolveTool(params: {
     return { command: params.packageValue, source: "package" };
   }
 
+  for (const bundledValue of params.bundledValues ?? []) {
+    if (bundledValue && looksUsablePath(bundledValue)) {
+      return { command: bundledValue, source: "bundled" };
+    }
+  }
+
   const pathCommand = findOnPath(params.binaryNames);
   if (pathCommand) {
     return { command: pathCommand, source: "path" };
   }
 
   return { command: envValue || params.fallback, source: "fallback" };
+}
+
+export function getBundledYtdlpPath(input: {
+  root?: string;
+  resourcesPath?: string;
+  platform?: NodeJS.Platform;
+  arch?: string;
+} = {}) {
+  const platform = input.platform ?? process.platform;
+  const arch = input.arch ?? process.arch;
+  const binaryName = platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
+  const root = input.root ?? process.cwd();
+  const resourcesPath =
+    input.resourcesPath ??
+    (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+
+  return {
+    source: path.resolve(root, "vendor", "bin", platform, arch, binaryName),
+    desktop: resourcesPath
+      ? path.resolve(resourcesPath, "bin", platform, arch, binaryName)
+      : undefined
+  };
+}
+
+function getYtdlpBundleCandidates() {
+  const bundled = getBundledYtdlpPath();
+  return [bundled.source, bundled.desktop];
 }
 
 function looksUsablePath(value: string) {
