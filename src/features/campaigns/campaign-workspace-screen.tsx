@@ -74,6 +74,30 @@ const STATUS_FILTERS: Array<{ value: "all" | "selected" | "needs_review" | "fail
   { value: "failed", label: "Failed" }
 ];
 
+type CampaignWorkspaceVideo = {
+  id: string;
+  videoId: string;
+  title: string;
+  selected: boolean;
+  thumbnailUrl?: string | null;
+  durationSeconds?: number | null;
+  publishedAt?: Date | string | null;
+  status: string;
+  sessionId?: string | null;
+  session?: {
+    status?: string | null;
+    stage?: string | null;
+    configJson?: unknown;
+    _count?: {
+      highlights?: number;
+      clips?: number;
+    };
+    jobs?: Array<{ status?: string | null; progress?: number | null }>;
+  } | null;
+};
+
+type CaptionPresetRow = { id: string; name: string };
+
 export function CampaignWorkspaceScreen({ campaignId }: { campaignId: string }) {
   const utils = trpc.useUtils();
   const { notify } = useToast();
@@ -125,12 +149,12 @@ export function CampaignWorkspaceScreen({ campaignId }: { campaignId: string }) 
   const campaign = campaignQuery.data;
   const campaignName = draftName ?? campaign?.name ?? "";
   const channelUrl = draftChannelUrl ?? campaign?.channelUrl ?? "";
-  const videos = campaign?.videos ?? [];
+  const videos = (campaign?.videos ?? []) as CampaignWorkspaceVideo[];
   const selectedVideoIds =
     localSelectedVideoIds ?? videos.filter((video) => video.selected).map((video) => video.id);
   const allVideosSelected = Boolean(videos.length) && videos.every((video) => selectedVideoIds.includes(video.id));
   const selectedClipTotal = selectedVideoIds.reduce((total, videoId) => total + getVideoClipCount(videoId), 0);
-  const captionPresets = settings.data?.captionPresets ?? [];
+  const captionPresets = (settings.data?.captionPresets ?? []) as CaptionPresetRow[];
   const startBlocked = Boolean(preflight.data?.blockers.length);
 
   useEffect(() => {
@@ -583,26 +607,7 @@ function CampaignVideoCard({
   onToggle,
   onClipCountChange
 }: {
-  video: {
-    id: string;
-    videoId: string;
-    title: string;
-    thumbnailUrl?: string | null;
-    durationSeconds?: number | null;
-    publishedAt?: Date | string | null;
-    status: string;
-    sessionId?: string | null;
-    session?: {
-      status?: string | null;
-      stage?: string | null;
-      configJson?: unknown;
-      _count?: {
-        highlights?: number;
-        clips?: number;
-      };
-      jobs?: Array<{ status?: string | null; progress?: number | null }>;
-    } | null;
-  };
+  video: CampaignWorkspaceVideo;
   selected: boolean;
   clipCount: number;
   onToggle: () => void;
@@ -672,21 +677,7 @@ function BatchProgressPanel({
   videos
 }: {
   refNode: RefObject<HTMLElement | null>;
-  videos: Array<Parameters<typeof getCampaignVideoDisplayStatus>[0] & {
-    id: string;
-    videoId: string;
-    title: string;
-    thumbnailUrl?: string | null;
-    sessionId?: string | null;
-    session?: {
-      configJson?: unknown;
-      _count?: {
-        highlights?: number;
-        clips?: number;
-      };
-      jobs?: Array<{ progress?: number | null }>;
-    } | null;
-  }>;
+  videos: CampaignWorkspaceVideo[];
 }) {
   const queuedVideos = videos.filter((video) => getCampaignVideoDisplayStatus(video) !== "not_queued");
 
