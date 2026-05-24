@@ -50,7 +50,6 @@ jobs:
           path: |
             dist/desktop/*.exe
             dist/desktop/*.blockmap
-            dist/desktop/*.yml
             dist/desktop/latest*.yml
           if-no-files-found: error
 
@@ -64,6 +63,5 @@ jobs:
           files: |
             dist/desktop/*.exe
             dist/desktop/*.blockmap
-            dist/desktop/*.yml
             dist/desktop/latest*.yml
           fail_on_unmatched_files: false
