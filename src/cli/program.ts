@@ -89,6 +89,14 @@ type CliIssueRow = { severity: string; area: string; message: string };
 type CliHighlightRow = { title: string; startTime: number; endTime: number; status: string };
 type CliClipRow = { title: string; status: string; masterPath: string | null };
 type CliJobRow = { id: string; status: string; progress: number; sessionId: string };
+type CliJobEventRow = { id: string; message: string };
+type CliWatchedJobRow = {
+  id: string;
+  status: string;
+  progress: number;
+  events: CliJobEventRow[];
+  errorJson?: string | null;
+};
 type CliSessionJobRow = { id: string; status: string; progress: number };
 type CliSessionWithJobsRow = { id: string; jobs: CliSessionJobRow[] };
 type CliCampaignListRow = { id: string; name: string; channelUrl: string | null; videos: unknown[] };
@@ -102,6 +110,12 @@ type CliSessionListRow = {
   sourceUrl: string | null;
 };
 type CliCampaignStartRow = { queuedCount: number; skippedCount: number; sessionIds: string[] };
+type CliPreflightIssueRow = { message: string };
+type CliPreflightReportRow = {
+  ok: boolean;
+  blockers: CliPreflightIssueRow[];
+  warnings: CliPreflightIssueRow[];
+};
 
 const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 const DEFAULT_AI_CONFIG_FILE = "paunclip.ai.local.json";
@@ -1603,12 +1617,12 @@ async function writeJsonFile(filePath: string, value: unknown) {
 async function waitForJob(context: CliContext, jobId: string) {
   let lastEventId = "";
   while (true) {
-    const job = await context.caller.job.byId(jobId);
+    const job = (await context.caller.job.byId(jobId)) as CliWatchedJobRow | null;
     if (!job) {
       throw new Error(`Job not found: ${jobId}`);
     }
     if (!context.json && !context.quiet) {
-      const events = job.events.filter((event) => event.id !== lastEventId);
+      const events = job.events.filter((event: CliJobEventRow) => event.id !== lastEventId);
       const last = events.at(-1);
       if (last) {
         lastEventId = last.id;
@@ -1660,7 +1674,7 @@ async function assertCliPreflight(
   context: CliContext,
   input: Parameters<CliContext["caller"]["settings"]["preflight"]>[0]
 ) {
-  const report = await context.caller.settings.preflight(input);
+  const report = (await context.caller.settings.preflight(input)) as CliPreflightReportRow;
   if (!report.ok) {
     throw new CliPreflightError(report.blockers.map((issue) => issue.message).join(" "));
   }
