@@ -10,8 +10,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { trpc } from "@/features/trpc/client";
-import { getCampaignVideoDisplayStatus } from "@/shared/campaign/status";
+import { getCampaignVideoDisplayStatus, type CampaignVideoStatusInput } from "@/shared/campaign/status";
 import { sessionConfigSchema } from "@/shared/schemas/session";
+
+type CampaignListRow = {
+  id: string;
+  name: string;
+  channelUrl: string | null;
+  videos: CampaignVideoStatusInput[];
+};
 
 export function CampaignsScreen() {
   const router = useRouter();
@@ -20,6 +27,7 @@ export function CampaignsScreen() {
   const [channelUrl, setChannelUrl] = useState("");
   const campaigns = trpc.campaign.list.useQuery(undefined, { refetchInterval: 5000 });
   const createCampaign = trpc.campaign.create.useMutation();
+  const campaignRows = (campaigns.data ?? []) as CampaignListRow[];
 
   async function createWorkspace() {
     const campaignName = name.trim() || "Untitled campaign";
@@ -75,9 +83,9 @@ export function CampaignsScreen() {
             <Badge>campaigns</Badge>
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
-            <SummaryMetric label="Total" value={campaigns.data?.length ?? 0} />
-            <SummaryMetric label="Active" value={campaigns.data?.filter(hasActiveVideo).length ?? 0} />
-            <SummaryMetric label="Review" value={campaigns.data?.filter(hasReviewVideo).length ?? 0} />
+            <SummaryMetric label="Total" value={campaignRows.length} />
+            <SummaryMetric label="Active" value={campaignRows.filter(hasActiveVideo).length} />
+            <SummaryMetric label="Review" value={campaignRows.filter(hasReviewVideo).length} />
           </div>
         </div>
       </header>
@@ -120,7 +128,7 @@ export function CampaignsScreen() {
             <h2 className="text-lg font-semibold text-[var(--text)]">Recent campaigns</h2>
             <p className="mt-1 text-sm text-[var(--muted)]">Open a workspace to fetch videos, start a batch, or review queued results.</p>
           </div>
-          <Badge>{campaigns.data?.length ?? 0} total</Badge>
+          <Badge>{campaignRows.length} total</Badge>
         </div>
 
         {campaigns.isLoading ? (
@@ -129,9 +137,9 @@ export function CampaignsScreen() {
               <div key={index} className="h-44 rounded-lg border border-[var(--border)] bg-[rgb(18_18_16_/_0.45)]" />
             ))}
           </div>
-        ) : campaigns.data?.length ? (
+        ) : campaignRows.length ? (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {campaigns.data.map((campaign) => {
+            {campaignRows.map((campaign) => {
               const activeCount = campaign.videos.filter(hasActiveStatus).length;
               const reviewCount = campaign.videos.filter(hasReviewStatus).length;
               const completedCount = campaign.videos.filter(hasCompletedStatus).length;
@@ -178,7 +186,7 @@ export function CampaignsScreen() {
 }
 
 type CampaignSummary = {
-  videos: Array<Parameters<typeof getCampaignVideoDisplayStatus>[0]>;
+  videos: CampaignVideoStatusInput[];
 };
 
 function hasActiveVideo(campaign: CampaignSummary) {
@@ -189,15 +197,15 @@ function hasReviewVideo(campaign: CampaignSummary) {
   return campaign.videos.some(hasReviewStatus);
 }
 
-function hasActiveStatus(video: Parameters<typeof getCampaignVideoDisplayStatus>[0]) {
+function hasActiveStatus(video: CampaignVideoStatusInput) {
   return ["queued", "processing"].includes(getCampaignVideoDisplayStatus(video));
 }
 
-function hasReviewStatus(video: Parameters<typeof getCampaignVideoDisplayStatus>[0]) {
+function hasReviewStatus(video: CampaignVideoStatusInput) {
   return getCampaignVideoDisplayStatus(video) === "needs_review";
 }
 
-function hasCompletedStatus(video: Parameters<typeof getCampaignVideoDisplayStatus>[0]) {
+function hasCompletedStatus(video: CampaignVideoStatusInput) {
   return ["completed", "completed_with_warnings"].includes(getCampaignVideoDisplayStatus(video));
 }
 
